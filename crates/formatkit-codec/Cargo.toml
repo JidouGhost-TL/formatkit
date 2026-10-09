@@ -1,0 +1,14 @@
+[package]
+name = "formatkit-codec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Reusable bounded deflate, gzip, LZMA, RNC and raw LZSS codecs"
+
+[dependencies]
+formatkit-core.workspace = true
+lzma-rs = "0.3"
+miniz_oxide = "0.8"

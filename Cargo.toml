@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/formatkit-core", "crates/formatkit-layout", "crates/formatkit-runtime", "crates/formatkit-corpus", "crates/formatkit-corpus-test", "crates/formatkit-catalog", "crates/formatkit-pixel", "crates/formatkit-codec", "crates/formatkit"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94.1"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JidouGhost-TL/formatkit"
+readme = "README.md"
+
+[workspace.dependencies]
+thiserror = "1"
+formatkit-core = { path = "crates/formatkit-core", version = "=0.1.0" }
+formatkit-layout = { path = "crates/formatkit-layout", version = "=0.1.0" }
+formatkit-runtime = { path = "crates/formatkit-runtime", version = "=0.1.0" }
+formatkit-corpus = { path = "crates/formatkit-corpus", version = "=0.1.0" }
+formatkit-corpus-test = { path = "crates/formatkit-corpus-test", version = "=0.1.0" }
+formatkit-catalog = { path = "crates/formatkit-catalog", version = "=0.1.0" }
+formatkit-pixel = { path = "crates/formatkit-pixel", version = "=0.1.0" }
+formatkit-codec = { path = "crates/formatkit-codec", version = "=0.1.0" }

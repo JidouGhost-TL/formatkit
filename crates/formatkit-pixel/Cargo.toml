@@ -1,0 +1,12 @@
+[package]
+name = "formatkit-pixel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Generic packed-pixel, palette, channel-mask and S3TC mechanics"
+
+[dependencies]
+formatkit-core.workspace = true

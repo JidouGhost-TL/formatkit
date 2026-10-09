@@ -1,0 +1,17 @@
+[package]
+name = "formatkit-catalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Format identities, detection catalogs and executable operation contracts"
+
+[dependencies]
+formatkit-core.workspace = true
+
+[dev-dependencies]
+proptest = "1"
+serde_json = "1"
+tempfile = "3"

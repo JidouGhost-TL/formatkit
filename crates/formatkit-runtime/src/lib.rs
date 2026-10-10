@@ -22,6 +22,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
 use std::io::Write;
+use std::sync::Arc;
 
 use formatkit_catalog::catalog::{
     BoundInputs, CatalogError, EditMode, EmbeddedFormatSupport, FormatCatalog, FormatDescriptor,
@@ -818,13 +819,14 @@ pub struct ModuleCatalog {
     strict_operations: Vec<(OperationId, &'static ModuleOperation)>,
     legacy_module_count: usize,
     legacy_operation_count: usize,
+    complete_authority: Option<Arc<ModuleCatalog>>,
 }
 
 impl ModuleCatalog {
     pub fn new(
         modules: impl IntoIterator<Item = &'static FormatModule>,
     ) -> Result<Self, ModuleCatalogError> {
-        Self::build(modules, None)
+        Self::build(modules, None, true)
     }
 
     /// Compose every strict named operation while explicitly selecting the
@@ -845,12 +847,66 @@ impl ModuleCatalog {
         modules: impl IntoIterator<Item = &'static FormatModule>,
         selected: impl IntoIterator<Item = OperationId>,
     ) -> Result<Self, ModuleCatalogError> {
-        Self::build(modules, Some(selected.into_iter().collect()))
+        Self::build(modules, Some(selected.into_iter().collect()), true)
+    }
+
+    /// Validate an intentional owner selection without claiming that every
+    /// external shared namespace peer is present. All local row, executable,
+    /// schema, provider, writer, capability and group-conflict checks remain.
+    /// Complete constructors retain their missing-peer rejection behavior.
+    pub fn for_selection(
+        modules: impl IntoIterator<Item = &'static FormatModule>,
+    ) -> Result<Self, ModuleCatalogError> {
+        Self::build(modules, None, false)
+    }
+
+    /// Select namespace defaults in an intentional owner selection. Every
+    /// supplied operation is still validated, including unselected operations.
+    pub fn with_namespace_selection(
+        modules: impl IntoIterator<Item = &'static FormatModule>,
+        selected: impl IntoIterator<Item = OperationId>,
+    ) -> Result<Self, ModuleCatalogError> {
+        Self::build(modules, Some(selected.into_iter().collect()), false)
+    }
+
+    /// Select actual static rows from a complete canonical predecessor.
+    /// External peers remain validation evidence, not reachable module rows,
+    /// detection candidates, support entries or executable operations.
+    /// Selected-only or already-subset authority is not a complete predecessor.
+    pub fn select_from_authority(
+        authority: Arc<ModuleCatalog>,
+        modules: impl IntoIterator<Item = &'static FormatModule>,
+    ) -> Result<Self, ModuleCatalogError> {
+        if authority.complete_authority.is_some()
+            || !authority.support.has_complete_namespace_authority()
+        {
+            return Err(ModuleCatalogError::InvalidSupportCatalog);
+        }
+        let rows = modules.into_iter().collect::<Vec<_>>();
+        for row in &rows {
+            if !authority
+                .module(row.format)
+                .is_some_and(|canonical| std::ptr::eq(canonical, *row))
+            {
+                return Err(ModuleCatalogError::InvalidSupportCatalog);
+            }
+        }
+        let mut selected = Self::for_selection(rows)?;
+        selected.complete_authority = Some(authority);
+        Ok(selected)
+    }
+
+    /// True when complete shared-peer topology was validated, either locally
+    /// or by an authenticated complete predecessor. Standalone selections
+    /// never claim this authority.
+    pub const fn has_complete_namespace_authority(&self) -> bool {
+        self.complete_authority.is_some() || self.support.has_complete_namespace_authority()
     }
 
     fn build(
         modules: impl IntoIterator<Item = &'static FormatModule>,
         selected: Option<Vec<OperationId>>,
+        require_complete: bool,
     ) -> Result<Self, ModuleCatalogError> {
         let mut modules = modules.into_iter().collect::<Vec<_>>();
         validate_rows(&modules)?;
@@ -940,12 +996,20 @@ impl ModuleCatalog {
             semantics,
             [],
             [],
-        )?
-        .with_namespace_operation_projection_with_role_bound(
-            all_namespaces,
-            role_bound_namespaces,
-            projected_namespace_indices,
         )?;
+        let support = if require_complete {
+            support.with_namespace_operation_projection_with_role_bound(
+                all_namespaces,
+                role_bound_namespaces,
+                projected_namespace_indices,
+            )?
+        } else {
+            support.with_selected_namespace_operation_projection_with_role_bound(
+                all_namespaces,
+                role_bound_namespaces,
+                projected_namespace_indices,
+            )?
+        };
         let leaf = LeafOperationCatalog::new(leaves)?;
         let legacy_module_count = modules
             .iter()
@@ -960,6 +1024,7 @@ impl ModuleCatalog {
             strict_operations,
             legacy_module_count,
             legacy_operation_count,
+            complete_authority: None,
         })
     }
 

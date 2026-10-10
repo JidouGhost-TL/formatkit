@@ -365,3 +365,60 @@ fn collision_groups_include_ordinary_and_role_bound_owners_without_fake_defaults
         ModuleCatalogError::InvalidSupportCatalog,
     );
 }
+
+#[test]
+fn selected_composition_still_validates_role_bound_and_ordinary_conflicts() {
+    let role = module(
+        RoleBoundNamespaceContract {
+            collision: Some(COLLISION),
+            ..THREE_CONTRACT
+        },
+        Some(SEMANTICS),
+    );
+    let alone = ModuleCatalog::for_selection([role]).unwrap();
+    assert!(!alone.has_complete_namespace_authority());
+    assert!(alone.support().namespace_providers().is_empty());
+    for collision in [
+        NamespaceCollisionContract {
+            group: "",
+            ..COLLISION
+        },
+        NamespaceCollisionContract {
+            ambiguity_oracle: CargoTestOracle::lib("synthetic", ""),
+            ..COLLISION
+        },
+    ] {
+        let invalid = module(
+            RoleBoundNamespaceContract {
+                collision: Some(collision),
+                ..THREE_CONTRACT
+            },
+            Some(SEMANTICS),
+        );
+        assert!(ModuleCatalog::with_namespace_selection([invalid], []).is_err());
+    }
+    let peer_contract = Box::leak(Box::new(NamespaceMountContract {
+        collision: Some(NamespaceCollisionContract {
+            kind: NamespaceCollisionKind::PeerBoundary,
+            ..COLLISION
+        }),
+        ..PEER_CONTRACT
+    }));
+    let peer_operation = ModuleOperation {
+        executable: ExistingExecutableOperation::Namespace {
+            contract: peer_contract,
+            provider: &PEER_PROVIDER,
+        },
+        ..PEER_OPERATION
+    };
+    let peer = Box::leak(Box::new(FormatModule {
+        operations: Box::leak(vec![peer_operation].into_boxed_slice()),
+        ..PEER_MODULE
+    }));
+    assert!(ModuleCatalog::with_namespace_selection([role, &*peer], []).is_err());
+    let invalid_default = OperationId {
+        format: role.format,
+        name: THREE_OPERATION.name,
+    };
+    assert!(ModuleCatalog::with_namespace_selection([role], [invalid_default]).is_err());
+}

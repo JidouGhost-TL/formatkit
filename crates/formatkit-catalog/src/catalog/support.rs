@@ -50,6 +50,7 @@ pub struct SupportCatalog {
     namespace_semantics: Vec<NamespaceSemantics>,
     namespace_mount_contracts: Vec<NamespaceMountContract>,
     namespace_providers: Vec<NamespaceProvider>,
+    complete_namespace_authority: bool,
 }
 
 impl fmt::Debug for SupportCatalog {
@@ -69,6 +70,10 @@ impl fmt::Debug for SupportCatalog {
             .field("namespace_semantics", &self.namespace_semantics)
             .field("namespace_mount_contracts", &self.namespace_mount_contracts)
             .field("namespace_providers", &self.namespace_providers)
+            .field(
+                "complete_namespace_authority",
+                &self.complete_namespace_authority,
+            )
             .finish()
     }
 }
@@ -234,7 +239,7 @@ impl SupportCatalog {
     /// address only the ordinary operation sequence; role-bound operations
     /// never acquire a fixed-arity legacy default.
     pub fn with_namespace_operation_projection_with_role_bound<'a>(
-        mut self,
+        self,
         operations: impl IntoIterator<Item = (&'a NamespaceMountContract, &'a NamespaceProvider)>,
         role_bound: impl IntoIterator<
             Item = (
@@ -244,8 +249,53 @@ impl SupportCatalog {
         >,
         selected: impl IntoIterator<Item = usize>,
     ) -> Result<Self, SupportCatalogError> {
+        self.project_namespace_operations(operations, role_bound, selected, true)
+    }
+
+    /// Compose an intentional selection without asserting that every external
+    /// shared namespace peer is present. All supplied contracts, providers,
+    /// proofs, capabilities and conflicting declarations remain validated.
+    /// Missing shared peers are the only difference from complete projection.
+    /// Excluding a default never hides an invalid supplied operation.
+    pub fn with_selected_namespace_operation_projection_with_role_bound<'a>(
+        self,
+        operations: impl IntoIterator<Item = (&'a NamespaceMountContract, &'a NamespaceProvider)>,
+        role_bound: impl IntoIterator<
+            Item = (
+                &'a RoleBoundNamespaceContract,
+                &'a RoleBoundNamespaceProvider,
+            ),
+        >,
+        selected: impl IntoIterator<Item = usize>,
+    ) -> Result<Self, SupportCatalogError> {
+        self.project_namespace_operations(operations, role_bound, selected, false)
+    }
+
+    fn project_namespace_operations<'a>(
+        mut self,
+        operations: impl IntoIterator<Item = (&'a NamespaceMountContract, &'a NamespaceProvider)>,
+        role_bound: impl IntoIterator<
+            Item = (
+                &'a RoleBoundNamespaceContract,
+                &'a RoleBoundNamespaceProvider,
+            ),
+        >,
+        selected: impl IntoIterator<Item = usize>,
+        require_complete: bool,
+    ) -> Result<Self, SupportCatalogError> {
         let operations = operations.into_iter().collect::<Vec<_>>();
-        self.validate_namespace_operations_with_role_bound(operations.iter().copied(), role_bound)?;
+        if require_complete {
+            self.validate_namespace_operations_with_role_bound(
+                operations.iter().copied(),
+                role_bound,
+            )?;
+        } else {
+            super::namespace::validate_selected_namespace_operations(
+                &self,
+                operations.iter().copied(),
+                role_bound,
+            )?;
+        }
         let mut ids = std::collections::HashSet::new();
         let mut contracts = Vec::new();
         let mut providers = Vec::new();
@@ -265,6 +315,7 @@ impl SupportCatalog {
         providers.sort_by_key(|provider| provider.id.as_str());
         self.namespace_mount_contracts = contracts;
         self.namespace_providers = providers;
+        self.complete_namespace_authority = require_complete;
         Ok(self)
     }
 
@@ -547,7 +598,15 @@ impl SupportCatalog {
             namespace_semantics: semantics,
             namespace_mount_contracts: namespace_contracts,
             namespace_providers: providers,
+            complete_namespace_authority: true,
         })
+    }
+
+    /// Whether namespace metadata was composed with complete peer validation.
+    /// An explicit selection reports false, even when its present rows happen
+    /// to close every declared shared group.
+    pub const fn has_complete_namespace_authority(&self) -> bool {
+        self.complete_namespace_authority
     }
 
     pub fn detectable(&self) -> &[FormatDescriptor] {

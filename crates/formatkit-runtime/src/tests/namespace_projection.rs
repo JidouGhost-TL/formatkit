@@ -640,3 +640,235 @@ fn runner_namespace_can_be_an_explicit_default_without_erasing_its_callback() {
         .unwrap();
     assert_eq!(mounted.entries()[0].name.as_deref(), Some("right"));
 }
+
+static SINGLE_SHARED_MODULE: FormatModule = FormatModule {
+    operations: &[LEFT_SHARED],
+    ..PROJECTION_BASE
+};
+
+#[test]
+fn explicit_selection_preserves_truthful_unclosed_shared_groups() {
+    assert!(ModuleCatalog::new([&SINGLE_SHARED_MODULE]).is_err());
+    let selected = ModuleCatalog::for_selection([&SINGLE_SHARED_MODULE]).unwrap();
+    assert!(!selected.has_complete_namespace_authority());
+    assert!(!selected.support().has_complete_namespace_authority());
+    let contract = selected
+        .support()
+        .namespace_mount_contracts()
+        .first()
+        .unwrap();
+    assert_eq!(contract.collision, LEFT_SHARED_CONTRACT.collision);
+    assert!(selected.operation(LEFT_ID).is_some());
+    assert!(selected.module(SECOND_MODULE.format).is_none());
+    assert!(selected
+        .support()
+        .namespace_provider(SECOND_MODULE.format)
+        .is_none());
+    let source: Arc<dyn RangeSource> =
+        Arc::new(MemoryRangeSource::new(vec![1, 2], "selected synthetic"));
+    let mounted = selected
+        .support()
+        .namespace_provider(contract.id)
+        .unwrap()
+        .mount_single(source, &mut ReadBudget::unlimited())
+        .unwrap();
+    assert_eq!(mounted.entries()[0].name.as_deref(), Some("left"));
+    let complete = ModuleCatalog::new([&SINGLE_SHARED_MODULE, &SECOND_MODULE]).unwrap();
+    assert!(complete.has_complete_namespace_authority());
+    let intentional =
+        ModuleCatalog::for_selection([&SINGLE_SHARED_MODULE, &SECOND_MODULE]).unwrap();
+    assert!(!intentional.has_complete_namespace_authority());
+}
+
+#[test]
+fn explicit_selection_does_not_hide_local_or_unselected_conflicts() {
+    assert!(ModuleCatalog::for_selection([&SHARED_MODULE]).is_err());
+    let selected = ModuleCatalog::with_namespace_selection([&SHARED_MODULE], [LEFT_ID]).unwrap();
+    assert!(!selected.has_complete_namespace_authority());
+    assert!(selected.operation(RIGHT_ID).is_some());
+    assert!(
+        ModuleCatalog::with_namespace_selection([&SHARED_MODULE], [LEFT_ID, RIGHT_ID]).is_err()
+    );
+    assert!(ModuleCatalog::for_selection([&SINGLE_SHARED_MODULE, &SINGLE_SHARED_MODULE]).is_err());
+    let wrong_kind = NamespaceMountContract {
+        collision: Some(NamespaceCollisionContract {
+            kind: NamespaceCollisionKind::PeerBoundary,
+            ..SHARED_COLLISION
+        }),
+        ..SECOND_CONTRACT
+    };
+    let wrong_operation = ModuleOperation {
+        executable: ExistingExecutableOperation::Namespace {
+            contract: Box::leak(Box::new(wrong_kind)),
+            provider: &SECOND_PROVIDER,
+        },
+        ..SECOND_OPERATION
+    };
+    let wrong_module = FormatModule {
+        operations: Box::leak(vec![wrong_operation].into_boxed_slice()),
+        ..SECOND_MODULE
+    };
+    assert!(ModuleCatalog::with_namespace_selection(
+        [&SINGLE_SHARED_MODULE, Box::leak(Box::new(wrong_module))],
+        []
+    )
+    .is_err());
+    let wrong_oracle = NamespaceMountContract {
+        collision: Some(NamespaceCollisionContract {
+            ambiguity_oracle: CargoTestOracle::lib("synthetic", ""),
+            ..SHARED_COLLISION
+        }),
+        ..LEFT_SHARED_CONTRACT
+    };
+    let wrong_operation = ModuleOperation {
+        executable: ExistingExecutableOperation::Namespace {
+            contract: Box::leak(Box::new(wrong_oracle)),
+            provider: &LEFT_PROVIDER,
+        },
+        ..LEFT_SHARED
+    };
+    let wrong_module = FormatModule {
+        operations: Box::leak(vec![wrong_operation].into_boxed_slice()),
+        ..PROJECTION_BASE
+    };
+    assert!(
+        ModuleCatalog::with_namespace_selection([&*Box::leak(Box::new(wrong_module))], []).is_err()
+    );
+}
+
+#[test]
+fn authenticated_selection_hides_peers_but_retains_complete_predecessor() {
+    let full = Arc::new(ModuleCatalog::new([&SINGLE_SHARED_MODULE, &SECOND_MODULE]).unwrap());
+    let selected =
+        ModuleCatalog::select_from_authority(Arc::clone(&full), [&SINGLE_SHARED_MODULE]).unwrap();
+    assert!(selected.has_complete_namespace_authority());
+    assert!(!selected.support().has_complete_namespace_authority());
+    assert!(selected.module(SECOND_MODULE.format).is_none());
+    assert!(selected.support().get(SECOND_MODULE.format).is_none());
+    assert!(selected
+        .formats()
+        .descriptors()
+        .iter()
+        .all(|row| row.id != SECOND_MODULE.format));
+    assert!(selected
+        .operation(OperationId {
+            format: SECOND_MODULE.format,
+            name: SECOND_OPERATION.name
+        })
+        .is_none());
+    let foreign = Box::leak(Box::new(FormatModule {
+        ..SINGLE_SHARED_MODULE
+    }));
+    assert!(ModuleCatalog::select_from_authority(Arc::clone(&full), [&*foreign]).is_err());
+    assert!(ModuleCatalog::select_from_authority(
+        Arc::clone(&full),
+        [&SINGLE_SHARED_MODULE, &SINGLE_SHARED_MODULE]
+    )
+    .is_err());
+    let partial = Arc::new(ModuleCatalog::for_selection([&SINGLE_SHARED_MODULE]).unwrap());
+    assert!(ModuleCatalog::select_from_authority(partial, [&SINGLE_SHARED_MODULE]).is_err());
+    assert!(
+        ModuleCatalog::select_from_authority(Arc::new(selected), [&SINGLE_SHARED_MODULE]).is_err()
+    );
+}
+
+fn selected_metadata_candidate(
+    contract: NamespaceMountContract,
+    provider: NamespaceProvider,
+    schema: &'static InputSchema<'static>,
+    capabilities: OperationCapabilities,
+) -> &'static FormatModule {
+    let operation = ModuleOperation {
+        input_schema: schema,
+        capabilities,
+        executable: ExistingExecutableOperation::Namespace {
+            contract: Box::leak(Box::new(contract)),
+            provider: Box::leak(Box::new(provider)),
+        },
+        ..LEFT_SHARED
+    };
+    Box::leak(Box::new(FormatModule {
+        operations: Box::leak(vec![operation].into_boxed_slice()),
+        ..PROJECTION_BASE
+    }))
+}
+
+#[test]
+fn selection_rejects_invalid_provider_contract_schema_and_capabilities() {
+    for provider in [
+        NamespaceProvider {
+            owner: "foreign-owner",
+            ..LEFT_PROVIDER
+        },
+        NamespaceProvider {
+            input: NamespaceMountInput::SingleSource {
+                role: "foreign-role",
+            },
+            ..LEFT_PROVIDER
+        },
+        NamespaceProvider {
+            strategy: formatkit_catalog::NamespaceMountStrategy::WholeCarrier,
+            ..LEFT_PROVIDER
+        },
+    ] {
+        let candidate = selected_metadata_candidate(
+            LEFT_SHARED_CONTRACT,
+            provider,
+            LEFT_SHARED.input_schema,
+            LEFT_SHARED.capabilities,
+        );
+        assert!(ModuleCatalog::for_selection([candidate]).is_err());
+        assert!(ModuleCatalog::with_namespace_selection([candidate], []).is_err());
+    }
+    for collision in [
+        NamespaceCollisionContract {
+            group: "",
+            ..SHARED_COLLISION
+        },
+        NamespaceCollisionContract {
+            group: "invalid/group",
+            ..SHARED_COLLISION
+        },
+        NamespaceCollisionContract {
+            ambiguity_oracle: CargoTestOracle::lib("synthetic", ""),
+            ..SHARED_COLLISION
+        },
+    ] {
+        let candidate = selected_metadata_candidate(
+            NamespaceMountContract {
+                collision: Some(collision),
+                ..LEFT_SHARED_CONTRACT
+            },
+            LEFT_PROVIDER,
+            LEFT_SHARED.input_schema,
+            LEFT_SHARED.capabilities,
+        );
+        assert!(ModuleCatalog::with_namespace_selection([candidate], []).is_err());
+    }
+    static EMPTY_SCHEMA: InputSchema<'static> = InputSchema {
+        forms: &[],
+        relationships: &[],
+    };
+    let invalid_schema = selected_metadata_candidate(
+        LEFT_SHARED_CONTRACT,
+        LEFT_PROVIDER,
+        &EMPTY_SCHEMA,
+        LEFT_SHARED.capabilities,
+    );
+    assert!(ModuleCatalog::with_namespace_selection([invalid_schema], []).is_err());
+    let invalid_capabilities = selected_metadata_candidate(
+        LEFT_SHARED_CONTRACT,
+        LEFT_PROVIDER,
+        LEFT_SHARED.input_schema,
+        OperationCapabilities::WRITE,
+    );
+    assert!(ModuleCatalog::with_namespace_selection([invalid_capabilities], []).is_err());
+    assert!(ModuleCatalog::with_namespace_selection(
+        [&SINGLE_SHARED_MODULE],
+        [OperationId {
+            format: SECOND_MODULE.format,
+            name: "not-selected"
+        }]
+    )
+    .is_err());
+}

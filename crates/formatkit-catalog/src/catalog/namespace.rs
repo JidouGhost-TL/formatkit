@@ -1287,6 +1287,33 @@ pub(super) fn validate_named_namespace_operations<'a>(
         ),
     >,
 ) -> Result<(), super::SupportCatalogError> {
+    validate_namespace_operations_with_completeness(support, operations, role_bound, true)
+}
+
+pub(super) fn validate_selected_namespace_operations<'a>(
+    support: &super::SupportCatalog,
+    operations: impl IntoIterator<Item = (&'a NamespaceMountContract, &'a NamespaceProvider)>,
+    role_bound: impl IntoIterator<
+        Item = (
+            &'a RoleBoundNamespaceContract,
+            &'a RoleBoundNamespaceProvider,
+        ),
+    >,
+) -> Result<(), super::SupportCatalogError> {
+    validate_namespace_operations_with_completeness(support, operations, role_bound, false)
+}
+
+pub(super) fn validate_namespace_operations_with_completeness<'a>(
+    support: &super::SupportCatalog,
+    operations: impl IntoIterator<Item = (&'a NamespaceMountContract, &'a NamespaceProvider)>,
+    role_bound: impl IntoIterator<
+        Item = (
+            &'a RoleBoundNamespaceContract,
+            &'a RoleBoundNamespaceProvider,
+        ),
+    >,
+    require_complete: bool,
+) -> Result<(), super::SupportCatalogError> {
     let mut groups = NamespaceCollisionGroups::new();
     for (&contract, &provider) in operations {
         let view = support.get(contract.id).ok_or(
@@ -1357,6 +1384,9 @@ pub(super) fn validate_named_namespace_operations<'a>(
         }
         register_namespace_collision(contract.id, contract.collision, &mut groups)
             .map_err(|_| super::SupportCatalogError::InvalidNamespaceMountContract(contract.id))?;
+    }
+    if !require_complete {
+        return Ok(());
     }
     validate_namespace_collision_groups(groups).map_err(|error| match error {
         NamespaceCompositionError::Contract(id) => {

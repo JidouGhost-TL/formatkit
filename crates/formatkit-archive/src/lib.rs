@@ -11,6 +11,8 @@ use formatkit_core::{
     WorkBudget,
 };
 
+pub mod paired_stored_mount;
+
 mod walk;
 pub use formatkit_core::MountedMembers;
 pub use walk::{

@@ -1403,7 +1403,7 @@ pub(super) fn validate_namespace_composition(
 
     let contract_inputs = validated_contracts
         .iter()
-        .map(|contract| (contract.id, *contract))
+        .map(|contract| (contract.id, contract))
         .collect::<HashMap<_, _>>();
     let mut provider_ids = HashSet::new();
     let mut validated_providers = Vec::new();
@@ -1412,7 +1412,7 @@ pub(super) fn validate_namespace_composition(
             || contract_inputs.get(&provider.id).is_none_or(|contract| {
                 !valid_namespace_provider(
                     provider,
-                    *contract,
+                    **contract,
                     detectable_decoders.get(&provider.id).copied().flatten(),
                 )
             })

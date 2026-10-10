@@ -796,6 +796,18 @@ impl SupportCatalog {
     }
 
     pub fn capability_markdown(&self) -> String {
+        self.capability_markdown_with_decoder_display(|_, decoder| decoder)
+    }
+
+    /// Render the support matrix with a caller-selected decoder-cell label.
+    ///
+    /// The callback affects presentation only. Canonical support, capabilities,
+    /// context and executable contracts remain unchanged. Display labels must
+    /// not be used as registration or operation-routing authority.
+    pub fn capability_markdown_with_decoder_display(
+        &self,
+        mut display_decoder: impl FnMut(FormatId, Option<&'static str>) -> Option<&'static str>,
+    ) -> String {
         let mut out = String::from(
             "| Format | Detection | Family | Context | Decoder | Namespace mount | Reproduce | Edit modes | Edit scope | Edit preconditions | Edit length | Edit relocation | Author | Parse | Decode | Edit | Write | Round-trip | Corpus | Bindings | Confidence |\n\
              |---|---|---|---|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n",
@@ -955,7 +967,7 @@ impl SupportCatalog {
                 detection,
                 family,
                 context,
-                support.decoder().unwrap_or("—"),
+                display_decoder(support.id, support.decoder()).unwrap_or("—"),
                 namespace_mount,
                 reproduce,
                 edit_modes,

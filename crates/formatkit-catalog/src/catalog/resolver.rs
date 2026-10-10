@@ -365,6 +365,18 @@ impl FormatCatalog {
     /// Generate a deterministic Markdown capability matrix directly from the
     /// composed descriptors, avoiding a second handwritten inventory.
     pub fn capability_markdown(&self) -> String {
+        self.capability_markdown_with_decoder_display(|_, decoder| decoder)
+    }
+
+    /// Render the capability matrix with a caller-selected decoder-cell label.
+    ///
+    /// The callback affects presentation only. Canonical descriptors, decoder
+    /// validation, detection and contextual readiness remain unchanged. Display
+    /// labels must not be used as registration or operation-routing authority.
+    pub fn capability_markdown_with_decoder_display(
+        &self,
+        mut display_decoder: impl FnMut(FormatId, Option<&'static str>) -> Option<&'static str>,
+    ) -> String {
         let mut descriptors: Vec<_> = self.descriptors.iter().collect();
         descriptors.sort_by_key(|descriptor| descriptor.id.as_str());
         let mut output = String::from(
@@ -378,7 +390,7 @@ impl FormatCatalog {
                 "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                 descriptor.id,
                 descriptor.category.label(),
-                descriptor.decoder.unwrap_or("—"),
+                display_decoder(descriptor.id, descriptor.decoder).unwrap_or("—"),
                 yes_no(capability.parse),
                 yes_no(capability.decode),
                 yes_no(capability.edit),

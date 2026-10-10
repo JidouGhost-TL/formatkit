@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/formatkit-core", "crates/formatkit-layout", "crates/formatkit-runtime", "crates/formatkit-corpus", "crates/formatkit-corpus-test", "crates/formatkit-catalog", "crates/formatkit-pixel", "crates/formatkit-codec", "crates/formatkit"]
+members = ["crates/formatkit-core", "crates/formatkit-layout", "crates/formatkit-runtime", "crates/formatkit-corpus", "crates/formatkit-corpus-test", "crates/formatkit-catalog", "crates/formatkit-pixel", "crates/formatkit-codec", "crates/formatkit-archive", "crates/formatkit"]
 
 [workspace.package]
 version = "0.1.0"
@@ -20,3 +20,4 @@ formatkit-corpus-test = { path = "crates/formatkit-corpus-test", version = "=0.1
 formatkit-catalog = { path = "crates/formatkit-catalog", version = "=0.1.0" }
 formatkit-pixel = { path = "crates/formatkit-pixel", version = "=0.1.0" }
 formatkit-codec = { path = "crates/formatkit-codec", version = "=0.1.0" }
+formatkit-archive = { path = "crates/formatkit-archive", version = "=0.1.0" }

@@ -650,6 +650,12 @@ pub enum ModuleCatalogError {
     InputSchemaTopologyDisagreement(OperationId),
     InvalidBoundNamespaceAdapter(OperationId),
     DuplicateOperation(OperationId),
+    /// The selected legacy namespace default does not name a contributed operation.
+    UnknownNamespaceProjection(OperationId),
+    /// Only ordinary or runner namespaces have a legacy provider projection.
+    InvalidNamespaceProjection(OperationId),
+    /// A legacy support view can expose at most one namespace default per format.
+    DuplicateNamespaceProjection(FormatId),
     UnsupportedOperationCapabilities(OperationId),
     IdentityDisagreement {
         module: FormatId,
@@ -708,6 +714,18 @@ impl fmt::Display for ModuleCatalogError {
                 write!(formatter, "invalid bound namespace adapter: {id:?}")
             }
             Self::DuplicateOperation(id) => write!(formatter, "duplicate operation: {id:?}"),
+            Self::UnknownNamespaceProjection(id) => {
+                write!(formatter, "unknown namespace projection operation: {id:?}")
+            }
+            Self::InvalidNamespaceProjection(id) => {
+                write!(
+                    formatter,
+                    "operation has no legacy namespace projection: {id:?}"
+                )
+            }
+            Self::DuplicateNamespaceProjection(format) => {
+                write!(formatter, "duplicate namespace projection for {format}")
+            }
             Self::UnsupportedOperationCapabilities(id) => {
                 write!(
                     formatter,
@@ -806,9 +824,40 @@ impl ModuleCatalog {
     pub fn new(
         modules: impl IntoIterator<Item = &'static FormatModule>,
     ) -> Result<Self, ModuleCatalogError> {
+        Self::build(modules, None)
+    }
+
+    /// Compose every strict named operation while explicitly selecting the
+    /// namespace defaults visible through the legacy support catalog.
+    ///
+    /// At most one [`ExistingExecutableOperation::Namespace`] or
+    /// [`ExistingExecutableOperation::RunnerNamespace`] may be selected per
+    /// format. Unselected operations retain their canonical schemas and remain
+    /// available through [`Self::operation`] when contributed by strict rows.
+    /// An empty selection exposes no legacy namespace default. Role-bound
+    /// namespaces have no legacy projection and cannot be selected here.
+    ///
+    /// All module rows and operations are validated before projection; excluding
+    /// a default does not suppress invalid contracts or capabilities. Unlike
+    /// [`Self::new`], this constructor permits multiple named namespace
+    /// operations for one format without implicitly choosing between them.
+    pub fn with_namespace_projection(
+        modules: impl IntoIterator<Item = &'static FormatModule>,
+        selected: impl IntoIterator<Item = OperationId>,
+    ) -> Result<Self, ModuleCatalogError> {
+        Self::build(modules, Some(selected.into_iter().collect()))
+    }
+
+    fn build(
+        modules: impl IntoIterator<Item = &'static FormatModule>,
+        selected: Option<Vec<OperationId>>,
+    ) -> Result<Self, ModuleCatalogError> {
         let mut modules = modules.into_iter().collect::<Vec<_>>();
         validate_rows(&modules)?;
         modules.sort_by_key(|module| module.format.as_str());
+        let selected = selected
+            .map(|selected| validate_namespace_projection(&modules, selected))
+            .transpose()?;
 
         let descriptors = modules
             .iter()
@@ -826,39 +875,44 @@ impl ModuleCatalog {
             .copied()
             .collect::<Vec<_>>();
         let mut writers = Vec::new();
-        let mut namespace_contracts = Vec::new();
-        let mut namespace_providers = Vec::new();
         let mut leaves = Vec::new();
         let mut strict_operations = Vec::new();
+        let mut all_namespaces = Vec::new();
+        let mut role_bound_namespaces = Vec::new();
+        let mut projected_namespace_indices = Vec::new();
         let mut legacy_operation_count = 0;
         for module in &modules {
             for operation in module.operations {
+                let id = OperationId {
+                    format: module.format,
+                    name: operation.name,
+                };
+                let project_namespace = selected
+                    .as_ref()
+                    .is_none_or(|selected| selected.contains(&id));
+                if let ExistingExecutableOperation::Namespace { contract, provider }
+                | ExistingExecutableOperation::RunnerNamespace {
+                    contract, provider, ..
+                } = operation.executable
+                {
+                    if project_namespace {
+                        projected_namespace_indices.push(all_namespaces.len());
+                    }
+                    all_namespaces.push((contract, provider));
+                }
                 match operation.executable {
-                    ExistingExecutableOperation::Namespace { contract, provider } => {
-                        namespace_contracts.push(*contract);
-                        namespace_providers.push(*provider);
-                    }
-                    ExistingExecutableOperation::RunnerNamespace {
-                        contract, provider, ..
-                    } => {
-                        namespace_contracts.push(*contract);
-                        namespace_providers.push(*provider);
-                    }
-                    ExistingExecutableOperation::RoleBoundNamespace { .. } => {
-                        // Role-bound rows are strict-only work-native mounts
-                        // with no legacy support-catalog projection.
+                    ExistingExecutableOperation::Namespace { .. }
+                    | ExistingExecutableOperation::RunnerNamespace { .. } => {}
+                    ExistingExecutableOperation::RoleBoundNamespace { contract, provider } => {
+                        // Role-bound rows have no legacy support projection;
+                        // even legacy debt rows must validate their metadata.
+                        role_bound_namespaces.push((contract, provider));
                     }
                     ExistingExecutableOperation::Leaf(provider) => leaves.push(*provider),
                     ExistingExecutableOperation::ResidentWriter(_) => {}
                 }
                 match module.state {
-                    ModuleState::Strict => strict_operations.push((
-                        OperationId {
-                            format: module.format,
-                            name: operation.name,
-                        },
-                        operation,
-                    )),
+                    ModuleState::Strict => strict_operations.push((id, operation)),
                     ModuleState::Legacy => legacy_operation_count += 1,
                 }
             }
@@ -884,8 +938,13 @@ impl ModuleCatalog {
             embedded,
             writers,
             semantics,
-            namespace_contracts,
-            namespace_providers,
+            [],
+            [],
+        )?
+        .with_namespace_operation_projection_with_role_bound(
+            all_namespaces,
+            role_bound_namespaces,
+            projected_namespace_indices,
         )?;
         let leaf = LeafOperationCatalog::new(leaves)?;
         let legacy_module_count = modules
@@ -1204,6 +1263,38 @@ fn schema_has_exact_namespace_topology(
     }
 }
 
+fn validate_namespace_projection(
+    modules: &[&FormatModule],
+    selected: Vec<OperationId>,
+) -> Result<HashSet<OperationId>, ModuleCatalogError> {
+    let mut formats = HashSet::new();
+    let mut operations = HashSet::new();
+    for id in selected {
+        let operation = modules
+            .iter()
+            .find(|module| module.format == id.format)
+            .and_then(|module| {
+                module
+                    .operations
+                    .iter()
+                    .find(|operation| operation.name == id.name)
+            })
+            .ok_or(ModuleCatalogError::UnknownNamespaceProjection(id))?;
+        if !matches!(
+            operation.executable,
+            ExistingExecutableOperation::Namespace { .. }
+                | ExistingExecutableOperation::RunnerNamespace { .. }
+        ) {
+            return Err(ModuleCatalogError::InvalidNamespaceProjection(id));
+        }
+        if !formats.insert(id.format) {
+            return Err(ModuleCatalogError::DuplicateNamespaceProjection(id.format));
+        }
+        operations.insert(id);
+    }
+    Ok(operations)
+}
+
 fn validate_rows(modules: &[&FormatModule]) -> Result<(), ModuleCatalogError> {
     let mut module_ids = HashSet::new();
     let mut operation_ids = HashSet::new();
@@ -1346,7 +1437,8 @@ fn validate_rows(modules: &[&FormatModule]) -> Result<(), ModuleCatalogError> {
                 ExistingExecutableOperation::RoleBoundNamespace { contract, provider } => {
                     // Work-native rows receive their adapter at invocation;
                     // strict rows must project exactly, legacy rows (which
-                    // should not exist for new topologies) stay unchecked debt.
+                    // should not exist for new topologies) retain topology debt.
+                    // Canonical metadata validation still covers every row.
                     let topology_checked = operation.bound_namespace.is_some()
                         || (module.state == ModuleState::Strict && work_native);
                     if topology_checked

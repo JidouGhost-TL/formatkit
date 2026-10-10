@@ -1,0 +1,17 @@
+[package]
+name = "formatkit-archive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Format-neutral mounted namespace selection, extraction, and traversal"
+
+[dependencies]
+formatkit-core.workspace = true
+formatkit-catalog.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -13,9 +13,11 @@ default = []
 pixel = ["dep:formatkit-pixel"]
 codec = ["dep:formatkit-codec"]
 corpus = ["dep:formatkit-corpus", "dep:formatkit-corpus-test"]
+archive = ["dep:formatkit-archive"]
 
 [dependencies]
 formatkit-core.workspace = true
+formatkit-archive = { workspace = true, optional = true }
 formatkit-layout.workspace = true
 formatkit-catalog.workspace = true
 formatkit-runtime.workspace = true

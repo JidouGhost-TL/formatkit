@@ -1141,6 +1141,233 @@ pub(super) enum NamespaceCompositionError {
     Provider(FormatId),
 }
 
+type NamespaceCollisionGroups = std::collections::HashMap<
+    &'static str,
+    (NamespaceCollisionKind, std::collections::HashSet<FormatId>),
+>;
+
+fn valid_namespace_contract(
+    contract: NamespaceMountContract,
+    caps: FormatCapabilities,
+    requirement: Option<DecoderRequirement>,
+    embedded_context: Option<super::ContextRequirement>,
+) -> bool {
+    let valid_role = |role: &str| {
+        !role.is_empty()
+            && role.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
+    };
+    let (first_role, second_role) = contract.input.roles();
+    let roles_ok = valid_role(first_role)
+        && second_role.is_none_or(|role| valid_role(role) && role != first_role)
+        && contract
+            .input
+            .selector_role()
+            .is_none_or(|role| valid_role(role) && role != first_role && Some(role) != second_role)
+        && contract.input.single_role().is_none_or(|role| {
+            valid_role(role)
+                && match contract.input {
+                    NamespaceMountInput::SingleOrSelectedPairedSources { .. } => {
+                        role != first_role && Some(role) != second_role
+                    }
+                    _ => true,
+                }
+        });
+    let input_matches = requirement.map_or_else(
+        || {
+            matches!(
+                (embedded_context, contract.input),
+                (
+                    Some(super::ContextRequirement::ExplicitSelection),
+                    NamespaceMountInput::SingleSource { .. }
+                        | NamespaceMountInput::SelectedSingleSource { .. }
+                ) | (
+                    Some(super::ContextRequirement::PairedData { .. }),
+                    NamespaceMountInput::PairedSources { .. }
+                        | NamespaceMountInput::SelectedPairedSources { .. }
+                ) | (
+                    Some(
+                        super::ContextRequirement::ParentAddressSpace { .. }
+                            | super::ContextRequirement::ParentAndSiblings { .. }
+                            | super::ContextRequirement::AuthenticatedCarrierMember { .. }
+                    ),
+                    NamespaceMountInput::SingleSource { .. }
+                )
+            )
+        },
+        |requirement| match contract.input {
+            NamespaceMountInput::SingleSource { .. }
+            | NamespaceMountInput::SelectedSingleSource { .. }
+            | NamespaceMountInput::SingleOrSelectedPairedSources { .. } => {
+                requirement == DecoderRequirement::None
+            }
+            NamespaceMountInput::PairedSources { .. }
+            | NamespaceMountInput::SelectedPairedSources { .. } => {
+                requirement == DecoderRequirement::PairedData
+            }
+        },
+    );
+    let collision_ok = valid_namespace_collision(contract.collision);
+    caps.parse
+        && caps.corpus == contract.corpus_oracle.is_some()
+        && roles_ok
+        && input_matches
+        && collision_ok
+        && contract.oracles().all(valid_cargo_test_oracle)
+}
+
+fn valid_namespace_collision(collision: Option<NamespaceCollisionContract>) -> bool {
+    collision.is_none_or(|collision| {
+        !collision.group.trim().is_empty()
+            && collision
+                .group
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+            && valid_cargo_test_oracle(collision.ambiguity_oracle)
+    })
+}
+
+fn valid_namespace_provider(
+    provider: NamespaceProvider,
+    contract: NamespaceMountContract,
+    decoder: Option<&str>,
+) -> bool {
+    provider.id == contract.id
+        && provider.input == contract.input
+        && provider.strategy == contract.strategy
+        && provider.mount_matches_input()
+        && ((provider.source_probe.is_none() && provider.work_source_probe.is_none())
+            || provider.supports_single())
+        && provider.early_probe_prefix.is_none_or(|prefix| {
+            !prefix.is_empty()
+                && prefix.len() <= MAX_EARLY_NAMESPACE_PROBE_BYTES
+                && (provider.source_probe.is_some() || provider.work_source_probe.is_some())
+        })
+        && decoder == Some(provider.owner)
+}
+
+fn register_namespace_collision(
+    id: FormatId,
+    collision: Option<NamespaceCollisionContract>,
+    groups: &mut NamespaceCollisionGroups,
+) -> Result<(), NamespaceCompositionError> {
+    if let Some(collision) = collision {
+        let entry = groups
+            .entry(collision.group)
+            .or_insert_with(|| (collision.kind, Default::default()));
+        if entry.0 != collision.kind {
+            return Err(NamespaceCompositionError::Contract(id));
+        }
+        entry.1.insert(id);
+    }
+    Ok(())
+}
+
+fn validate_namespace_collision_groups(
+    groups: NamespaceCollisionGroups,
+) -> Result<(), NamespaceCompositionError> {
+    for (kind, ids) in groups.into_values() {
+        if kind == NamespaceCollisionKind::SharedNamespaceGroup && ids.len() < 2 {
+            return Err(NamespaceCompositionError::Contract(
+                *ids.iter().next().expect("registered group has a format"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_named_namespace_operations<'a>(
+    support: &super::SupportCatalog,
+    operations: impl IntoIterator<Item = (&'a NamespaceMountContract, &'a NamespaceProvider)>,
+    role_bound: impl IntoIterator<
+        Item = (
+            &'a RoleBoundNamespaceContract,
+            &'a RoleBoundNamespaceProvider,
+        ),
+    >,
+) -> Result<(), super::SupportCatalogError> {
+    let mut groups = NamespaceCollisionGroups::new();
+    for (&contract, &provider) in operations {
+        let view = support.get(contract.id).ok_or(
+            super::SupportCatalogError::InvalidNamespaceMountContract(contract.id),
+        )?;
+        if !valid_namespace_contract(
+            contract,
+            view.capabilities(),
+            view.detectable.map(|descriptor| descriptor.requirement),
+            view.embedded.map(|support| support.context),
+        ) {
+            return Err(super::SupportCatalogError::InvalidNamespaceMountContract(
+                contract.id,
+            ));
+        }
+        if !valid_namespace_provider(provider, contract, view.decoder()) {
+            return Err(super::SupportCatalogError::InvalidNamespaceProvider(
+                provider.id,
+            ));
+        }
+        let semantics = view.namespace_semantics.ok_or(
+            super::SupportCatalogError::MissingNamespaceSemantics(contract.id),
+        )?;
+        if semantics.kind == NamespaceKind::NonNamespace
+            || semantics.execution == NamespaceExecution::ExternalTransformRequired
+        {
+            return Err(super::SupportCatalogError::InvalidNamespaceSemantics(
+                contract.id,
+            ));
+        }
+        register_namespace_collision(contract.id, contract.collision, &mut groups)
+            .map_err(|_| super::SupportCatalogError::InvalidNamespaceMountContract(contract.id))?;
+    }
+    for (&contract, &provider) in role_bound {
+        let view = support.get(contract.id).ok_or(
+            super::SupportCatalogError::InvalidNamespaceMountContract(contract.id),
+        )?;
+        let caps = view.capabilities();
+        if !caps.parse
+            || caps.corpus != contract.corpus_oracle.is_some()
+            || contract.input.validate().is_err()
+            || !valid_namespace_collision(contract.collision)
+            || !contract.oracles().all(valid_cargo_test_oracle)
+        {
+            return Err(super::SupportCatalogError::InvalidNamespaceMountContract(
+                contract.id,
+            ));
+        }
+        if provider.id != contract.id
+            || provider.input != contract.input
+            || provider.strategy != contract.strategy
+            || !provider.mount_matches_input()
+            || view.decoder() != Some(provider.owner)
+        {
+            return Err(super::SupportCatalogError::InvalidNamespaceProvider(
+                provider.id,
+            ));
+        }
+        let semantics = view.namespace_semantics.ok_or(
+            super::SupportCatalogError::MissingNamespaceSemantics(contract.id),
+        )?;
+        if semantics.kind == NamespaceKind::NonNamespace
+            || semantics.execution == NamespaceExecution::ExternalTransformRequired
+        {
+            return Err(super::SupportCatalogError::InvalidNamespaceSemantics(
+                contract.id,
+            ));
+        }
+        register_namespace_collision(contract.id, contract.collision, &mut groups)
+            .map_err(|_| super::SupportCatalogError::InvalidNamespaceMountContract(contract.id))?;
+    }
+    validate_namespace_collision_groups(groups).map_err(|error| match error {
+        NamespaceCompositionError::Contract(id) => {
+            super::SupportCatalogError::InvalidNamespaceMountContract(id)
+        }
+        NamespaceCompositionError::Provider(id) => {
+            super::SupportCatalogError::InvalidNamespaceProvider(id)
+        }
+    })
+}
+
 pub(super) fn validate_namespace_composition(
     contracts: impl IntoIterator<Item = NamespaceMountContract>,
     providers: impl IntoIterator<Item = NamespaceProvider>,
@@ -1152,127 +1379,43 @@ pub(super) fn validate_namespace_composition(
     use std::collections::{HashMap, HashSet};
 
     let mut namespace_ids = HashSet::new();
-    let mut collision_groups: HashMap<&'static str, (NamespaceCollisionKind, Vec<FormatId>)> =
-        HashMap::new();
+    let mut collision_groups = NamespaceCollisionGroups::new();
     let mut validated_contracts = Vec::new();
     for contract in contracts {
         let Some(caps) = capabilities.get(&contract.id) else {
             return Err(NamespaceCompositionError::Contract(contract.id));
         };
-        let valid_role = |role: &str| {
-            !role.is_empty()
-                && role.bytes().all(|byte| {
-                    byte.is_ascii_lowercase()
-                        || byte.is_ascii_digit()
-                        || matches!(byte, b'-' | b'_')
-                })
-        };
-        let (first_role, second_role) = contract.input.roles();
-        let roles_ok = valid_role(first_role)
-            && second_role.is_none_or(|role| valid_role(role) && role != first_role)
-            && contract.input.selector_role().is_none_or(|role| {
-                valid_role(role) && role != first_role && Some(role) != second_role
-            })
-            && contract.input.single_role().is_none_or(|role| {
-                valid_role(role)
-                    && match contract.input {
-                        NamespaceMountInput::SingleOrSelectedPairedSources { .. } => {
-                            role != first_role && Some(role) != second_role
-                        }
-                        _ => true,
-                    }
-            });
-        let input_matches = detectable_requirements.get(&contract.id).map_or_else(
-            || {
-                matches!(
-                    (embedded_contexts.get(&contract.id), contract.input),
-                    (
-                        Some(super::ContextRequirement::ExplicitSelection),
-                        NamespaceMountInput::SingleSource { .. }
-                            | NamespaceMountInput::SelectedSingleSource { .. },
-                    ) | (
-                        Some(super::ContextRequirement::PairedData { .. }),
-                        NamespaceMountInput::PairedSources { .. }
-                            | NamespaceMountInput::SelectedPairedSources { .. },
-                    ) | (
-                        Some(
-                            super::ContextRequirement::ParentAddressSpace { .. }
-                                | super::ContextRequirement::ParentAndSiblings { .. }
-                                | super::ContextRequirement::AuthenticatedCarrierMember { .. },
-                        ),
-                        NamespaceMountInput::SingleSource { .. },
-                    )
-                )
-            },
-            |requirement| match contract.input {
-                NamespaceMountInput::SingleSource { .. }
-                | NamespaceMountInput::SelectedSingleSource { .. }
-                | NamespaceMountInput::SingleOrSelectedPairedSources { .. } => {
-                    *requirement == DecoderRequirement::None
-                }
-                NamespaceMountInput::PairedSources { .. }
-                | NamespaceMountInput::SelectedPairedSources { .. } => {
-                    *requirement == DecoderRequirement::PairedData
-                }
-            },
-        );
-        let collision_ok = contract.collision.is_none_or(|collision| {
-            let group_ok = !collision.group.trim().is_empty()
-                && collision
-                    .group
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
-            if !group_ok || !valid_cargo_test_oracle(collision.ambiguity_oracle) {
-                return false;
-            }
-            let entry = collision_groups
-                .entry(collision.group)
-                .or_insert_with(|| (collision.kind, Vec::new()));
-            if entry.0 != collision.kind {
-                return false;
-            }
-            entry.1.push(contract.id);
-            true
-        });
         if !namespace_ids.insert(contract.id)
-            || !caps.parse
-            || caps.corpus != contract.corpus_oracle.is_some()
-            || !roles_ok
-            || !input_matches
-            || !collision_ok
-            || !contract.oracles().all(valid_cargo_test_oracle)
+            || !valid_namespace_contract(
+                contract,
+                *caps,
+                detectable_requirements.get(&contract.id).copied(),
+                embedded_contexts.get(&contract.id).copied(),
+            )
         {
             return Err(NamespaceCompositionError::Contract(contract.id));
         }
+        register_namespace_collision(contract.id, contract.collision, &mut collision_groups)?;
         validated_contracts.push(contract);
     }
-    for (kind, ids) in collision_groups.values() {
-        if *kind == NamespaceCollisionKind::SharedNamespaceGroup && ids.len() < 2 {
-            return Err(NamespaceCompositionError::Contract(ids[0]));
-        }
-    }
+    validate_namespace_collision_groups(collision_groups)?;
     validated_contracts.sort_by_key(|contract| contract.id.as_str());
 
     let contract_inputs = validated_contracts
         .iter()
-        .map(|contract| (contract.id, (contract.input, contract.strategy)))
+        .map(|contract| (contract.id, *contract))
         .collect::<HashMap<_, _>>();
     let mut provider_ids = HashSet::new();
     let mut validated_providers = Vec::new();
     for provider in providers {
-        let owner_matches =
-            detectable_decoders.get(&provider.id).copied().flatten() == Some(provider.owner);
         if !provider_ids.insert(provider.id)
-            || contract_inputs.get(&provider.id) != Some(&(provider.input, provider.strategy))
-            || !provider.mount_matches_input()
-            || ((provider.source_probe.is_some() || provider.work_source_probe.is_some())
-                && !provider.supports_single())
-            || provider.early_probe_prefix.is_some_and(|prefix| {
-                prefix.is_empty()
-                    || prefix.len() > MAX_EARLY_NAMESPACE_PROBE_BYTES
-                    || (provider.source_probe.is_none() && provider.work_source_probe.is_none())
+            || contract_inputs.get(&provider.id).is_none_or(|contract| {
+                !valid_namespace_provider(
+                    provider,
+                    *contract,
+                    detectable_decoders.get(&provider.id).copied().flatten(),
+                )
             })
-            || !owner_matches
         {
             return Err(NamespaceCompositionError::Provider(provider.id));
         }

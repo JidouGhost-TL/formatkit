@@ -126,6 +126,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 name = "formatkit"
 version = "0.1.0"
 dependencies = [
+ "formatkit-archive",
  "formatkit-catalog",
  "formatkit-codec",
  "formatkit-core",
@@ -134,6 +135,16 @@ dependencies = [
  "formatkit-layout",
  "formatkit-pixel",
  "formatkit-runtime",
+]
+
+[[package]]
+name = "formatkit-archive"
+version = "0.1.0"
+dependencies = [
+ "formatkit-catalog",
+ "formatkit-core",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

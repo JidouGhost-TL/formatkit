@@ -17,6 +17,8 @@ use formatkit_core::{
 
 use super::*;
 
+mod metadata;
+
 const ORACLE: CargoTestOracle =
     CargoTestOracle::lib("formatkit-runtime", "tests::module_order_is_stable");
 const OWNER: &str = "owner-a";
@@ -403,6 +405,27 @@ static THREE_MODULE: FormatModule = FormatModule {
     namespace_semantics: Some(&SEMANTICS),
     operations: &[THREE_OPERATION],
 };
+
+#[test]
+fn role_bound_operations_remain_strict_only_with_selective_projection() {
+    let id = OperationId {
+        format: THREE_MODULE.format,
+        name: THREE_OPERATION.name,
+    };
+    let catalog = ModuleCatalog::with_namespace_projection([&THREE_MODULE], []).unwrap();
+    assert!(catalog.operation(id).is_some());
+    assert!(catalog.support().namespace_provider(id.format).is_none());
+    assert!(std::ptr::eq(
+        catalog.operation(id).unwrap().input_schema,
+        &THREE_SCHEMA
+    ));
+    assert_eq!(
+        ModuleCatalog::with_namespace_projection([&THREE_MODULE], [id])
+            .err()
+            .unwrap(),
+        ModuleCatalogError::InvalidNamespaceProjection(id)
+    );
+}
 
 const FOUR_CONTRACT: RoleBoundNamespaceContract = RoleBoundNamespaceContract {
     id: crate::synthetic::ID_B38504826C7B,

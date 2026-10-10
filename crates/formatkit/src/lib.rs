@@ -1,5 +1,7 @@
 //! Shared binary data foundations for independent format libraries.
 #![forbid(unsafe_code)]
+#[cfg(feature = "archive")]
+pub use formatkit_archive as archive;
 pub use formatkit_catalog as catalog;
 #[cfg(feature = "codec")]
 pub use formatkit_codec as codec;

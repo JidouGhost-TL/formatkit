@@ -5,7 +5,8 @@ use super::{
     CargoTestOracle, ContextRequirement, CorpusEvidence, DecoderRequirement, FormatCapabilities,
     FormatDescriptor, FormatFamilyId, NamespaceExecution, NamespaceKind, NamespaceMountContract,
     NamespaceMountInput, NamespaceMountStrategy, NamespaceProvider, NamespaceSemantics,
-    PairedNamespaceSources, WorkMountedNamespace, WorkRunnerOp, WorkRunnerUser, WriterContract,
+    PairedNamespaceSources, RoleBoundNamespaceContract, RoleBoundNamespaceProvider,
+    WorkMountedNamespace, WorkRunnerOp, WorkRunnerUser, WriterContract,
 };
 use crate::{Category, FormatId};
 
@@ -131,6 +132,7 @@ pub enum SupportCatalogError {
     InvalidNamespaceSemantics(FormatId),
     InvalidNamespaceMountContract(FormatId),
     InvalidNamespaceProvider(FormatId),
+    InvalidNamespaceProjectionIndex(usize),
 }
 
 impl fmt::Display for SupportCatalogError {
@@ -166,6 +168,9 @@ impl fmt::Display for SupportCatalogError {
             Self::InvalidNamespaceProvider(id) => {
                 write!(f, "invalid namespace provider: {id}")
             }
+            Self::InvalidNamespaceProjectionIndex(index) => {
+                write!(f, "invalid namespace projection index: {index}")
+            }
         }
     }
 }
@@ -173,6 +178,96 @@ impl fmt::Display for SupportCatalogError {
 impl std::error::Error for SupportCatalogError {}
 
 impl SupportCatalog {
+    /// Validate every named namespace operation against normalized support
+    /// metadata without projecting it into a format-keyed legacy default.
+    ///
+    /// Uses the same contract, provider, proof-selector, source-probe and
+    /// collision checks as legacy namespace composition. Multiple operations
+    /// may share a format identity; shared collision groups count distinct
+    /// formats, and conflicting group declarations still fail. No operation
+    /// is retained here. Namespace semantics must already be declared.
+    pub fn validate_namespace_operations<'a>(
+        &self,
+        operations: impl IntoIterator<Item = (&'a NamespaceMountContract, &'a NamespaceProvider)>,
+    ) -> Result<(), SupportCatalogError> {
+        self.validate_namespace_operations_with_role_bound(operations, [])
+    }
+
+    /// Validate ordinary and finite role-bound namespace operations together.
+    /// Role-bound operations retain their own topology and have no legacy
+    /// provider projection. Their proof/corpus, owner, strategy and executable
+    /// semantics are checked, and collision groups include both operation kinds.
+    /// Semantic context authentication remains the owner's typed input contract;
+    /// the number of byte roles does not imply a context requirement.
+    pub fn validate_namespace_operations_with_role_bound<'a>(
+        &self,
+        operations: impl IntoIterator<Item = (&'a NamespaceMountContract, &'a NamespaceProvider)>,
+        role_bound: impl IntoIterator<
+            Item = (
+                &'a RoleBoundNamespaceContract,
+                &'a RoleBoundNamespaceProvider,
+            ),
+        >,
+    ) -> Result<(), SupportCatalogError> {
+        super::namespace::validate_named_namespace_operations(self, operations, role_bound)
+    }
+
+    /// Replace legacy namespace defaults with an explicit subset of validated
+    /// named operations. Indices address the supplied operation sequence, not
+    /// format identities or callback addresses. At most one default per format
+    /// may be selected; the complete operation set supplies collision-group
+    /// validation, so any subset (including empty) is permitted.
+    ///
+    /// Selected contracts retain their original collision declarations. No
+    /// unselected operation is retained, and all operations must pass the same
+    /// canonical checks as [`Self::validate_namespace_operations`].
+    pub fn with_namespace_operation_projection<'a>(
+        self,
+        operations: impl IntoIterator<Item = (&'a NamespaceMountContract, &'a NamespaceProvider)>,
+        selected: impl IntoIterator<Item = usize>,
+    ) -> Result<Self, SupportCatalogError> {
+        self.with_namespace_operation_projection_with_role_bound(operations, [], selected)
+    }
+
+    /// Project ordinary namespace defaults after validating ordinary and
+    /// role-bound operations as one collision/proof set. Selected indices
+    /// address only the ordinary operation sequence; role-bound operations
+    /// never acquire a fixed-arity legacy default.
+    pub fn with_namespace_operation_projection_with_role_bound<'a>(
+        mut self,
+        operations: impl IntoIterator<Item = (&'a NamespaceMountContract, &'a NamespaceProvider)>,
+        role_bound: impl IntoIterator<
+            Item = (
+                &'a RoleBoundNamespaceContract,
+                &'a RoleBoundNamespaceProvider,
+            ),
+        >,
+        selected: impl IntoIterator<Item = usize>,
+    ) -> Result<Self, SupportCatalogError> {
+        let operations = operations.into_iter().collect::<Vec<_>>();
+        self.validate_namespace_operations_with_role_bound(operations.iter().copied(), role_bound)?;
+        let mut ids = std::collections::HashSet::new();
+        let mut contracts = Vec::new();
+        let mut providers = Vec::new();
+        for index in selected {
+            let &(contract, provider) = operations
+                .get(index)
+                .ok_or(SupportCatalogError::InvalidNamespaceProjectionIndex(index))?;
+            if !ids.insert(contract.id) {
+                return Err(SupportCatalogError::InvalidNamespaceMountContract(
+                    contract.id,
+                ));
+            }
+            contracts.push(*contract);
+            providers.push(*provider);
+        }
+        contracts.sort_by_key(|contract| contract.id.as_str());
+        providers.sort_by_key(|provider| provider.id.as_str());
+        self.namespace_mount_contracts = contracts;
+        self.namespace_providers = providers;
+        Ok(self)
+    }
+
     pub fn new(
         detectable: impl IntoIterator<Item = FormatDescriptor>,
         embedded: impl IntoIterator<Item = EmbeddedFormatSupport>,

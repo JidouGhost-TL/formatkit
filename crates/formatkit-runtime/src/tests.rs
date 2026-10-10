@@ -11,6 +11,8 @@ use formatkit_core::{Error, IndexedNamespace, RangeSource, ReadBudget, Result};
 
 use super::*;
 
+mod namespace_projection;
+
 const TIM_PROBES: &[Probe] = &[Probe::Magic {
     offset: 0,
     bytes: b"TIM!",

@@ -8,6 +8,7 @@ use formatkit_catalog::catalog::{
 };
 use formatkit_catalog::{Category, FormatId};
 use formatkit_core::{Error, IndexedNamespace, RangeSource, ReadBudget, Result};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 
@@ -1426,6 +1427,13 @@ const MATCHED_NAMESPACE: ModuleOperation = ModuleOperation {
         provider: &MATCHED_PROVIDER,
     },
 };
+const BRIDGE_NAMESPACE: ModuleOperation = ModuleOperation {
+    executable: ExistingExecutableOperation::NamespaceReadBridge {
+        contract: &NAMESPACE_CONTRACT,
+        provider: &MATCHED_PROVIDER,
+    },
+    ..MATCHED_NAMESPACE
+};
 const NAMESPACE_SEMANTICS: NamespaceSemantics = NamespaceSemantics::carrier(
     crate::synthetic::ID_B38504826C7B,
     NamespaceAddressing::DirectRanges,
@@ -1436,6 +1444,138 @@ static PARSE_NAMESPACE_MODULE: FormatModule = FormatModule {
     operations: &[MATCHED_NAMESPACE],
     ..MODULE_A
 };
+static BRIDGE_NAMESPACE_MODULE: FormatModule = FormatModule {
+    operations: &[BRIDGE_NAMESPACE],
+    ..PARSE_NAMESPACE_MODULE
+};
+
+static BRIDGE_ADAPTER_CALLS: AtomicUsize = AtomicUsize::new(0);
+static BRIDGE_LEGACY_CLOSURE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+fn bridge_bound_mount(
+    _sources: &formatkit_core::SourceBindings,
+    _bound: &formatkit_catalog::catalog::BoundInputs,
+    _prefix: &[u8],
+    budget: &mut formatkit_core::WorkBudget,
+) -> Result<formatkit_catalog::catalog::SourceProbeOutcome<Box<dyn IndexedNamespace>>> {
+    BRIDGE_ADAPTER_CALLS.fetch_add(1, Ordering::SeqCst);
+    budget.with_read_budget(|_| {
+        BRIDGE_LEGACY_CLOSURE_CALLS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })?;
+    Ok(formatkit_catalog::catalog::SourceProbeOutcome::Mismatch)
+}
+
+const BRIDGE_NAMESPACE_WITH_CALLBACK: ModuleOperation = ModuleOperation {
+    bound_namespace: Some(bridge_bound_mount),
+    ..BRIDGE_NAMESPACE
+};
+static BRIDGE_NAMESPACE_DISPATCH_MODULE: FormatModule = FormatModule {
+    operations: &[BRIDGE_NAMESPACE_WITH_CALLBACK],
+    ..BRIDGE_NAMESPACE_MODULE
+};
+
+#[test]
+fn namespace_read_bridge_is_a_selected_namespace_and_preserves_finite_io_refusal() {
+    use formatkit_catalog::ByteInput;
+    use formatkit_core::{MemoryRangeSource, SourceBindings, WorkBudget, WorkLimits, WorkResource};
+
+    const ID: OperationId = OperationId {
+        format: crate::synthetic::ID_B38504826C7B,
+        name: "mount",
+    };
+    let catalog =
+        ModuleCatalog::with_namespace_projection([&BRIDGE_NAMESPACE_DISPATCH_MODULE], [ID])
+            .expect("bridge operation retains canonical namespace selection");
+    assert!(catalog.operation(ID).is_some());
+    assert!(catalog
+        .support()
+        .get(ID.format)
+        .unwrap()
+        .namespace_provider
+        .is_some());
+
+    let mut sources = SourceBindings::new();
+    let handle = sources.register(std::sync::Arc::new(MemoryRangeSource::new(
+        b"BRDG".to_vec(),
+        "synthetic bridge source",
+    )));
+    let operation = catalog.operation(ID).unwrap();
+    let bound = operation
+        .input_schema
+        .bind(
+            &sources,
+            &[ByteInput {
+                role: "carrier",
+                source: &handle,
+            }],
+            &[],
+        )
+        .unwrap();
+
+    BRIDGE_ADAPTER_CALLS.store(0, Ordering::SeqCst);
+    BRIDGE_LEGACY_CLOSURE_CALLS.store(0, Ordering::SeqCst);
+    let finite = WorkLimits::unlimited()
+        .with(WorkResource::IoRequestedBytes, 4)
+        .with(WorkResource::IoReadCalls, 1);
+    let mut finite_budget = WorkBudget::new(finite);
+    let error = catalog
+        .invoke_bound_namespace(ID, &sources, &bound, b"BRDG", &mut finite_budget)
+        .err()
+        .expect("the finite physical-I/O ceiling rejects before the bridge closure");
+    assert_eq!(
+        error,
+        Error::Unsupported("source does not expose underlying I/O accounting".into())
+    );
+    assert_eq!(BRIDGE_ADAPTER_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(BRIDGE_LEGACY_CLOSURE_CALLS.load(Ordering::SeqCst), 0);
+    assert!(finite_budget.usage().complete_io_accounting());
+    assert_eq!(finite_budget.spent(WorkResource::IoRequestedBytes), 0);
+    assert_eq!(finite_budget.spent(WorkResource::IoReadCalls), 0);
+
+    let mut unlimited_budget = WorkBudget::new(WorkLimits::unlimited());
+    assert!(matches!(
+        catalog
+            .invoke_bound_namespace(ID, &sources, &bound, b"BRDG", &mut unlimited_budget)
+            .unwrap(),
+        Some(formatkit_catalog::catalog::SourceProbeOutcome::Mismatch)
+    ));
+    assert_eq!(BRIDGE_ADAPTER_CALLS.load(Ordering::SeqCst), 2);
+    assert_eq!(BRIDGE_LEGACY_CLOSURE_CALLS.load(Ordering::SeqCst), 1);
+    assert!(!unlimited_budget.usage().complete_io_accounting());
+
+    let excluded =
+        ModuleCatalog::with_namespace_projection([&BRIDGE_NAMESPACE_DISPATCH_MODULE], [])
+            .expect("empty projection remains valid");
+    assert!(excluded.operation(ID).is_some());
+    assert!(excluded
+        .support()
+        .get(ID.format)
+        .unwrap()
+        .namespace_provider
+        .is_none());
+}
+
+#[test]
+fn namespace_read_bridge_requires_its_bound_namespace_callback() {
+    const MISSING_BRIDGE_CALLBACK: ModuleOperation = ModuleOperation {
+        bound_namespace: None,
+        ..BRIDGE_NAMESPACE
+    };
+    static MISSING_BRIDGE_CALLBACK_MODULE: FormatModule = FormatModule {
+        operations: &[MISSING_BRIDGE_CALLBACK],
+        ..PARSE_NAMESPACE_MODULE
+    };
+    assert_eq!(
+        ModuleCatalog::new([&MISSING_BRIDGE_CALLBACK_MODULE])
+            .err()
+            .unwrap(),
+        ModuleCatalogError::InvalidBoundNamespaceAdapter(OperationId {
+            format: crate::synthetic::ID_B38504826C7B,
+            name: "mount",
+        })
+    );
+}
 
 #[test]
 fn namespace_contract_provider_disagreement_is_rejected() {
@@ -1443,7 +1583,51 @@ fn namespace_contract_provider_disagreement_is_rejected() {
         ModuleCatalog::new([&MISMATCHED_MODULE]).err().unwrap(),
         ModuleCatalogError::ContractProviderDisagreement(crate::synthetic::ID_B38504826C7B)
     );
+    const MISMATCHED_BRIDGE: ModuleOperation = ModuleOperation {
+        executable: ExistingExecutableOperation::NamespaceReadBridge {
+            contract: &NAMESPACE_CONTRACT,
+            provider: &MISMATCHED_PROVIDER,
+        },
+        ..MATCHED_NAMESPACE
+    };
+    static MISMATCHED_BRIDGE_MODULE: FormatModule = FormatModule {
+        operations: &[MISMATCHED_BRIDGE],
+        ..PARSE_NAMESPACE_MODULE
+    };
+    assert_eq!(
+        ModuleCatalog::new([&MISMATCHED_BRIDGE_MODULE])
+            .err()
+            .unwrap(),
+        ModuleCatalogError::ContractProviderDisagreement(crate::synthetic::ID_B38504826C7B)
+    );
+    const WRONG_ID_CONTRACT: NamespaceMountContract = NamespaceMountContract {
+        id: OWNER_DEFINED_ID,
+        ..NAMESPACE_CONTRACT
+    };
+    const WRONG_ID_PROVIDER: NamespaceProvider = NamespaceProvider {
+        id: OWNER_DEFINED_ID,
+        ..MATCHED_PROVIDER
+    };
+    const WRONG_ID_BRIDGE: ModuleOperation = ModuleOperation {
+        executable: ExistingExecutableOperation::NamespaceReadBridge {
+            contract: &WRONG_ID_CONTRACT,
+            provider: &WRONG_ID_PROVIDER,
+        },
+        ..MATCHED_NAMESPACE
+    };
+    static WRONG_ID_BRIDGE_MODULE: FormatModule = FormatModule {
+        operations: &[WRONG_ID_BRIDGE],
+        ..PARSE_NAMESPACE_MODULE
+    };
+    assert_eq!(
+        ModuleCatalog::new([&WRONG_ID_BRIDGE_MODULE]).err().unwrap(),
+        ModuleCatalogError::IdentityDisagreement {
+            module: crate::synthetic::ID_B38504826C7B,
+            contributed: OWNER_DEFINED_ID,
+        }
+    );
     assert!(ModuleCatalog::new([&PARSE_NAMESPACE_MODULE]).is_ok());
+    assert!(ModuleCatalog::new([&BRIDGE_NAMESPACE_MODULE]).is_ok());
 }
 
 #[test]
@@ -1546,4 +1730,23 @@ fn strict_operations_require_valid_schemas_and_bound_namespace_adapters() {
             })
         );
     }
+
+    const BRIDGE_WRONG_ROLE: ModuleOperation = ModuleOperation {
+        input_schema: &WRONG_ROLE_SCHEMA,
+        bound_namespace: Some(bound_mount),
+        ..BRIDGE_NAMESPACE
+    };
+    static BRIDGE_WRONG_ROLE_MODULE: FormatModule = FormatModule {
+        operations: &[BRIDGE_WRONG_ROLE],
+        ..PARSE_NAMESPACE_MODULE
+    };
+    assert_eq!(
+        ModuleCatalog::new([&BRIDGE_WRONG_ROLE_MODULE])
+            .err()
+            .unwrap(),
+        ModuleCatalogError::InputSchemaTopologyDisagreement(OperationId {
+            format: crate::synthetic::ID_B38504826C7B,
+            name: "mount",
+        })
+    );
 }

@@ -95,7 +95,10 @@ fn writer_contract_enforces_operation_specific_obligations() {
     );
 
     const WRONG_OWNER_SCOPE: EditContract = EditContract {
-        scope: OperationScope::Dialect(DialectId::new(FormatId::PNG, "canonical")),
+        scope: OperationScope::Dialect(DialectId::new(
+            crate::synthetic::ID_44895F217E35,
+            "canonical",
+        )),
         ..VALID_EDIT
     };
     let wrong_owner_scope = WriterContract {
@@ -188,11 +191,11 @@ fn writer_contract_enforces_operation_specific_obligations() {
         SupportCatalogError::InvalidWriterContract(crate::synthetic::ID_B38504826C7B)
     );
 
-    let mut detectable = descriptor(FormatId::PNG, 10, MAGIC, &[]);
+    let mut detectable = descriptor(crate::synthetic::ID_44895F217E35, 10, MAGIC, &[]);
     detectable.capabilities.parse = true;
     detectable.capabilities.edit = true;
     let detectable_contract = WriterContract {
-        id: FormatId::PNG,
+        id: crate::synthetic::ID_44895F217E35,
         reproduction: None,
         edits: &[EditContract {
             mode: EditMode::ConfinedEdit,
@@ -209,15 +212,15 @@ fn writer_contract_enforces_operation_specific_obligations() {
         SupportCatalog::with_writer_contracts([detectable], [], [detectable_contract]).unwrap();
     assert_eq!(catalog.writer_contracts(), &[detectable_contract]);
     assert!(catalog.capability_markdown().contains(
-        "| png | global | — | none | — | — | — | confined-edit | format | semantic-fields-only | preserved | n/a | — |"
+        "| synthetic-id-44895f217e35 | global | — | none | — | — | — | confined-edit | format | semantic-fields-only | preserved | n/a | — |"
     ));
 
-    let mut authored = descriptor(FormatId::PNG, 10, MAGIC, &[]);
+    let mut authored = descriptor(crate::synthetic::ID_44895F217E35, 10, MAGIC, &[]);
     authored.capabilities.parse = true;
     authored.capabilities.edit = true;
     authored.capabilities.write = true;
     let valid_authoring = WriterContract {
-        id: FormatId::PNG,
+        id: crate::synthetic::ID_44895F217E35,
         reproduction: Some(ReproductionContract {
             scope: OperationScope::Format,
             oracle: CargoTestOracle::integration("formatkit-catalog", "writer_oracle", "source"),
@@ -252,6 +255,6 @@ fn writer_contract_enforces_operation_specific_obligations() {
     };
     assert_eq!(
         SupportCatalog::with_writer_contracts([authored], [], [empty_oracle]).unwrap_err(),
-        SupportCatalogError::InvalidWriterContract(FormatId::PNG)
+        SupportCatalogError::InvalidWriterContract(crate::synthetic::ID_44895F217E35)
     );
 }

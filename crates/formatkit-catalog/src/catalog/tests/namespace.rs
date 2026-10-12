@@ -46,7 +46,7 @@ fn namespace_contracts_enforce_source_shape_and_executable_collision_evidence() 
     let mut first = descriptor(crate::synthetic::ID_B38504826C7B, 10, MAGIC, &[]);
     first.capabilities.parse = true;
     first.decoder = Some("test");
-    let mut second = descriptor(FormatId::PNG, 10, STRUCTURAL, &[]);
+    let mut second = descriptor(crate::synthetic::ID_44895F217E35, 10, STRUCTURAL, &[]);
     second.capabilities.parse = true;
     second.decoder = Some("test");
 
@@ -56,14 +56,17 @@ fn namespace_contracts_enforce_source_shape_and_executable_collision_evidence() 
         [],
         [
             contract(crate::synthetic::ID_B38504826C7B),
-            contract(FormatId::PNG),
+            contract(crate::synthetic::ID_44895F217E35),
         ],
         [
             namespace_provider(
                 crate::synthetic::ID_B38504826C7B,
                 contract(crate::synthetic::ID_B38504826C7B).input,
             ),
-            namespace_provider(FormatId::PNG, contract(FormatId::PNG).input),
+            namespace_provider(
+                crate::synthetic::ID_44895F217E35,
+                contract(crate::synthetic::ID_44895F217E35).input,
+            ),
         ],
     )
     .unwrap();
@@ -112,7 +115,7 @@ fn namespace_contracts_enforce_source_shape_and_executable_collision_evidence() 
     .unwrap();
     assert_eq!(peer_catalog.namespace_mount_contracts().len(), 1);
 
-    let mut mixed_kind = contract(FormatId::PNG);
+    let mut mixed_kind = contract(crate::synthetic::ID_44895F217E35);
     mixed_kind.collision.as_mut().unwrap().kind = NamespaceCollisionKind::PeerBoundary;
     let mixed_group = SupportCatalog::with_contracts(
         [first, second],
@@ -124,12 +127,12 @@ fn namespace_contracts_enforce_source_shape_and_executable_collision_evidence() 
                 crate::synthetic::ID_B38504826C7B,
                 contract(crate::synthetic::ID_B38504826C7B).input,
             ),
-            namespace_provider(FormatId::PNG, mixed_kind.input),
+            namespace_provider(crate::synthetic::ID_44895F217E35, mixed_kind.input),
         ],
     );
     assert_eq!(
         mixed_group.unwrap_err(),
-        SupportCatalogError::InvalidNamespaceMountContract(FormatId::PNG)
+        SupportCatalogError::InvalidNamespaceMountContract(crate::synthetic::ID_44895F217E35)
     );
 
     let mut wrong_input = contract(crate::synthetic::ID_B38504826C7B);

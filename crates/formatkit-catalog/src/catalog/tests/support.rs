@@ -170,12 +170,12 @@ fn support_catalog_enforces_capabilities_and_corpus_evidence() {
 #[test]
 fn support_catalog_requires_explicit_groups_for_local_collisions() {
     let first = embedded(crate::synthetic::ID_B38504826C7B);
-    let second = embedded(FormatId::PNG);
+    let second = embedded(crate::synthetic::ID_44895F217E35);
     assert_eq!(
         SupportCatalog::new([], [first, second]).unwrap_err(),
         SupportCatalogError::DuplicateLocalDiscriminator {
             first: crate::synthetic::ID_B38504826C7B,
-            second: FormatId::PNG,
+            second: crate::synthetic::ID_44895F217E35,
         }
     );
     let mut first = first;
@@ -189,29 +189,37 @@ fn support_catalog_requires_explicit_groups_for_local_collisions() {
 fn support_catalog_is_sorted_and_retains_context() {
     let mut tim = embedded(crate::synthetic::ID_B38504826C7B);
     tim.local_discriminator = "synthetic-id-b38504826c7b";
-    let mut png = embedded(FormatId::PNG);
-    png.local_discriminator = "png";
-    let support = SupportCatalog::new([], [tim, png]).unwrap();
+    let mut second = embedded(crate::synthetic::ID_44895F217E35);
+    second.local_discriminator = "synthetic-id-44895f217e35";
+    let support = SupportCatalog::new([], [tim, second]).unwrap();
     assert_eq!(
         support
             .embedded()
             .iter()
             .map(|item| item.id)
             .collect::<Vec<_>>(),
-        [FormatId::PNG, crate::synthetic::ID_B38504826C7B]
+        [
+            crate::synthetic::ID_44895F217E35,
+            crate::synthetic::ID_B38504826C7B
+        ]
     );
     let matrix = support.capability_markdown();
     assert!(
-        matrix.find("| png | context-only |").unwrap()
+        matrix
+            .find("| synthetic-id-44895f217e35 | context-only |")
+            .unwrap()
             < matrix
                 .find("| synthetic-id-b38504826c7b | context-only |")
                 .unwrap()
     );
     assert!(matrix.contains(
-        "| png | context-only | synthetic-family-0 | authenticated-carrier-member | image-owner | — | — | — | — | — | — | — |"
+        "| synthetic-id-44895f217e35 | context-only | synthetic-family-0 | authenticated-carrier-member | image-owner | — | — | — | — | — | — | — |"
     ));
     assert_eq!(
-        support.get(FormatId::PNG).unwrap().category_label(),
+        support
+            .get(crate::synthetic::ID_44895F217E35)
+            .unwrap()
+            .category_label(),
         "context-only"
     );
 }
@@ -257,7 +265,7 @@ fn support_lookup_merges_detectable_context_and_writer_metadata() {
     assert_eq!(merged.writer, Some(&writer));
     assert!(merged.capabilities().edit);
     assert_eq!(merged.decoder(), Some("image-owner"));
-    assert!(support.get(FormatId::PNG).is_none());
+    assert!(support.get(crate::synthetic::ID_44895F217E35).is_none());
 }
 
 #[test]

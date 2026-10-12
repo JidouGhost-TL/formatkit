@@ -1,20 +1,19 @@
-/// A typed format identifier shared by classifiers and dispatchers.
+/// A typed format identifier shared by catalog owners and callers.
 ///
-/// The classifier retains the public string tag on [`Id`] for serialization
-/// compatibility, while dispatch code matches these constants instead of
-/// repeating string literals. This makes a misspelled or renamed dispatch key
-/// a compile-time-visible change at one shared API boundary.
+/// An owner or caller declares its own static ID beside its registration. The
+/// catalog validates IDs when registrations are composed; it does not maintain
+/// a central list of format identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FormatId(&'static str);
 
 impl FormatId {
     pub const UNKNOWN: Self = Self("");
 
-    /// Declare a decoder-owned static format identity.
+    /// Declare an owner- or caller-owned static format identity.
     ///
     /// Construction is allocation-free and intentionally const. Catalog
     /// composition validates the lexical domain, so an owner crate can declare
-    /// its identity without extending this crate's compatibility constant list.
+    /// its identity without adding format vocabulary to this crate.
     pub const fn new(value: &'static str) -> Self {
         Self(value)
     }
@@ -47,10 +46,6 @@ impl FormatId {
         !previous_was_separator
     }
 
-    pub const GZIP: Self = Self("gzip");
-    pub const MIDI: Self = Self("midi");
-    pub const PNG: Self = Self("png");
-    pub const XML: Self = Self("xml");
     pub const fn as_str(self) -> &'static str {
         self.0
     }

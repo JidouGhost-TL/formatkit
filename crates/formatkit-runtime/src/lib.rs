@@ -6,8 +6,11 @@
 //!
 //! Operations have an open, owner-chosen static name and purpose. The temporary
 //! [`ExistingExecutableOperation`] enum only adapts today's namespace and leaf
-//! payloads; it is not operation identity. Role-bound namespace callbacks live
-//! on [`ModuleOperation`] while legacy single/pair callbacks remain projected.
+//! payloads; it is not operation identity. Its `NamespaceReadBridge` variant
+//! explicitly marks a named adapter that may enter a legacy `ReadBudget`
+//! bridge without weakening caller-supplied physical-I/O limits. Role-bound
+//! namespace callbacks live on [`ModuleOperation`] while legacy single/pair
+//! callbacks remain projected.
 //! Writer contracts remain the proof authority. Strict resident writer
 //! operations select one exact contract operation and provide a callable;
 //! selectors do not duplicate proof-oracle metadata.
@@ -320,10 +323,16 @@ pub fn invoke_bound_namespace_adapter(
     budget: &mut formatkit_core::WorkBudget,
 ) -> formatkit_core::Result<SourceProbeOutcome<Box<dyn formatkit_core::IndexedNamespace>>> {
     operation.input_schema.validate_bound(sources, bound)?;
-    let ExistingExecutableOperation::Namespace { contract, provider } = operation.executable else {
-        return Err(formatkit_core::Error::Unsupported(
-            "bound namespace adapter is attached to a non-namespace operation".into(),
-        ));
+    let (contract, provider) = match operation.executable {
+        ExistingExecutableOperation::Namespace { contract, provider }
+        | ExistingExecutableOperation::NamespaceReadBridge { contract, provider } => {
+            (contract, provider)
+        }
+        _ => {
+            return Err(formatkit_core::Error::Unsupported(
+                "bound namespace adapter is attached to a non-namespace operation".into(),
+            ));
+        }
     };
     if contract.id != provider.id
         || contract.input != provider.input
@@ -550,6 +559,14 @@ pub enum ExistingExecutableOperation {
         contract: &'static NamespaceMountContract,
         provider: &'static NamespaceProvider,
     },
+    /// The named operation's bound namespace adapter may enter the legacy
+    /// `ReadBudget` bridge. This declaration informs product default-budget
+    /// policy only; caller-supplied finite physical-I/O limits remain enforced
+    /// by `WorkBudget` before the bridge callback is entered.
+    NamespaceReadBridge {
+        contract: &'static NamespaceMountContract,
+        provider: &'static NamespaceProvider,
+    },
     /// Namespace mount without type erasure: the runner mounts on the caller's
     /// ledger and invokes a scoped user once. The runner lives in the variant
     /// (rather than the operation's legacy adapter slot) so existing rows keep
@@ -576,6 +593,7 @@ impl ExistingExecutableOperation {
     const fn format(self) -> FormatId {
         match self {
             Self::Namespace { contract, .. } => contract.id,
+            Self::NamespaceReadBridge { contract, .. } => contract.id,
             Self::RunnerNamespace { contract, .. } => contract.id,
             Self::RoleBoundNamespace { contract, .. } => contract.id,
             Self::Leaf(provider) => provider.contract.id,
@@ -832,7 +850,8 @@ impl ModuleCatalog {
     /// Compose every strict named operation while explicitly selecting the
     /// namespace defaults visible through the legacy support catalog.
     ///
-    /// At most one [`ExistingExecutableOperation::Namespace`] or
+    /// At most one [`ExistingExecutableOperation::Namespace`],
+    /// [`ExistingExecutableOperation::NamespaceReadBridge`], or
     /// [`ExistingExecutableOperation::RunnerNamespace`] may be selected per
     /// format. Unselected operations retain their canonical schemas and remain
     /// available through [`Self::operation`] when contributed by strict rows.
@@ -947,6 +966,7 @@ impl ModuleCatalog {
                     .as_ref()
                     .is_none_or(|selected| selected.contains(&id));
                 if let ExistingExecutableOperation::Namespace { contract, provider }
+                | ExistingExecutableOperation::NamespaceReadBridge { contract, provider }
                 | ExistingExecutableOperation::RunnerNamespace {
                     contract, provider, ..
                 } = operation.executable
@@ -958,6 +978,7 @@ impl ModuleCatalog {
                 }
                 match operation.executable {
                     ExistingExecutableOperation::Namespace { .. }
+                    | ExistingExecutableOperation::NamespaceReadBridge { .. }
                     | ExistingExecutableOperation::RunnerNamespace { .. } => {}
                     ExistingExecutableOperation::RoleBoundNamespace { contract, provider } => {
                         // Role-bound rows have no legacy support projection;
@@ -1348,6 +1369,7 @@ fn validate_namespace_projection(
         if !matches!(
             operation.executable,
             ExistingExecutableOperation::Namespace { .. }
+                | ExistingExecutableOperation::NamespaceReadBridge { .. }
                 | ExistingExecutableOperation::RunnerNamespace { .. }
         ) {
             return Err(ModuleCatalogError::InvalidNamespaceProjection(id));
@@ -1450,14 +1472,22 @@ fn validate_rows(modules: &[&FormatModule]) -> Result<(), ModuleCatalogError> {
             let wants_legacy_bound = matches!(
                 operation.executable,
                 ExistingExecutableOperation::Namespace { .. }
+                    | ExistingExecutableOperation::NamespaceReadBridge { .. }
             ) && !work_native;
+            let bridge_missing_adapter = matches!(
+                operation.executable,
+                ExistingExecutableOperation::NamespaceReadBridge { .. }
+            ) && operation.bound_namespace.is_none();
             if operation.bound_namespace.is_some() != wants_legacy_bound
-                && (operation.bound_namespace.is_some() || module.state == ModuleState::Strict)
+                && (operation.bound_namespace.is_some()
+                    || module.state == ModuleState::Strict
+                    || bridge_missing_adapter)
             {
                 return Err(ModuleCatalogError::InvalidBoundNamespaceAdapter(id));
             }
             match operation.executable {
-                ExistingExecutableOperation::Namespace { contract, provider } => {
+                ExistingExecutableOperation::Namespace { contract, provider }
+                | ExistingExecutableOperation::NamespaceReadBridge { contract, provider } => {
                     let topology_checked = operation.bound_namespace.is_some()
                         || (module.state == ModuleState::Strict && work_native);
                     if topology_checked

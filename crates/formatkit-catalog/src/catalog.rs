@@ -7,7 +7,7 @@
 mod descriptor;
 pub use descriptor::{
     Confidence, ContextRequirement, CorpusEvidence, DecoderRequirement, FormatCapabilities,
-    FormatDescriptor, FormatFamilyId, Probe, GZIP_FORMAT, MIDI_FORMAT, PNG_FORMAT, XML_FORMAT,
+    FormatDescriptor, FormatFamilyId, Probe,
 };
 
 mod writer;

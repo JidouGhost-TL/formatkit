@@ -44,6 +44,14 @@ fn content_is_required_even_when_extension_matches() {
 }
 
 #[test]
+fn empty_catalog_does_not_recognize_unregistered_magic() {
+    let catalog = FormatCatalog::new([]).unwrap();
+    assert!(catalog
+        .resolve(DetectionContext::from_bytes(b"SYNTHETIC-MAGIC"))
+        .is_unknown());
+}
+
+#[test]
 fn contextual_structural_probe_requires_full_parent_role_and_content() {
     const ROLE_PROBES: &[Probe] = &[Probe::ContextualStructural {
         name: "contextual-test",
@@ -146,10 +154,15 @@ fn extension_breaks_only_an_equal_precedence_tie() {
 fn higher_precedence_content_match_beats_an_extension_hint() {
     let catalog = FormatCatalog::new([
         descriptor(crate::synthetic::ID_B38504826C7B, 20, STRUCTURAL, &[]),
-        descriptor(FormatId::PNG, 10, STRUCTURAL, &["png"]),
+        descriptor(
+            crate::synthetic::ID_44895F217E35,
+            10,
+            STRUCTURAL,
+            &["asset"],
+        ),
     ])
     .unwrap();
-    let resolved = catalog.resolve(DetectionContext::from_bytes(&[0x10]).with_extension("png"));
+    let resolved = catalog.resolve(DetectionContext::from_bytes(&[0x10]).with_extension("asset"));
     assert_eq!(
         resolved.selected.unwrap().descriptor.id,
         crate::synthetic::ID_B38504826C7B
@@ -479,29 +492,41 @@ fn composition_order_does_not_change_descriptor_or_contender_order() {
 fn shared_extensions_are_reported_without_rejecting_the_catalog() {
     let catalog = FormatCatalog::new([
         descriptor(crate::synthetic::ID_B38504826C7B, 20, MAGIC, &["bin"]),
-        descriptor(FormatId::PNG, 10, STRUCTURAL, &["bin"]),
+        descriptor(crate::synthetic::ID_44895F217E35, 10, STRUCTURAL, &["bin"]),
     ])
     .unwrap();
     assert_eq!(
         catalog.diagnostics(),
         [CatalogDiagnostic::SharedExtension {
             extension: "bin",
-            formats: vec![FormatId::PNG, crate::synthetic::ID_B38504826C7B],
+            formats: vec![
+                crate::synthetic::ID_44895F217E35,
+                crate::synthetic::ID_B38504826C7B
+            ],
         }]
     );
 }
 
 #[test]
 fn capability_matrix_is_sorted_and_descriptor_driven() {
+    const IMAGE_MAGIC: &[Probe] = &[Probe::Magic {
+        offset: 0,
+        bytes: b"SYNTHETIC-IMAGE",
+    }];
+    let mut image = descriptor(crate::synthetic::ID_44895F217E35, 10, IMAGE_MAGIC, &[]);
+    image.category = Category::Image;
+    image.capabilities.confidence = Confidence::ExactMagic;
     let catalog = FormatCatalog::new([
         descriptor(crate::synthetic::ID_B38504826C7B, 10, MAGIC, &[]),
-        PNG_FORMAT,
+        image,
     ])
     .unwrap();
     let matrix = catalog.capability_markdown();
     assert!(
-        matrix.find("| png |").unwrap() < matrix.find("| synthetic-id-b38504826c7b |").unwrap()
+        matrix.find("| synthetic-id-44895f217e35 |").unwrap()
+            < matrix.find("| synthetic-id-b38504826c7b |").unwrap()
     );
-    assert!(matrix
-        .contains("| png | image | — | no | no | no | no | no | no | no | exact-magic | none |"));
+    assert!(matrix.contains(
+        "| synthetic-id-44895f217e35 | image | — | no | no | no | no | no | no | no | exact-magic | none |"
+    ));
 }

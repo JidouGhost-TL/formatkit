@@ -1,6 +1,19 @@
 use super::super::*;
 use super::fixtures::*;
 use crate::FormatId;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static LOCAL_PROBE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+fn local_probe(bytes: &[u8]) -> bool {
+    LOCAL_PROBE_CALLS.fetch_add(1, Ordering::SeqCst);
+    bytes.starts_with(b"TEST")
+}
+
+static LOCAL_PROBES: &[Probe] = &[Probe::Structural {
+    name: "synthetic-local-structure",
+    check: local_probe,
+}];
 
 #[test]
 fn support_catalog_rejects_invalid_detectable_and_embedded_ids() {
@@ -75,6 +88,127 @@ fn support_catalog_rejects_duplicate_detectable_inputs() {
     assert_eq!(
         SupportCatalog::new([detectable, detectable], []).unwrap_err(),
         SupportCatalogError::DuplicateId(crate::synthetic::ID_B38504826C7B)
+    );
+}
+
+#[test]
+fn operation_local_descriptors_stay_out_of_global_detection() {
+    let id = crate::synthetic::ID_B38504826C7B;
+    let mut local = descriptor(id, 10, LOCAL_PROBES, &["local"]);
+    local.decoder = Some("synthetic-local-decoder");
+    local.capabilities.parse = true;
+
+    LOCAL_PROBE_CALLS.store(0, Ordering::SeqCst);
+    let catalog =
+        SupportCatalog::with_operation_local_descriptors([], [local], [], [], [], []).unwrap();
+    assert!(catalog.detectable().is_empty());
+    assert_eq!(catalog.operation_local_descriptors().len(), 1);
+    assert_eq!(catalog.operation_local_descriptors()[0].id, id);
+    assert_eq!(
+        catalog.operation_local_descriptor(id).map(|row| row.id),
+        Some(id)
+    );
+    assert!(std::ptr::eq(
+        catalog.operation_local_descriptor(id).unwrap().probes,
+        LOCAL_PROBES,
+    ));
+    assert_eq!(
+        catalog.operation_local_descriptor(id).unwrap().decoder,
+        local.decoder
+    );
+    assert!(
+        catalog.get(id).is_none(),
+        "legacy global/context lookup changed"
+    );
+    assert!(catalog.embedded().is_empty());
+    let global = FormatCatalog::new(catalog.detectable().iter().copied()).unwrap();
+    assert!(global.descriptors().is_empty());
+    assert!(global
+        .identify(DetectionContext::from_bytes(b"TEST"))
+        .is_none());
+    let markdown = catalog.capability_markdown();
+    assert!(markdown.contains("| synthetic-id-b38504826c7b | explicit-only |"));
+    assert!(!markdown.contains("| synthetic-id-b38504826c7b | global |"));
+    assert!(markdown.contains("| synthetic-local-decoder |"));
+    assert_eq!(
+        LOCAL_PROBE_CALLS.load(Ordering::SeqCst),
+        0,
+        "support composition, lookup, global identification, or rendering invoked the local probe"
+    );
+}
+
+#[test]
+fn operation_local_descriptors_reject_identity_collisions() {
+    let id = crate::synthetic::ID_B38504826C7B;
+    let local = descriptor(id, 10, &[], &[]);
+
+    assert_eq!(
+        SupportCatalog::with_operation_local_descriptors([], [local, local], [], [], [], [],)
+            .unwrap_err(),
+        SupportCatalogError::DuplicateId(id),
+    );
+    assert_eq!(
+        SupportCatalog::with_operation_local_descriptors(
+            [descriptor(id, 10, MAGIC, &[])],
+            [local],
+            [],
+            [],
+            [],
+            [],
+        )
+        .unwrap_err(),
+        SupportCatalogError::DuplicateId(id),
+        "a local descriptor must not shadow a global descriptor",
+    );
+    assert_eq!(
+        SupportCatalog::with_operation_local_descriptors([], [local], [embedded(id)], [], [], [],)
+            .unwrap_err(),
+        SupportCatalogError::DuplicateId(id),
+        "a local descriptor must not impersonate an embedded overlay",
+    );
+}
+
+#[test]
+fn operation_local_descriptors_enforce_capability_implications() {
+    let id = crate::synthetic::ID_B38504826C7B;
+    let mut impossible = descriptor(id, 10, &[], &[]);
+    impossible.capabilities.decode = true;
+    assert_eq!(
+        SupportCatalog::with_operation_local_descriptors([], [impossible], [], [], [], [])
+            .unwrap_err(),
+        SupportCatalogError::InvalidCapabilities(id),
+    );
+
+    impossible.capabilities.parse = true;
+    impossible.capabilities.round_trip = true;
+    impossible.capabilities.write = true;
+    assert_eq!(
+        SupportCatalog::with_operation_local_descriptors([], [impossible], [], [], [], [])
+            .unwrap_err(),
+        SupportCatalogError::InvalidCapabilities(id),
+    );
+}
+
+#[test]
+fn operation_local_and_unrelated_embedded_metadata_coexist_without_fabrication() {
+    let local_id = crate::synthetic::ID_B38504826C7B;
+    let embedded_id = crate::synthetic::ID_44895F217E35;
+    let local = descriptor(local_id, 10, &[], &[]);
+    let mut context = embedded(embedded_id);
+    context.local_discriminator = "second-image-body";
+    let catalog =
+        SupportCatalog::with_operation_local_descriptors([], [local], [context], [], [], [])
+            .unwrap();
+
+    assert!(catalog.get(local_id).is_none());
+    let embedded_view = catalog.get(embedded_id).unwrap();
+    assert!(embedded_view.detectable.is_none());
+    assert_eq!(embedded_view.embedded, Some(&context));
+    assert_eq!(
+        catalog
+            .operation_local_descriptor(local_id)
+            .map(|row| row.id),
+        Some(local_id)
     );
 }
 

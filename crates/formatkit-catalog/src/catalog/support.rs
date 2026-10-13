@@ -45,12 +45,30 @@ pub struct EmbeddedFormatSupport {
 #[derive(Clone)]
 pub struct SupportCatalog {
     detectable: Vec<FormatDescriptor>,
+    operation_local: Vec<FormatDescriptor>,
     embedded: Vec<EmbeddedFormatSupport>,
     writer_contracts: Vec<WriterContract>,
     namespace_semantics: Vec<NamespaceSemantics>,
     namespace_mount_contracts: Vec<NamespaceMountContract>,
     namespace_providers: Vec<NamespaceProvider>,
     complete_namespace_authority: bool,
+}
+
+struct DescriptorInventories {
+    detectable: Vec<FormatDescriptor>,
+    operation_local: Vec<FormatDescriptor>,
+}
+
+impl DescriptorInventories {
+    fn new(
+        detectable: impl IntoIterator<Item = FormatDescriptor>,
+        operation_local: impl IntoIterator<Item = FormatDescriptor>,
+    ) -> Self {
+        Self {
+            detectable: detectable.into_iter().collect(),
+            operation_local: operation_local.into_iter().collect(),
+        }
+    }
 }
 
 impl fmt::Debug for SupportCatalog {
@@ -61,6 +79,14 @@ impl fmt::Debug for SupportCatalog {
                 "detectable",
                 &self
                     .detectable
+                    .iter()
+                    .map(|descriptor| descriptor.id)
+                    .collect::<Vec<_>>(),
+            )
+            .field(
+                "operation_local",
+                &self
+                    .operation_local
                     .iter()
                     .map(|descriptor| descriptor.id)
                     .collect::<Vec<_>>(),
@@ -120,6 +146,14 @@ impl FormatSupportView<'_> {
             .map(|support| support.decoder)
             .or_else(|| self.detectable.and_then(|descriptor| descriptor.decoder))
     }
+}
+
+pub(super) struct NamespaceSupportMetadata<'a> {
+    pub(super) capabilities: FormatCapabilities,
+    pub(super) requirement: Option<DecoderRequirement>,
+    pub(super) context: Option<ContextRequirement>,
+    pub(super) decoder: Option<&'static str>,
+    pub(super) semantics: Option<&'a NamespaceSemantics>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +217,28 @@ impl fmt::Display for SupportCatalogError {
 impl std::error::Error for SupportCatalogError {}
 
 impl SupportCatalog {
+    pub(super) fn namespace_support_metadata(
+        &self,
+        id: FormatId,
+    ) -> Option<NamespaceSupportMetadata<'_>> {
+        let view = self.get(id);
+        let operation_local = self.operation_local_descriptor(id);
+        let capabilities = view
+            .map(|view| view.capabilities())
+            .or_else(|| operation_local.map(|descriptor| descriptor.capabilities))?;
+        Some(NamespaceSupportMetadata {
+            capabilities,
+            requirement: view
+                .and_then(|view| view.detectable.map(|descriptor| descriptor.requirement))
+                .or_else(|| operation_local.map(|descriptor| descriptor.requirement)),
+            context: view.and_then(|view| view.embedded.map(|support| support.context)),
+            decoder: view
+                .and_then(|view| view.decoder())
+                .or_else(|| operation_local.and_then(|descriptor| descriptor.decoder)),
+            semantics: self.namespace_semantics_for(id),
+        })
+    }
+
     /// Validate every named namespace operation against normalized support
     /// metadata without projecting it into a format-keyed legacy default.
     ///
@@ -342,7 +398,7 @@ impl SupportCatalog {
         namespace_providers: impl IntoIterator<Item = NamespaceProvider>,
     ) -> Result<Self, SupportCatalogError> {
         Self::compose(
-            detectable,
+            DescriptorInventories::new(detectable, []),
             embedded,
             writer_contracts,
             [],
@@ -364,7 +420,52 @@ impl SupportCatalog {
         namespace_providers: impl IntoIterator<Item = NamespaceProvider>,
     ) -> Result<Self, SupportCatalogError> {
         Self::compose(
-            detectable,
+            DescriptorInventories::new(detectable, []),
+            embedded,
+            writer_contracts,
+            namespace_semantics,
+            namespace_mount_contracts,
+            namespace_providers,
+            true,
+        )
+    }
+
+    /// Compose explicit-only descriptors separately from globally detectable
+    /// descriptors. Operation-local descriptors supply canonical support
+    /// metadata, including their intrinsic probes, but are never returned by
+    /// [`Self::detectable`] or used as global resolver candidates.
+    pub fn with_operation_local_descriptors(
+        detectable: impl IntoIterator<Item = FormatDescriptor>,
+        operation_local: impl IntoIterator<Item = FormatDescriptor>,
+        embedded: impl IntoIterator<Item = EmbeddedFormatSupport>,
+        writer_contracts: impl IntoIterator<Item = WriterContract>,
+        namespace_mount_contracts: impl IntoIterator<Item = NamespaceMountContract>,
+        namespace_providers: impl IntoIterator<Item = NamespaceProvider>,
+    ) -> Result<Self, SupportCatalogError> {
+        Self::compose(
+            DescriptorInventories::new(detectable, operation_local),
+            embedded,
+            writer_contracts,
+            [],
+            namespace_mount_contracts,
+            namespace_providers,
+            false,
+        )
+    }
+
+    /// Compose operation-local descriptors with complete namespace semantics
+    /// validation. Local descriptors remain separate from global detection.
+    pub fn with_operation_local_namespace_support(
+        detectable: impl IntoIterator<Item = FormatDescriptor>,
+        operation_local: impl IntoIterator<Item = FormatDescriptor>,
+        embedded: impl IntoIterator<Item = EmbeddedFormatSupport>,
+        writer_contracts: impl IntoIterator<Item = WriterContract>,
+        namespace_semantics: impl IntoIterator<Item = NamespaceSemantics>,
+        namespace_mount_contracts: impl IntoIterator<Item = NamespaceMountContract>,
+        namespace_providers: impl IntoIterator<Item = NamespaceProvider>,
+    ) -> Result<Self, SupportCatalogError> {
+        Self::compose(
+            DescriptorInventories::new(detectable, operation_local),
             embedded,
             writer_contracts,
             namespace_semantics,
@@ -375,7 +476,7 @@ impl SupportCatalog {
     }
 
     fn compose(
-        detectable: impl IntoIterator<Item = FormatDescriptor>,
+        descriptors: DescriptorInventories,
         embedded: impl IntoIterator<Item = EmbeddedFormatSupport>,
         writer_contracts: impl IntoIterator<Item = WriterContract>,
         namespace_semantics: impl IntoIterator<Item = NamespaceSemantics>,
@@ -402,11 +503,12 @@ impl SupportCatalog {
         }
 
         let mut identities = HashSet::new();
-        let mut detectable_requirements = HashMap::new();
-        let mut detectable_decoders = HashMap::new();
-        let mut detectable_categories = HashMap::new();
+        let mut detectable_ids = HashSet::new();
+        let mut descriptor_requirements = HashMap::new();
+        let mut descriptor_decoders = HashMap::new();
+        let mut descriptor_categories = HashMap::new();
         let mut capabilities = HashMap::new();
-        let mut detectable = detectable.into_iter().collect::<Vec<_>>();
+        let mut detectable = descriptors.detectable;
         for descriptor in &detectable {
             if !descriptor.id.is_valid() {
                 return Err(SupportCatalogError::InvalidFormatId(descriptor.id));
@@ -414,12 +516,33 @@ impl SupportCatalog {
             if !identities.insert(descriptor.id) {
                 return Err(SupportCatalogError::DuplicateId(descriptor.id));
             }
-            detectable_requirements.insert(descriptor.id, descriptor.requirement);
-            detectable_decoders.insert(descriptor.id, descriptor.decoder);
-            detectable_categories.insert(descriptor.id, descriptor.category);
+            detectable_ids.insert(descriptor.id);
+            descriptor_requirements.insert(descriptor.id, descriptor.requirement);
+            descriptor_decoders.insert(descriptor.id, descriptor.decoder);
+            descriptor_categories.insert(descriptor.id, descriptor.category);
             capabilities.insert(descriptor.id, descriptor.capabilities);
         }
         detectable.sort_by_key(|descriptor| descriptor.id.as_str());
+        let mut operation_local = descriptors.operation_local;
+        for descriptor in &operation_local {
+            if !descriptor.id.is_valid() {
+                return Err(SupportCatalogError::InvalidFormatId(descriptor.id));
+            }
+            let caps = descriptor.capabilities;
+            if ((!caps.parse) && (caps.decode || caps.edit || caps.write || caps.round_trip))
+                || (caps.round_trip && (!caps.write || !caps.edit))
+            {
+                return Err(SupportCatalogError::InvalidCapabilities(descriptor.id));
+            }
+            if !identities.insert(descriptor.id) {
+                return Err(SupportCatalogError::DuplicateId(descriptor.id));
+            }
+            descriptor_requirements.insert(descriptor.id, descriptor.requirement);
+            descriptor_decoders.insert(descriptor.id, descriptor.decoder);
+            descriptor_categories.insert(descriptor.id, descriptor.category);
+            capabilities.insert(descriptor.id, descriptor.capabilities);
+        }
+        operation_local.sort_by_key(|descriptor| descriptor.id.as_str());
         let mut discriminators: HashMap<
             (FormatFamilyId, &'static str),
             (FormatId, Option<&'static str>),
@@ -436,7 +559,9 @@ impl SupportCatalog {
                 return Err(SupportCatalogError::InvalidFormatId(carrier));
             }
             if !identities.insert(support.id) {
-                if support.detectable_carrier != Some(support.id) {
+                if !detectable_ids.contains(&support.id)
+                    || support.detectable_carrier != Some(support.id)
+                {
                     return Err(SupportCatalogError::DuplicateId(support.id));
                 }
                 let expected = match support.context {
@@ -452,10 +577,10 @@ impl SupportCatalog {
                         DecoderRequirement::AuthenticatedCarrierMember
                     }
                 };
-                if detectable_requirements.get(&support.id) != Some(&expected) {
+                if descriptor_requirements.get(&support.id) != Some(&expected) {
                     return Err(SupportCatalogError::InvalidContext(support.id));
                 }
-                if detectable_decoders.get(&support.id).copied().flatten() != Some(support.decoder)
+                if descriptor_decoders.get(&support.id).copied().flatten() != Some(support.decoder)
                     || capabilities.get(&support.id) != Some(&support.capabilities)
                 {
                     return Err(SupportCatalogError::InvalidCapabilities(support.id));
@@ -513,7 +638,7 @@ impl SupportCatalog {
         // to validate namespace providers. Their semantic context remains
         // separate from physical mount topology and global detection.
         for support in &validated {
-            detectable_decoders
+            descriptor_decoders
                 .entry(support.id)
                 .or_insert(Some(support.decoder));
         }
@@ -549,7 +674,7 @@ impl SupportCatalog {
             semantics.push(declaration);
         }
         if require_archive_semantics {
-            if let Some((&id, _)) = detectable_categories.iter().find(|(id, category)| {
+            if let Some((&id, _)) = descriptor_categories.iter().find(|(id, category)| {
                 **category == Category::Archive && !semantics_ids.contains(id)
             }) {
                 return Err(SupportCatalogError::MissingNamespaceSemantics(id));
@@ -560,8 +685,8 @@ impl SupportCatalog {
             namespace_mount_contracts,
             namespace_providers,
             &capabilities,
-            &detectable_requirements,
-            &detectable_decoders,
+            &descriptor_requirements,
+            &descriptor_decoders,
             &embedded_contexts,
         )
         .map_err(|error| match error {
@@ -593,6 +718,7 @@ impl SupportCatalog {
         }
         Ok(Self {
             detectable,
+            operation_local,
             embedded: validated,
             writer_contracts: contracts,
             namespace_semantics: semantics,
@@ -611,6 +737,22 @@ impl SupportCatalog {
 
     pub fn detectable(&self) -> &[FormatDescriptor] {
         &self.detectable
+    }
+
+    /// Descriptors retained for explicit/local operations only. Their probes
+    /// describe intrinsic content identity but are not global identification
+    /// candidates unless separately admitted through [`Self::detectable`].
+    pub fn operation_local_descriptors(&self) -> &[FormatDescriptor] {
+        &self.operation_local
+    }
+
+    /// Find canonical metadata for a locally selected descriptor without
+    /// promoting it into the globally detectable inventory.
+    pub fn operation_local_descriptor(&self, id: FormatId) -> Option<&FormatDescriptor> {
+        self.operation_local
+            .binary_search_by_key(&id.as_str(), |descriptor| descriptor.id.as_str())
+            .ok()
+            .map(|index| &self.operation_local[index])
     }
 
     pub fn embedded(&self) -> &[EmbeddedFormatSupport] {
@@ -875,31 +1017,62 @@ impl SupportCatalog {
             .detectable
             .iter()
             .map(|descriptor| descriptor.id)
+            .chain(self.operation_local.iter().map(|descriptor| descriptor.id))
             .chain(self.embedded.iter().map(|support| support.id))
             .collect::<Vec<_>>();
         ids.sort_by_key(|id| id.as_str());
         ids.dedup();
         for id in ids {
-            let support = self
-                .get(id)
+            let support = self.get(id);
+            let operation_local = self.operation_local_descriptor(id);
+            let capabilities = support
+                .map(|support| support.capabilities())
+                .or_else(|| operation_local.map(|descriptor| descriptor.capabilities))
                 .expect("catalog identity came from one support input");
-            let capabilities = support.capabilities();
-            let detection = match (support.detectable, support.embedded) {
-                (Some(_), Some(_)) => "global+context",
-                (Some(_), None) => "global",
-                (None, Some(_)) => "context-only",
-                (None, None) => unreachable!("support view has at least one input"),
+            let detection = if operation_local.is_some() {
+                "explicit-only"
+            } else {
+                match (
+                    support.and_then(|view| view.detectable),
+                    support.and_then(|view| view.embedded),
+                ) {
+                    (Some(_), Some(_)) => "global+context",
+                    (Some(_), None) => "global",
+                    (None, Some(_)) => "context-only",
+                    (None, None) => unreachable!("support view has at least one input"),
+                }
             };
-            let family = support.family().map_or("—", FormatFamilyId::as_str);
-            let context = support.context().map_or_else(
-                || {
+            let family = support
+                .and_then(|support| support.family())
+                .map_or("—", FormatFamilyId::as_str);
+            let context = support
+                .and_then(|support| support.context().map(ContextRequirement::label))
+                .or_else(|| {
                     support
-                        .detectable
-                        .map_or("—", |descriptor| descriptor.requirement.label())
-                },
-                ContextRequirement::label,
-            );
-            let namespace_mount = support.namespace_mount.map_or_else(
+                        .and_then(|support| {
+                            support.detectable.map(|descriptor| descriptor.requirement)
+                        })
+                        .map(DecoderRequirement::label)
+                })
+                .or_else(|| operation_local.map(|descriptor| descriptor.requirement.label()))
+                .unwrap_or("—");
+            let decoder = support
+                .and_then(|support| support.decoder())
+                .or_else(|| operation_local.and_then(|descriptor| descriptor.decoder));
+            let writer = support.and_then(|support| support.writer).or_else(|| {
+                self.writer_contracts
+                    .iter()
+                    .find(|contract| contract.id == id)
+            });
+            let namespace_contract =
+                support
+                    .and_then(|support| support.namespace_mount)
+                    .or_else(|| {
+                        self.namespace_mount_contracts
+                            .iter()
+                            .find(|contract| contract.id == id)
+                    });
+            let namespace_mount = namespace_contract.map_or_else(
                 || "—".to_owned(),
                 |contract| match contract.input {
                     NamespaceMountInput::SingleSource { role } => format!(
@@ -944,7 +1117,7 @@ impl SupportCatalog {
                 edit_lengths,
                 edit_relocation,
                 author,
-            ) = support.writer.map_or_else(
+            ) = writer.map_or_else(
                 || {
                     let writer = capabilities.edit || capabilities.write;
                     let edit = capabilities.edit;
@@ -1022,11 +1195,11 @@ impl SupportCatalog {
                 writeln!(
                 out,
                 "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-                support.id,
+                id,
                 detection,
                 family,
                 context,
-                display_decoder(support.id, support.decoder()).unwrap_or("—"),
+                display_decoder(id, decoder).unwrap_or("—"),
                 namespace_mount,
                 reproduce,
                 edit_modes,

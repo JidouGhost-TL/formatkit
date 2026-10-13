@@ -1316,27 +1316,24 @@ pub(super) fn validate_namespace_operations_with_completeness<'a>(
 ) -> Result<(), super::SupportCatalogError> {
     let mut groups = NamespaceCollisionGroups::new();
     for (&contract, &provider) in operations {
-        let view = support.get(contract.id).ok_or(
+        let view = support.namespace_support_metadata(contract.id).ok_or(
             super::SupportCatalogError::InvalidNamespaceMountContract(contract.id),
         )?;
-        if !valid_namespace_contract(
-            contract,
-            view.capabilities(),
-            view.detectable.map(|descriptor| descriptor.requirement),
-            view.embedded.map(|support| support.context),
-        ) {
+        if !valid_namespace_contract(contract, view.capabilities, view.requirement, view.context) {
             return Err(super::SupportCatalogError::InvalidNamespaceMountContract(
                 contract.id,
             ));
         }
-        if !valid_namespace_provider(provider, contract, view.decoder()) {
+        if !valid_namespace_provider(provider, contract, view.decoder) {
             return Err(super::SupportCatalogError::InvalidNamespaceProvider(
                 provider.id,
             ));
         }
-        let semantics = view.namespace_semantics.ok_or(
-            super::SupportCatalogError::MissingNamespaceSemantics(contract.id),
-        )?;
+        let semantics =
+            view.semantics
+                .ok_or(super::SupportCatalogError::MissingNamespaceSemantics(
+                    contract.id,
+                ))?;
         if semantics.kind == NamespaceKind::NonNamespace
             || semantics.execution == NamespaceExecution::ExternalTransformRequired
         {
@@ -1348,10 +1345,10 @@ pub(super) fn validate_namespace_operations_with_completeness<'a>(
             .map_err(|_| super::SupportCatalogError::InvalidNamespaceMountContract(contract.id))?;
     }
     for (&contract, &provider) in role_bound {
-        let view = support.get(contract.id).ok_or(
+        let view = support.namespace_support_metadata(contract.id).ok_or(
             super::SupportCatalogError::InvalidNamespaceMountContract(contract.id),
         )?;
-        let caps = view.capabilities();
+        let caps = view.capabilities;
         if !caps.parse
             || caps.corpus != contract.corpus_oracle.is_some()
             || contract.input.validate().is_err()
@@ -1366,15 +1363,17 @@ pub(super) fn validate_namespace_operations_with_completeness<'a>(
             || provider.input != contract.input
             || provider.strategy != contract.strategy
             || !provider.mount_matches_input()
-            || view.decoder() != Some(provider.owner)
+            || view.decoder != Some(provider.owner)
         {
             return Err(super::SupportCatalogError::InvalidNamespaceProvider(
                 provider.id,
             ));
         }
-        let semantics = view.namespace_semantics.ok_or(
-            super::SupportCatalogError::MissingNamespaceSemantics(contract.id),
-        )?;
+        let semantics =
+            view.semantics
+                .ok_or(super::SupportCatalogError::MissingNamespaceSemantics(
+                    contract.id,
+                ))?;
         if semantics.kind == NamespaceKind::NonNamespace
             || semantics.execution == NamespaceExecution::ExternalTransformRequired
         {

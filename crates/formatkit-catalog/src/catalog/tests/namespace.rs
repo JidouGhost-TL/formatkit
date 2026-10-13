@@ -676,3 +676,80 @@ fn namespace_mount_strategy_is_an_enforceable_policy_ceiling() {
     assert!(error.to_string().contains("whole-carrier"));
     assert!(error.to_string().contains("selective-transform"));
 }
+
+#[test]
+fn operation_local_archive_metadata_validates_namespace_without_global_admission() {
+    const ORACLE: CargoTestOracle =
+        CargoTestOracle::lib("formatkit-catalog", "tests::namespace_oracle");
+    let id = crate::synthetic::ID_B38504826C7B;
+    let mut local = descriptor(id, 10, MAGIC, &[]);
+    local.category = crate::Category::Archive;
+    local.decoder = Some("test");
+    local.capabilities.parse = true;
+    let contract = NamespaceMountContract {
+        id,
+        input: NamespaceMountInput::SingleSource { role: "archive" },
+        strategy: NamespaceMountStrategy::MetadataOnly,
+        parser_parity_oracle: ORACLE,
+        independent_layout_oracle: ORACLE,
+        budget_oracle: ORACLE,
+        stability_oracle: ORACLE,
+        dispatch_oracle: ORACLE,
+        malformed_oracle: ORACLE,
+        collision: None,
+        cli_oracle: ORACLE,
+        corpus_oracle: None,
+    };
+    let provider = namespace_provider(id, contract.input);
+    let semantics = NamespaceSemantics::carrier(id, NamespaceAddressing::DirectRanges);
+
+    let catalog = SupportCatalog::with_operation_local_namespace_support(
+        [],
+        [local],
+        [],
+        [],
+        [semantics],
+        [contract],
+        [provider],
+    )
+    .unwrap();
+    assert!(catalog.detectable().is_empty());
+    assert!(catalog.get(id).is_none());
+    assert_eq!(
+        catalog.operation_local_descriptor(id).map(|row| row.id),
+        Some(id)
+    );
+    assert!(std::ptr::eq(
+        catalog.operation_local_descriptor(id).unwrap().probes,
+        MAGIC,
+    ));
+    assert_eq!(catalog.namespace_semantics_for(id), Some(&semantics));
+    let composed_provider = catalog.namespace_provider(id).unwrap();
+    assert_eq!(composed_provider.id, provider.id);
+    assert_eq!(composed_provider.owner, provider.owner);
+    assert_eq!(composed_provider.input, provider.input);
+    assert_eq!(composed_provider.strategy, provider.strategy);
+    assert_eq!(catalog.namespace_mount_contracts(), [contract]);
+    assert!(FormatCatalog::new(catalog.detectable().iter().copied())
+        .unwrap()
+        .descriptors()
+        .is_empty());
+    assert!(catalog.capability_markdown().contains(
+        "| synthetic-id-b38504826c7b | explicit-only | — | none | test | verified@single-source(archive);metadata-only |"
+    ));
+
+    assert_eq!(
+        SupportCatalog::with_operation_local_namespace_support(
+            [],
+            [local],
+            [],
+            [],
+            [],
+            [contract],
+            [provider],
+        )
+        .unwrap_err(),
+        SupportCatalogError::MissingNamespaceSemantics(id),
+        "complete namespace authority must cover local archive descriptors",
+    );
+}

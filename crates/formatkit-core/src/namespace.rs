@@ -247,6 +247,32 @@ pub trait IndexedNamespace: Send + Sync {
         Ok(None)
     }
 
+    /// Whether this namespace provides the work-budget semantic-view route.
+    ///
+    /// Callers must inspect this capability before invoking either callback:
+    /// `false` preserves the legacy [`Self::semantic_member_view`] route
+    /// exactly, while `true` selects [`Self::semantic_member_view_with_work`]
+    /// exclusively. A selected work callback's `Ok(None)` and errors are
+    /// terminal results; callers must not retry through the legacy callback.
+    fn supports_work_semantic_member_view(&self) -> bool {
+        false
+    }
+
+    /// Lazily expose an optional semantic view using the caller's one work
+    /// ledger. Implementations which select this route must admit any source
+    /// reads, allocation, and child work through `budget` before performing
+    /// them. The default reports an inconsistent capability instead of
+    /// silently returning a legacy no-op after work dispatch was selected.
+    fn semantic_member_view_with_work(
+        &self,
+        _index: usize,
+        _budget: &mut crate::WorkBudget,
+    ) -> Result<Option<MemberSemanticView>> {
+        Err(Error::Unsupported(
+            "work-budget semantic member view is not implemented".into(),
+        ))
+    }
+
     /// Optionally mount a child through authenticated parent context before a
     /// generic walker reads a large classification prefix. Implementations
     /// must still validate the complete child grammar and propagate source or
@@ -257,6 +283,32 @@ pub trait IndexedNamespace: Send + Sync {
         _budget: &mut crate::ReadBudget,
     ) -> Result<Option<ContextualMemberNamespace>> {
         Ok(None)
+    }
+
+    /// Whether this namespace provides the work-budget contextual-child route.
+    ///
+    /// Callers inspect this before invoking either callback. `false` preserves
+    /// the legacy [`Self::contextual_member_namespace`] behavior exactly;
+    /// `true` selects [`Self::contextual_member_namespace_with_work`]
+    /// exclusively. A work callback's miss or error must not trigger a legacy
+    /// retry.
+    fn supports_work_contextual_member_namespace(&self) -> bool {
+        false
+    }
+
+    /// Optionally mount a child namespace using the caller's one work ledger.
+    /// The returned namespace is owned and cannot borrow `budget`; retained
+    /// child allocations should therefore travel with the child through an
+    /// owned [`crate::RetainedResidentPermit`]. The default reports an
+    /// inconsistent capability instead of silently falling back.
+    fn contextual_member_namespace_with_work(
+        &self,
+        _index: usize,
+        _budget: &mut crate::WorkBudget,
+    ) -> Result<Option<ContextualMemberNamespace>> {
+        Err(Error::Unsupported(
+            "work-budget contextual member namespace is not implemented".into(),
+        ))
     }
 
     fn member_layout(&self, index: usize) -> Result<MemberLayout> {
@@ -681,6 +733,30 @@ impl IndexedNamespace for StoredRangeNamespace {
         &self.entries
     }
 
+    fn supports_work_semantic_member_view(&self) -> bool {
+        true
+    }
+
+    fn semantic_member_view_with_work(
+        &self,
+        _index: usize,
+        _budget: &mut crate::WorkBudget,
+    ) -> Result<Option<MemberSemanticView>> {
+        Ok(None)
+    }
+
+    fn supports_work_contextual_member_namespace(&self) -> bool {
+        true
+    }
+
+    fn contextual_member_namespace_with_work(
+        &self,
+        _index: usize,
+        _budget: &mut crate::WorkBudget,
+    ) -> Result<Option<ContextualMemberNamespace>> {
+        Ok(None)
+    }
+
     fn supports_work_budget_member_open(&self) -> bool {
         true
     }
@@ -843,8 +919,8 @@ impl ExactSizeIterator for MountedMembers<'_> {}
 mod tests {
     use super::*;
     use crate::{
-        MemoryRangeSource, ReadBudget, SharedBytes, SliceRangeSource, WorkBudget, WorkLimits,
-        WorkResource,
+        CancellationToken, MemoryRangeSource, ReadBudget, SharedBytes, SliceRangeSource,
+        WorkBudget, WorkLimits, WorkResource,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -874,6 +950,525 @@ mod tests {
         fn as_any(&self) -> Option<&dyn Any> {
             Some(self)
         }
+    }
+
+    struct LegacyOnlyNamespace {
+        source: Arc<dyn RangeSource>,
+        semantic_calls: Arc<std::sync::atomic::AtomicUsize>,
+        contextual_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl IndexedNamespace for LegacyOnlyNamespace {
+        fn entries(&self) -> &[NamespaceEntry] {
+            &[]
+        }
+
+        fn semantic_member_view(
+            &self,
+            _index: usize,
+            _budget: &mut ReadBudget,
+        ) -> Result<Option<MemberSemanticView>> {
+            self.semantic_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(None)
+        }
+
+        fn contextual_member_namespace(
+            &self,
+            _index: usize,
+            _budget: &mut ReadBudget,
+        ) -> Result<Option<ContextualMemberNamespace>> {
+            self.contextual_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(None)
+        }
+
+        fn stored_source(&self, _index: usize) -> Result<Arc<dyn RangeSource>> {
+            Ok(Arc::clone(&self.source))
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum WorkHookOutcome {
+        Some,
+        None,
+        Failure,
+        CheckCancellation,
+    }
+
+    struct PermitChildNamespace {
+        resident: crate::RetainedResidentPermit,
+    }
+
+    impl IndexedNamespace for PermitChildNamespace {
+        fn entries(&self) -> &[NamespaceEntry] {
+            let _ = self.resident.amount();
+            &[]
+        }
+
+        fn stored_source(&self, _index: usize) -> Result<Arc<dyn RangeSource>> {
+            Err(Error::InvalidField {
+                what: "permit child member index",
+                value: 0,
+            })
+        }
+    }
+
+    struct WorkHookNamespace {
+        source: Arc<dyn RangeSource>,
+        outcome: WorkHookOutcome,
+        legacy_semantic_calls: Arc<std::sync::atomic::AtomicUsize>,
+        legacy_contextual_calls: Arc<std::sync::atomic::AtomicUsize>,
+        work_semantic_calls: Arc<std::sync::atomic::AtomicUsize>,
+        work_contextual_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl IndexedNamespace for WorkHookNamespace {
+        fn entries(&self) -> &[NamespaceEntry] {
+            &[]
+        }
+
+        fn semantic_member_view(
+            &self,
+            _index: usize,
+            _budget: &mut ReadBudget,
+        ) -> Result<Option<MemberSemanticView>> {
+            self.legacy_semantic_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(None)
+        }
+
+        fn supports_work_semantic_member_view(&self) -> bool {
+            true
+        }
+
+        fn semantic_member_view_with_work(
+            &self,
+            _index: usize,
+            budget: &mut WorkBudget,
+        ) -> Result<Option<MemberSemanticView>> {
+            self.work_semantic_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            match self.outcome {
+                WorkHookOutcome::Some => Ok(Some(MemberSemanticView {
+                    format: "synthetic-neutral-view",
+                    content: MemberContentSource {
+                        source: Arc::clone(&self.source),
+                        transform: MemberTransform::Stored,
+                        access: MemberAccessMode::SharedRange,
+                        materialized_bytes: 0,
+                    },
+                })),
+                WorkHookOutcome::None => Ok(None),
+                WorkHookOutcome::Failure => {
+                    Err(Error::Malformed("synthetic work-view failure".into()))
+                }
+                WorkHookOutcome::CheckCancellation => {
+                    budget.check_cancelled()?;
+                    Ok(None)
+                }
+            }
+        }
+
+        fn contextual_member_namespace(
+            &self,
+            _index: usize,
+            _budget: &mut ReadBudget,
+        ) -> Result<Option<ContextualMemberNamespace>> {
+            self.legacy_contextual_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(None)
+        }
+
+        fn supports_work_contextual_member_namespace(&self) -> bool {
+            true
+        }
+
+        fn contextual_member_namespace_with_work(
+            &self,
+            _index: usize,
+            budget: &mut WorkBudget,
+        ) -> Result<Option<ContextualMemberNamespace>> {
+            self.work_contextual_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            match self.outcome {
+                WorkHookOutcome::Some => Ok(Some(ContextualMemberNamespace {
+                    format: "synthetic-neutral-child",
+                    namespace: Box::new(PermitChildNamespace {
+                        resident: budget.retain_resident(4)?,
+                    }),
+                })),
+                WorkHookOutcome::None => Ok(None),
+                WorkHookOutcome::Failure => {
+                    Err(Error::Malformed("synthetic work-child failure".into()))
+                }
+                WorkHookOutcome::CheckCancellation => {
+                    budget.check_cancelled()?;
+                    Ok(None)
+                }
+            }
+        }
+
+        fn stored_source(&self, _index: usize) -> Result<Arc<dyn RangeSource>> {
+            Ok(Arc::clone(&self.source))
+        }
+    }
+
+    fn work_hook_namespace(outcome: WorkHookOutcome) -> WorkHookNamespace {
+        let calls = || Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        WorkHookNamespace {
+            source: Arc::new(MemoryRangeSource::new(b"neutral".to_vec(), "synthetic")),
+            outcome,
+            legacy_semantic_calls: calls(),
+            legacy_contextual_calls: calls(),
+            work_semantic_calls: calls(),
+            work_contextual_calls: calls(),
+        }
+    }
+
+    fn dispatch_semantic(
+        namespace: &dyn IndexedNamespace,
+        index: usize,
+        work: &mut WorkBudget,
+    ) -> Result<Option<MemberSemanticView>> {
+        if namespace.supports_work_semantic_member_view() {
+            namespace.semantic_member_view_with_work(index, work)
+        } else {
+            work.with_read_budget(|reads| namespace.semantic_member_view(index, reads))
+        }
+    }
+
+    fn dispatch_contextual(
+        namespace: &dyn IndexedNamespace,
+        index: usize,
+        work: &mut WorkBudget,
+    ) -> Result<Option<ContextualMemberNamespace>> {
+        if namespace.supports_work_contextual_member_namespace() {
+            namespace.contextual_member_namespace_with_work(index, work)
+        } else {
+            work.with_read_budget(|reads| namespace.contextual_member_namespace(index, reads))
+        }
+    }
+
+    #[test]
+    fn legacy_only_callbacks_keep_the_legacy_dispatch_policy() {
+        let semantic_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let contextual_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let namespace = LegacyOnlyNamespace {
+            source: Arc::new(MemoryRangeSource::new(b"neutral".to_vec(), "synthetic")),
+            semantic_calls: Arc::clone(&semantic_calls),
+            contextual_calls: Arc::clone(&contextual_calls),
+        };
+        assert!(!namespace.supports_work_semantic_member_view());
+        assert!(!namespace.supports_work_contextual_member_namespace());
+
+        let mut unlimited = WorkBudget::new(WorkLimits::unlimited());
+        assert!(dispatch_semantic(&namespace, 0, &mut unlimited)
+            .unwrap()
+            .is_none());
+        assert!(dispatch_contextual(&namespace, 0, &mut unlimited)
+            .unwrap()
+            .is_none());
+        assert_eq!(semantic_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(
+            contextual_calls.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert!(!unlimited.complete_io_accounting());
+
+        for resource in [WorkResource::IoReadCalls, WorkResource::IoRequestedBytes] {
+            let mut finite = WorkBudget::new(WorkLimits::unlimited().with(resource, 0));
+            assert!(matches!(
+                dispatch_semantic(&namespace, 0, &mut finite),
+                Err(Error::Unsupported(message)) if message.contains("underlying I/O accounting")
+            ));
+            assert!(matches!(
+                dispatch_contextual(&namespace, 0, &mut finite),
+                Err(Error::Unsupported(message)) if message.contains("underlying I/O accounting")
+            ));
+            assert_eq!(semantic_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+            assert_eq!(
+                contextual_calls.load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn selected_work_semantic_results_are_terminal_and_never_retry_legacy() {
+        for outcome in [
+            WorkHookOutcome::Some,
+            WorkHookOutcome::None,
+            WorkHookOutcome::Failure,
+        ] {
+            let namespace = work_hook_namespace(outcome);
+            let mut work = WorkBudget::new(
+                WorkLimits::unlimited()
+                    .with(WorkResource::IoReadCalls, 0)
+                    .with(WorkResource::IoRequestedBytes, 0),
+            );
+            let result = dispatch_semantic(&namespace, 0, &mut work);
+            match outcome {
+                WorkHookOutcome::Some => assert!(result.unwrap().is_some()),
+                WorkHookOutcome::None => assert!(result.unwrap().is_none()),
+                WorkHookOutcome::Failure => assert!(matches!(
+                    result,
+                    Err(Error::Malformed(message)) if message == "synthetic work-view failure"
+                )),
+                WorkHookOutcome::CheckCancellation => unreachable!(),
+            }
+            assert_eq!(
+                namespace
+                    .work_semantic_calls
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                namespace
+                    .legacy_semantic_calls
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert!(work.complete_io_accounting());
+        }
+
+        let namespace = work_hook_namespace(WorkHookOutcome::CheckCancellation);
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut work = WorkBudget::new(WorkLimits::unlimited()).with_cancellation(token);
+        assert!(matches!(
+            dispatch_semantic(&namespace, 0, &mut work),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(
+            namespace
+                .legacy_semantic_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            namespace
+                .work_semantic_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn selected_contextual_result_retains_on_the_same_ledger_until_child_drop() {
+        let namespace = work_hook_namespace(WorkHookOutcome::Some);
+        let limits = WorkLimits::unlimited()
+            .with_resident_bytes(7)
+            .with(WorkResource::IoReadCalls, 0)
+            .with(WorkResource::IoRequestedBytes, 0);
+        let mut work = WorkBudget::new(limits);
+        let child = dispatch_contextual(&namespace, 0, &mut work)
+            .unwrap()
+            .unwrap();
+        assert_eq!(child.format, "synthetic-neutral-child");
+        assert_eq!(work.usage().resident_bytes(), 4);
+        let nested = work.retain_resident(3).unwrap();
+        assert_eq!(work.usage().resident_bytes(), 7);
+        assert!(matches!(
+            work.retain_resident(1),
+            Err(Error::ResourceLimit {
+                resource: "resident bytes",
+                requested: 8,
+                limit: 7,
+            })
+        ));
+        assert_eq!(
+            namespace
+                .legacy_contextual_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            namespace
+                .work_contextual_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        drop(nested);
+        drop(child);
+        assert_eq!(work.usage().resident_bytes(), 0);
+        assert!(work.complete_io_accounting());
+    }
+
+    #[test]
+    fn selected_contextual_miss_error_and_cancellation_never_retry_legacy() {
+        for outcome in [WorkHookOutcome::None, WorkHookOutcome::Failure] {
+            let namespace = work_hook_namespace(outcome);
+            let mut work = WorkBudget::new(WorkLimits::unlimited());
+            let result = dispatch_contextual(&namespace, 0, &mut work);
+            match outcome {
+                WorkHookOutcome::None => assert!(result.unwrap().is_none()),
+                WorkHookOutcome::Failure => assert!(matches!(
+                    result,
+                    Err(Error::Malformed(message)) if message == "synthetic work-child failure"
+                )),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                namespace
+                    .legacy_contextual_calls
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+        }
+
+        let namespace = work_hook_namespace(WorkHookOutcome::CheckCancellation);
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut work = WorkBudget::new(WorkLimits::unlimited()).with_cancellation(token);
+        assert!(matches!(
+            dispatch_contextual(&namespace, 0, &mut work),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(
+            namespace
+                .legacy_contextual_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn selected_work_capability_with_default_callback_fails_without_fallback() {
+        struct InconsistentClaimant {
+            old_calls: Arc<std::sync::atomic::AtomicUsize>,
+            old_context_calls: Arc<std::sync::atomic::AtomicUsize>,
+            source: Arc<dyn RangeSource>,
+        }
+
+        impl IndexedNamespace for InconsistentClaimant {
+            fn entries(&self) -> &[NamespaceEntry] {
+                &[]
+            }
+
+            fn semantic_member_view(
+                &self,
+                _index: usize,
+                _budget: &mut ReadBudget,
+            ) -> Result<Option<MemberSemanticView>> {
+                self.old_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(None)
+            }
+
+            fn supports_work_semantic_member_view(&self) -> bool {
+                true
+            }
+
+            fn contextual_member_namespace(
+                &self,
+                _index: usize,
+                _budget: &mut ReadBudget,
+            ) -> Result<Option<ContextualMemberNamespace>> {
+                self.old_context_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(None)
+            }
+
+            fn supports_work_contextual_member_namespace(&self) -> bool {
+                true
+            }
+
+            fn stored_source(&self, _index: usize) -> Result<Arc<dyn RangeSource>> {
+                Ok(Arc::clone(&self.source))
+            }
+        }
+
+        let old_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let old_context_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let namespace = InconsistentClaimant {
+            old_calls: Arc::clone(&old_calls),
+            old_context_calls: Arc::clone(&old_context_calls),
+            source: Arc::new(MemoryRangeSource::new(b"neutral".to_vec(), "synthetic")),
+        };
+        let mut work = WorkBudget::new(WorkLimits::unlimited());
+        assert!(matches!(
+            dispatch_semantic(&namespace, 0, &mut work),
+            Err(Error::Unsupported(message)) if message.contains("not implemented")
+        ));
+        assert_eq!(old_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert!(matches!(
+            dispatch_contextual(&namespace, 0, &mut work),
+            Err(Error::Unsupported(message)) if message.contains("not implemented")
+        ));
+        assert_eq!(
+            old_context_calls.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn work_capability_axes_dispatch_independently() {
+        struct SemanticOnlyNamespace {
+            source: Arc<dyn RangeSource>,
+            old_context_calls: Arc<std::sync::atomic::AtomicUsize>,
+            work_semantic_calls: Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        impl IndexedNamespace for SemanticOnlyNamespace {
+            fn entries(&self) -> &[NamespaceEntry] {
+                &[]
+            }
+
+            fn supports_work_semantic_member_view(&self) -> bool {
+                true
+            }
+
+            fn semantic_member_view_with_work(
+                &self,
+                _index: usize,
+                _budget: &mut WorkBudget,
+            ) -> Result<Option<MemberSemanticView>> {
+                self.work_semantic_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(None)
+            }
+
+            fn contextual_member_namespace(
+                &self,
+                _index: usize,
+                _budget: &mut ReadBudget,
+            ) -> Result<Option<ContextualMemberNamespace>> {
+                self.old_context_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(None)
+            }
+
+            fn stored_source(&self, _index: usize) -> Result<Arc<dyn RangeSource>> {
+                Ok(Arc::clone(&self.source))
+            }
+        }
+
+        let old_context_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let work_semantic_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let namespace = SemanticOnlyNamespace {
+            source: Arc::new(MemoryRangeSource::new(b"neutral".to_vec(), "synthetic")),
+            old_context_calls: Arc::clone(&old_context_calls),
+            work_semantic_calls: Arc::clone(&work_semantic_calls),
+        };
+        assert!(namespace.supports_work_semantic_member_view());
+        assert!(!namespace.supports_work_contextual_member_namespace());
+
+        let mut work = WorkBudget::new(WorkLimits::unlimited());
+        assert!(dispatch_semantic(&namespace, 0, &mut work)
+            .unwrap()
+            .is_none());
+        assert!(dispatch_contextual(&namespace, 0, &mut work)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            work_semantic_calls.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            old_context_calls.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 
     #[test]
@@ -945,6 +1540,68 @@ mod tests {
         ] {
             assert_eq!(work.spent(resource), 0);
         }
+    }
+
+    #[test]
+    fn stored_namespace_work_view_and_context_hooks_are_zero_io_noops() {
+        let source = Arc::new(crate::RangeSourceTestDouble::resident(
+            b"stored".to_vec(),
+            "fixture",
+        ));
+        let namespace = StoredRangeNamespace::without_raw_names(
+            source.clone(),
+            vec![NamespaceEntry {
+                name: Some("member.bin".into()),
+                offset: 0,
+                size: 6,
+            }],
+            StoredRangeNamespaceLimits {
+                max_entries: 1,
+                max_name_bytes: 16,
+                max_total_name_bytes: 16,
+            },
+        )
+        .unwrap();
+        assert!(namespace.supports_work_semantic_member_view());
+        assert!(namespace.supports_work_contextual_member_namespace());
+
+        let mut work = WorkBudget::new(
+            WorkLimits::unlimited()
+                .with(WorkResource::IoReadCalls, 0)
+                .with(WorkResource::IoRequestedBytes, 0),
+        );
+        assert!(dispatch_semantic(&namespace, 0, &mut work)
+            .unwrap()
+            .is_none());
+        assert!(dispatch_contextual(&namespace, 0, &mut work)
+            .unwrap()
+            .is_none());
+        assert_eq!(source.read_calls(), 0);
+        assert_eq!(source.read_bytes(), 0);
+        assert_eq!(work.spent(WorkResource::IoReadCalls), 0);
+        assert_eq!(work.spent(WorkResource::IoRequestedBytes), 0);
+        assert!(work.complete_io_accounting());
+
+        for index in [0, 1] {
+            assert!(namespace
+                .semantic_member_view(index, &mut ReadBudget::unlimited())
+                .unwrap()
+                .is_none());
+            assert!(namespace
+                .semantic_member_view_with_work(index, &mut work)
+                .unwrap()
+                .is_none());
+            assert!(namespace
+                .contextual_member_namespace(index, &mut ReadBudget::unlimited())
+                .unwrap()
+                .is_none());
+            assert!(namespace
+                .contextual_member_namespace_with_work(index, &mut work)
+                .unwrap()
+                .is_none());
+        }
+        assert_eq!(source.read_calls(), 0);
+        assert_eq!(source.read_bytes(), 0);
     }
 
     #[test]

@@ -4,7 +4,7 @@ Platform-neutral Rust foundations for reading, writing and inspecting binary dat
 
 Formatkit supplies checked byte and bit operations, resident layouts, bounded
 source access, mounted archive services, format catalogs, runtime composition,
-pixel mechanics, selected compression codecs and specification-driven corpus testing. Format owners retain
+pixel mechanics, selected compression codecs, binary patches and specification-driven corpus testing. Format owners retain
 their grammars, validation policies, diagnostics and read/write capabilities.
 
 The libraries use the Rust standard library and require Rust 1.94.1 or newer.
@@ -19,8 +19,8 @@ fn read_tag(bytes: &[u8]) -> Result<u32> {
 ```
 
 The umbrella package enables core, layout, catalog and runtime by default.
-Archive, pixel, codec and corpus re-exports are selected with the `archive`,
-`pixel`, `codec` and `corpus` features. Individual packages can be consumed
+Archive, pixel, codec, patch and corpus re-exports are selected with the `archive`,
+`pixel`, `codec`, `patch` and `corpus` features. Individual packages can be consumed
 without the umbrella.
 
 | Package | Responsibility |
@@ -32,11 +32,12 @@ without the umbrella.
 | `formatkit-archive` | Mounted browsing, extraction to caller sinks and injected traversal |
 | `formatkit-pixel` | Generic packed pixels, palettes, channel masks and S3TC |
 | `formatkit-codec` | Bounded generic compression and consumed-stream extents |
+| `formatkit-patch` | IPS parsing, serialization, creation and policy-controlled application |
 | `formatkit-corpus` | Explicit-root discovery without a built-in sample set |
 | `formatkit-corpus-test` | JSON specs, golden digests, codec pairs and sealed packages |
 
 There are no platform dependency cycles: layout, pixel and codec depend on
-core; catalog depends on core; archive and runtime depend on catalog and core.
+core; patch depends on core; catalog depends on core; archive and runtime depend on catalog and core.
 Corpus discovery has no dependencies, and the golden-test harness is opt-in.
 
 ## Verification
@@ -62,3 +63,24 @@ not hard-coded sample counts in Rust tests.
 ## License
 
 MIT OR Apache-2.0. See LICENSE-MIT, LICENSE-APACHE and NOTICE.
+
+## Explicit command streams and checksums
+
+`formatkit_codec::counted_lsb` scans and decodes a supplied command count,
+with optional known preceding bytes. Counts are literal (zero is empty),
+not decoded byte counts. Carrier headers, wrapped counts, history selection,
+and output limits remain with the caller. Both scan and decode preserve the
+exact consumed extent and unused control bits. Decoding retains its output
+allocation on the supplied work budget until the returned value is dropped.
+It provides no automatic format recognition or encoder.
+
+`formatkit_core::checksum::{Crc16, Crc16Params}` supplies incremental reflected
+and MSB-first CRC-16 arithmetic, including ARC, KERMIT, X-25 and BUYPASS
+parameters. Custom polynomials, seeds, xor-out and final byte swapping are
+explicit. Owners select covered regions, stored byte order and mismatch policy.
+
+`formatkit_patch::ips` preserves literal/RLE records, order and optional EOF
+size. Application requires explicit authorization for growth and overlaps;
+creation produces deterministic patches. It has no base-identity checksum,
+platform catalog or implicit file I/O. IPS format documentation:
+<https://zerosoft.zophar.net/ips.php>.

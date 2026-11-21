@@ -44,18 +44,7 @@ impl Rnc2Header {
 
 /// The CRC-16/IBM checksum stored in both RNC envelope checksum fields.
 pub fn rnc_crc16(bytes: &[u8]) -> u16 {
-    let mut crc = 0u16;
-    for &byte in bytes {
-        crc ^= u16::from(byte);
-        for _ in 0..8 {
-            crc = if crc & 1 == 0 {
-                crc >> 1
-            } else {
-                (crc >> 1) ^ 0xa001
-            };
-        }
-    }
-    crc
+    formatkit_core::checksum::Crc16Params::ARC.compute(bytes)
 }
 
 fn bits(input: &mut MsbInterleavedBitReader<'_>, count: u8) -> Option<usize> {

@@ -26,3 +26,5 @@ pub mod okumura;
 pub use okumura::*;
 pub mod rnc;
 pub use rnc::*;
+
+pub mod counted_lsb;

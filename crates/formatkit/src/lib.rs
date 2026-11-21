@@ -14,3 +14,6 @@ pub use formatkit_layout as layout;
 #[cfg(feature = "pixel")]
 pub use formatkit_pixel as pixel;
 pub use formatkit_runtime as runtime;
+
+#[cfg(feature = "patch")]
+pub use formatkit_patch as patch;

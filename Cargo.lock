@@ -133,6 +133,7 @@ dependencies = [
  "formatkit-corpus",
  "formatkit-corpus-test",
  "formatkit-layout",
+ "formatkit-patch",
  "formatkit-pixel",
  "formatkit-runtime",
 ]
@@ -198,6 +199,13 @@ version = "0.1.0"
 dependencies = [
  "formatkit-core",
  "proptest",
+]
+
+[[package]]
+name = "formatkit-patch"
+version = "0.1.0"
+dependencies = [
+ "formatkit-core",
 ]
 
 [[package]]

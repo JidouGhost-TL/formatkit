@@ -28,3 +28,4 @@ pub mod rnc;
 pub use rnc::*;
 
 pub mod counted_lsb;
+pub mod sliding_window;

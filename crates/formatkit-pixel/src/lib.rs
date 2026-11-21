@@ -10,6 +10,131 @@ pub enum IndexBits {
     Eight,
 }
 
+/// Pixel ordering within a byte for 4-bit packed palette indices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NibbleOrder {
+    /// Low nibble (`b & 0x0F`) is the first (left) pixel; high nibble (`b >> 4`) is the second.
+    /// Used by GBA 4bpp tiles, TIM2, GIM, and BMP-like layouts.
+    LowFirst,
+    /// High nibble (`b >> 4`) is the first (left) pixel; low nibble (`b & 0x0F`) is the second.
+    /// Used by WonderSwan packed tiles and big-endian 4bpp layouts.
+    HighFirst,
+}
+
+/// Out-of-range index handling when packing 4-bit palette indices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexPolicy {
+    /// Mask each index to the low 4 bits (`v & 0x0F`).
+    Mask,
+    /// Return [`PackError::IndexOutOfRange`] if any index exceeds `15`.
+    Reject,
+}
+
+/// Error returned by allocation-free packed-index decode/encode helpers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackError {
+    /// Output slice length did not match the required length for the input.
+    LengthMismatch { expected: usize, actual: usize },
+    /// An index exceeded the 4-bit maximum (`15`) under [`IndexPolicy::Reject`].
+    IndexOutOfRange { index: usize, value: u8 },
+}
+
+impl core::fmt::Display for PackError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match *self {
+            Self::LengthMismatch { expected, actual } => {
+                write!(f, "packed index buffer length mismatch: expected {expected}, got {actual}")
+            }
+            Self::IndexOutOfRange { index, value } => {
+                write!(f, "4bpp palette index out of range at pixel {index}: {value} > 15")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PackError {}
+
+/// Unpack 4-bit palette indices directly into a caller-supplied output slice without allocation.
+///
+/// `out.len()` must be at most `packed.len() * 2`; typically `out.len() == packed.len() * 2`
+/// (or `packed.len() * 2 - 1` for odd pixel counts).
+pub fn unpack_4bpp_into(
+    packed: &[u8],
+    order: NibbleOrder,
+    out: &mut [u8],
+) -> Result<(), PackError> {
+    let required_bytes = out.len().div_ceil(2);
+    if packed.len() < required_bytes {
+        return Err(PackError::LengthMismatch {
+            expected: required_bytes,
+            actual: packed.len(),
+        });
+    }
+    let mut dst = 0;
+    for &b in &packed[..required_bytes] {
+        let (first, second) = match order {
+            NibbleOrder::LowFirst => (b & 0x0f, b >> 4),
+            NibbleOrder::HighFirst => (b >> 4, b & 0x0f),
+        };
+        out[dst] = first;
+        dst += 1;
+        if dst < out.len() {
+            out[dst] = second;
+            dst += 1;
+        }
+    }
+    Ok(())
+}
+
+/// Pack 4-bit palette indices directly into a caller-supplied byte slice without allocation.
+///
+/// `out.len()` must equal `indices.len().div_ceil(2)`. For an odd number of input indices,
+/// the trailing half-byte is padded with zero.
+pub fn pack_4bpp_into(
+    indices: &[u8],
+    order: NibbleOrder,
+    policy: IndexPolicy,
+    out: &mut [u8],
+) -> Result<(), PackError> {
+    let expected_bytes = indices.len().div_ceil(2);
+    if out.len() != expected_bytes {
+        return Err(PackError::LengthMismatch {
+            expected: expected_bytes,
+            actual: out.len(),
+        });
+    }
+    for (byte_idx, dst) in out.iter_mut().enumerate() {
+        let i0 = byte_idx * 2;
+        let raw0 = indices[i0];
+        if policy == IndexPolicy::Reject && raw0 > 0x0f {
+            return Err(PackError::IndexOutOfRange {
+                index: i0,
+                value: raw0,
+            });
+        }
+        let n0 = raw0 & 0x0f;
+
+        let n1 = if i0 + 1 < indices.len() {
+            let raw1 = indices[i0 + 1];
+            if policy == IndexPolicy::Reject && raw1 > 0x0f {
+                return Err(PackError::IndexOutOfRange {
+                    index: i0 + 1,
+                    value: raw1,
+                });
+            }
+            raw1 & 0x0f
+        } else {
+            0
+        };
+
+        *dst = match order {
+            NibbleOrder::LowFirst => n0 | (n1 << 4),
+            NibbleOrder::HighFirst => (n0 << 4) | n1,
+        };
+    }
+    Ok(())
+}
+
 /// Extent of one dimension at a floor-halved mip level.
 ///
 /// This is the DDS/GTF/GXT-style rule: each level shifts right and clamps to
@@ -227,6 +352,47 @@ mod tests {
         assert_eq!(rgba4444_to_rgba(0xF000), [0, 0, 0, 255]); // alpha nibble
         assert_eq!(rgba4444_to_rgba(0xFFFF), [255, 255, 255, 255]);
         assert_eq!(rgba4444_to_rgba(0x0080), [0, 0x88, 0, 0]); // green nibble = 8 -> 0x88
+    }
+
+    #[test]
+    fn unpack_and_pack_4bpp_low_and_high_first() {
+        let mut pixels = [0u8; 4];
+        unpack_4bpp_into(&[0x21, 0x8F], NibbleOrder::LowFirst, &mut pixels).unwrap();
+        assert_eq!(pixels, [1, 2, 0xF, 8]);
+
+        let mut repacked = [0u8; 2];
+        pack_4bpp_into(&pixels, NibbleOrder::LowFirst, IndexPolicy::Reject, &mut repacked).unwrap();
+        assert_eq!(repacked, [0x21, 0x8F]);
+
+        unpack_4bpp_into(&[0x21, 0x8F], NibbleOrder::HighFirst, &mut pixels).unwrap();
+        assert_eq!(pixels, [2, 1, 8, 0xF]);
+        pack_4bpp_into(&pixels, NibbleOrder::HighFirst, IndexPolicy::Reject, &mut repacked).unwrap();
+        assert_eq!(repacked, [0x21, 0x8F]);
+    }
+
+    #[test]
+    fn pack_4bpp_policies_and_odd_lengths() {
+        let mut out = [0u8; 2];
+        assert_eq!(
+            pack_4bpp_into(&[1, 16, 3], NibbleOrder::LowFirst, IndexPolicy::Reject, &mut out),
+            Err(PackError::IndexOutOfRange { index: 1, value: 16 })
+        );
+        pack_4bpp_into(&[1, 0x12, 3], NibbleOrder::LowFirst, IndexPolicy::Mask, &mut out).unwrap();
+        assert_eq!(out, [0x21, 0x03]);
+
+        let mut odd_px = [0u8; 3];
+        unpack_4bpp_into(&out, NibbleOrder::LowFirst, &mut odd_px).unwrap();
+        assert_eq!(odd_px, [1, 2, 3]);
+
+        let mut too_small = [0u8; 1];
+        assert_eq!(
+            pack_4bpp_into(&[1, 2, 3], NibbleOrder::LowFirst, IndexPolicy::Mask, &mut too_small),
+            Err(PackError::LengthMismatch { expected: 2, actual: 1 })
+        );
+        assert_eq!(
+            unpack_4bpp_into(&[0x21], NibbleOrder::LowFirst, &mut odd_px),
+            Err(PackError::LengthMismatch { expected: 2, actual: 1 })
+        );
     }
 }
 

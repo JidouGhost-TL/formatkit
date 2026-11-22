@@ -48,6 +48,10 @@ pub enum PackError {
     IndexOutOfRange { index: usize, value: u8 },
     /// A planar tile bitplane count is not supported.
     UnsupportedPlanes { planes: u8 },
+    /// A layout parameter (dimension, stride, or scale) was invalid or overflowed.
+    InvalidLayout { reason: &'static str },
+    /// A requested output buffer size exceeded an explicit caller limit.
+    LimitExceeded { requested: usize, limit: usize },
 }
 
 impl core::fmt::Display for PackError {
@@ -64,6 +68,15 @@ impl core::fmt::Display for PackError {
             }
             Self::UnsupportedPlanes { planes } => {
                 write!(f, "unsupported planar tile bitplane count: {planes}")
+            }
+            Self::InvalidLayout { reason } => {
+                write!(f, "invalid pixel layout: {reason}")
+            }
+            Self::LimitExceeded { requested, limit } => {
+                write!(
+                    f,
+                    "pixel buffer size {requested} exceeds caller limit {limit}"
+                )
             }
         }
     }
@@ -749,8 +762,14 @@ mod tests {
     }
 }
 
+pub mod atlas;
+pub use atlas::{blit_rgba, compose_grid_atlas, GridAtlasLayout};
+
 pub mod dxt;
 pub use dxt::{decode_dxt, decode_masked, is_contiguous, rgb565_to_rgba, ChannelMasks, DxtFormat};
+
+pub mod glyph;
+pub use glyph::{unpack_glyph_1bpp, unpack_glyph_2bpp};
 
 pub mod planar;
 pub use planar::{pack_planar_tile_8x8_into, unpack_planar_tile_8x8_into};

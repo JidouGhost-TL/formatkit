@@ -29,4 +29,6 @@ pub use rnc::*;
 
 pub mod counted_lsb;
 pub mod delta;
+pub mod png;
+pub use png::{decode_png_rgba, encode_rgba_png};
 pub mod sliding_window;

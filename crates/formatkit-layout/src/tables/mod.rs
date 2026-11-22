@@ -3,6 +3,7 @@
 mod aligned_sizes;
 mod counted_boundaries;
 mod first_word_offsets;
+mod fixed_stride_offset;
 mod offset_length;
 mod positive_sizes;
 mod terminal_offsets;
@@ -14,6 +15,7 @@ pub use counted_boundaries::{
     CountedBoundaryError, CountedBoundaryTable, ValidatedCountedBoundaries,
 };
 pub use first_word_offsets::{FirstWordOffsetError, FirstWordOffsetTable};
+pub use fixed_stride_offset::{FixedStrideOffsetTable, TableSizeMode};
 pub use offset_length::{OffsetLengthRow, OffsetLengthRows};
 pub use positive_sizes::{
     PositiveSizeError, PositiveSizeExtent, PositiveSizeList, SizeAlignment, ValidatedPositiveSizes,

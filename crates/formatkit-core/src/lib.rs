@@ -109,6 +109,9 @@ pub mod checksum;
 pub mod pointer_table;
 pub use pointer_table::{scan_u32_pointer_tables, PointerTable};
 
+pub mod padding;
+pub use padding::{classify_padding, classify_padding_source, PaddingKind, PaddingSummary};
+
 pub mod math;
 
 pub mod topology;

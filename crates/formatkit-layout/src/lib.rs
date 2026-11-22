@@ -38,8 +38,9 @@ pub use records::{FixedRecords, RecordOverflow};
 pub use tables::{
     AlignedSizeChain, AlignedSizeCursor, AlignedSizeError, AlignedSizeExtent, CountedBoundaryError,
     CountedBoundaryTable, DerivedAlignedSizes, FirstWordOffsetError, FirstWordOffsetTable,
-    OffsetLengthRow, OffsetLengthRows, PositiveSizeError, PositiveSizeExtent, PositiveSizeList,
-    SizeAlignment, TerminalOffsetError, TerminalOffsetTable, ValidatedCountedBoundaries,
-    ValidatedPositiveSizes, ValidatedTerminalOffsets,
+    FixedStrideOffsetTable, OffsetLengthRow, OffsetLengthRows, PositiveSizeError,
+    PositiveSizeExtent, PositiveSizeList, SizeAlignment, TableSizeMode, TerminalOffsetError,
+    TerminalOffsetTable, ValidatedCountedBoundaries, ValidatedPositiveSizes,
+    ValidatedTerminalOffsets,
 };
 pub use text::FixedByteStringField;

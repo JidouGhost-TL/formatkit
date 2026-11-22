@@ -105,12 +105,18 @@ mod bit_rows;
 pub use bit_rows::MsbFirst1bppRows;
 
 pub mod checksum;
+pub use checksum::{
+    compute_with_zeroed_range, sum_bytes_u16, xor_bytes, FoldChecksum, FoldOp, FoldUnit,
+};
 
 pub mod pointer_table;
 pub use pointer_table::{scan_u32_pointer_tables, PointerTable};
 
 pub mod padding;
-pub use padding::{classify_padding, classify_padding_source, PaddingKind, PaddingSummary};
+pub use padding::{
+    classify_padding, classify_padding_source, detect_trailing_padding, PaddingKind,
+    PaddingSummary, TrailingPadding,
+};
 
 pub mod math;
 

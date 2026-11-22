@@ -42,20 +42,28 @@ pub enum IndexPolicy {
 /// Error returned by allocation-free packed-index decode/encode helpers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackError {
-    /// Output slice length did not match the required length for the input.
+    /// Output or input slice length did not match the required length.
     LengthMismatch { expected: usize, actual: usize },
-    /// An index exceeded the 4-bit maximum (`15`) under [`IndexPolicy::Reject`].
+    /// An index exceeded the maximum allowed by the target bit depth under [`IndexPolicy::Reject`].
     IndexOutOfRange { index: usize, value: u8 },
+    /// A planar tile bitplane count is not supported.
+    UnsupportedPlanes { planes: u8 },
 }
 
 impl core::fmt::Display for PackError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match *self {
             Self::LengthMismatch { expected, actual } => {
-                write!(f, "packed index buffer length mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "packed index buffer length mismatch: expected {expected}, got {actual}"
+                )
             }
             Self::IndexOutOfRange { index, value } => {
-                write!(f, "4bpp palette index out of range at pixel {index}: {value} > 15")
+                write!(f, "palette index out of range at pixel {index}: {value}")
+            }
+            Self::UnsupportedPlanes { planes } => {
+                write!(f, "unsupported planar tile bitplane count: {planes}")
             }
         }
     }
@@ -302,6 +310,127 @@ pub fn rgba4444_to_rgba(c: u16) -> [u8; 4] {
     ]
 }
 
+/// Alpha derivation policy for 15-bit BGR555 color words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Alpha555Policy {
+    /// Every pixel is fully opaque (`0xFF`).
+    Opaque,
+    /// Word `0x0000` is fully transparent (`0x00`); all other words are opaque (`0xFF`).
+    ZeroIsTransparent,
+    /// Bit 15 selects alpha: `1` is fully opaque (`0xFF`), `0` is fully transparent (`0x00`).
+    TopBitAlpha,
+}
+
+/// Pack 8-bit RGB channels into a 15-bit BGR555 word (bit 15 cleared).
+///
+/// Packed channel order: 5-bit red in bits `0..5`, 5-bit green in bits `5..10`,
+/// and 5-bit blue in bits `10..15`. Each channel is quantized via `c >> 3`.
+#[inline]
+pub fn rgb8_to_bgr555(r: u8, g: u8, b: u8) -> u16 {
+    u16::from(r >> 3) | (u16::from(g >> 3) << 5) | (u16::from(b >> 3) << 10)
+}
+
+/// Pack an RGBA8888 pixel into a 16-bit BGR555 word using the given [`Alpha555Policy`].
+///
+/// - [`Alpha555Policy::Opaque`]: leaves bit 15 cleared (`0`).
+/// - [`Alpha555Policy::TopBitAlpha`]: sets bit 15 (`0x8000`) when `rgba[3] >= 0x80`.
+/// - [`Alpha555Policy::ZeroIsTransparent`]: returns `0x0000` when `rgba[3] < 0x80`;
+///   otherwise packs RGB with bit 15 cleared.
+#[inline]
+pub fn rgba8_to_bgr555(rgba: [u8; 4], alpha: Alpha555Policy) -> u16 {
+    let rgb = rgb8_to_bgr555(rgba[0], rgba[1], rgba[2]);
+    match alpha {
+        Alpha555Policy::Opaque => rgb,
+        Alpha555Policy::TopBitAlpha => {
+            if rgba[3] >= 0x80 {
+                rgb | 0x8000
+            } else {
+                rgb
+            }
+        }
+        Alpha555Policy::ZeroIsTransparent => {
+            if rgba[3] < 0x80 {
+                0
+            } else {
+                rgb
+            }
+        }
+    }
+}
+
+/// Expand a 16-bit BGR555 word to RGBA8888 using the given [`Alpha555Policy`].
+///
+/// Packed channel order: 5-bit red in bits `0..5`, 5-bit green in bits `5..10`,
+/// 5-bit blue in bits `10..15`, and optional alpha/flag bit in bit `15`.
+/// Each 5-bit channel is bit-replicated to 8 bits.
+pub fn bgr555_to_rgba(c: u16, alpha: Alpha555Policy) -> [u8; 4] {
+    let e5 = |v: u16| (((v << 3) | (v >> 2)) & 0xff) as u8;
+    let a = match alpha {
+        Alpha555Policy::Opaque => 255,
+        Alpha555Policy::ZeroIsTransparent => {
+            if c == 0 {
+                0
+            } else {
+                255
+            }
+        }
+        Alpha555Policy::TopBitAlpha => {
+            if (c & 0x8000) != 0 {
+                255
+            } else {
+                0
+            }
+        }
+    };
+    [e5(c & 0x1f), e5((c >> 5) & 0x1f), e5((c >> 10) & 0x1f), a]
+}
+
+/// Decode little-endian 16-bit BGR555 words into a caller-supplied RGBA8888 byte buffer.
+///
+/// `bytes.len()` must be even, and `out.len()` must equal `(bytes.len() / 2) * 4`.
+pub fn bgr555_le_words_to_rgba(
+    bytes: &[u8],
+    alpha: Alpha555Policy,
+    out: &mut [u8],
+) -> Result<(), PackError> {
+    if !bytes.len().is_multiple_of(2) {
+        return Err(PackError::LengthMismatch {
+            expected: bytes.len() + 1,
+            actual: bytes.len(),
+        });
+    }
+    let expected_out = (bytes.len() / 2).saturating_mul(4);
+    if out.len() != expected_out {
+        return Err(PackError::LengthMismatch {
+            expected: expected_out,
+            actual: out.len(),
+        });
+    }
+    for (src, dst) in bytes.chunks_exact(2).zip(out.chunks_exact_mut(4)) {
+        let word = u16::from_le_bytes([src[0], src[1]]);
+        dst.copy_from_slice(&bgr555_to_rgba(word, alpha));
+    }
+    Ok(())
+}
+
+/// Expand a 12-bit RGB444 word (`0x0RGB`) to opaque RGBA8888.
+///
+/// Packed channel order: 4-bit red in bits `8..12`, 4-bit green in bits `4..8`,
+/// 4-bit blue in bits `0..4`. Each nibble is replicated to 8 bits (`v * 0x11`).
+pub fn rgb444_to_rgba(c: u16) -> [u8; 4] {
+    let nib = |v: u16| (((v << 4) | v) & 0xff) as u8;
+    [nib((c >> 8) & 0xf), nib((c >> 4) & 0xf), nib(c & 0xf), 0xff]
+}
+
+/// Expand a 12-bit BGR444 word (`0x0BGR`) to opaque RGBA8888.
+///
+/// Packed channel order: 4-bit red in bits `0..4`, 4-bit green in bits `4..8`,
+/// 4-bit blue in bits `8..12`. Each nibble is replicated to 8 bits (`v * 0x11`).
+pub fn bgr444_to_rgba(c: u16) -> [u8; 4] {
+    let nib = |v: u16| (((v << 4) | v) & 0xff) as u8;
+    [nib(c & 0xf), nib((c >> 4) & 0xf), nib((c >> 8) & 0xf), 0xff]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,12 +551,24 @@ mod tests {
         assert_eq!(pixels, [1, 2, 0xF, 8]);
 
         let mut repacked = [0u8; 2];
-        pack_4bpp_into(&pixels, NibbleOrder::LowFirst, IndexPolicy::Reject, &mut repacked).unwrap();
+        pack_4bpp_into(
+            &pixels,
+            NibbleOrder::LowFirst,
+            IndexPolicy::Reject,
+            &mut repacked,
+        )
+        .unwrap();
         assert_eq!(repacked, [0x21, 0x8F]);
 
         unpack_4bpp_into(&[0x21, 0x8F], NibbleOrder::HighFirst, &mut pixels).unwrap();
         assert_eq!(pixels, [2, 1, 8, 0xF]);
-        pack_4bpp_into(&pixels, NibbleOrder::HighFirst, IndexPolicy::Reject, &mut repacked).unwrap();
+        pack_4bpp_into(
+            &pixels,
+            NibbleOrder::HighFirst,
+            IndexPolicy::Reject,
+            &mut repacked,
+        )
+        .unwrap();
         assert_eq!(repacked, [0x21, 0x8F]);
     }
 
@@ -435,10 +576,24 @@ mod tests {
     fn pack_4bpp_policies_and_odd_lengths() {
         let mut out = [0u8; 2];
         assert_eq!(
-            pack_4bpp_into(&[1, 16, 3], NibbleOrder::LowFirst, IndexPolicy::Reject, &mut out),
-            Err(PackError::IndexOutOfRange { index: 1, value: 16 })
+            pack_4bpp_into(
+                &[1, 16, 3],
+                NibbleOrder::LowFirst,
+                IndexPolicy::Reject,
+                &mut out
+            ),
+            Err(PackError::IndexOutOfRange {
+                index: 1,
+                value: 16
+            })
         );
-        pack_4bpp_into(&[1, 0x12, 3], NibbleOrder::LowFirst, IndexPolicy::Mask, &mut out).unwrap();
+        pack_4bpp_into(
+            &[1, 0x12, 3],
+            NibbleOrder::LowFirst,
+            IndexPolicy::Mask,
+            &mut out,
+        )
+        .unwrap();
         assert_eq!(out, [0x21, 0x03]);
 
         let mut odd_px = [0u8; 3];
@@ -447,12 +602,23 @@ mod tests {
 
         let mut too_small = [0u8; 1];
         assert_eq!(
-            pack_4bpp_into(&[1, 2, 3], NibbleOrder::LowFirst, IndexPolicy::Mask, &mut too_small),
-            Err(PackError::LengthMismatch { expected: 2, actual: 1 })
+            pack_4bpp_into(
+                &[1, 2, 3],
+                NibbleOrder::LowFirst,
+                IndexPolicy::Mask,
+                &mut too_small
+            ),
+            Err(PackError::LengthMismatch {
+                expected: 2,
+                actual: 1
+            })
         );
         assert_eq!(
             unpack_4bpp_into(&[0x21], NibbleOrder::LowFirst, &mut odd_px),
-            Err(PackError::LengthMismatch { expected: 2, actual: 1 })
+            Err(PackError::LengthMismatch {
+                expected: 2,
+                actual: 1
+            })
         );
     }
 
@@ -470,7 +636,121 @@ mod tests {
         unpack_2bpp_into(&[0b11_10_01_00], BitOrder::LsbFirst, &mut p2).unwrap();
         assert_eq!(p2, [0, 1, 2, 3]);
     }
+
+    #[test]
+    fn bgr555_policies_and_slice_decoder() {
+        assert_eq!(
+            bgr555_to_rgba(0x001F, Alpha555Policy::Opaque),
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            bgr555_to_rgba(0x03E0, Alpha555Policy::Opaque),
+            [0, 255, 0, 255]
+        );
+        assert_eq!(
+            bgr555_to_rgba(0x7C00, Alpha555Policy::Opaque),
+            [0, 0, 255, 255]
+        );
+
+        assert_eq!(
+            bgr555_to_rgba(0x0000, Alpha555Policy::ZeroIsTransparent),
+            [0, 0, 0, 0]
+        );
+        assert_eq!(
+            bgr555_to_rgba(0x8000, Alpha555Policy::ZeroIsTransparent),
+            [0, 0, 0, 255]
+        );
+        assert_eq!(
+            bgr555_to_rgba(0x001F, Alpha555Policy::TopBitAlpha),
+            [255, 0, 0, 0]
+        );
+        assert_eq!(
+            bgr555_to_rgba(0x801F, Alpha555Policy::TopBitAlpha),
+            [255, 0, 0, 255]
+        );
+
+        let src = [0x00, 0x00, 0x1F, 0x00];
+        let mut rgba = [0u8; 8];
+        bgr555_le_words_to_rgba(&src, Alpha555Policy::ZeroIsTransparent, &mut rgba).unwrap();
+        assert_eq!(rgba, [0, 0, 0, 0, 255, 0, 0, 255]);
+
+        assert_eq!(
+            bgr555_le_words_to_rgba(&[0x00], Alpha555Policy::Opaque, &mut []),
+            Err(PackError::LengthMismatch {
+                expected: 2,
+                actual: 1
+            })
+        );
+        assert_eq!(
+            bgr555_le_words_to_rgba(&src, Alpha555Policy::Opaque, &mut [0u8; 4]),
+            Err(PackError::LengthMismatch {
+                expected: 8,
+                actual: 4
+            })
+        );
+    }
+
+    #[test]
+    fn rgb444_and_bgr444_replicate_nibbles_with_opaque_alpha() {
+        assert_eq!(rgb444_to_rgba(0x0F00), [0xFF, 0x00, 0x00, 0xFF]);
+        assert_eq!(rgb444_to_rgba(0x0080), [0x00, 0x88, 0x00, 0xFF]);
+        assert_eq!(rgb444_to_rgba(0x000F), [0x00, 0x00, 0xFF, 0xFF]);
+        assert_eq!(rgb444_to_rgba(0xF123), [0x11, 0x22, 0x33, 0xFF]);
+
+        assert_eq!(bgr444_to_rgba(0x000F), [0xFF, 0x00, 0x00, 0xFF]);
+        assert_eq!(bgr444_to_rgba(0x0080), [0x00, 0x88, 0x00, 0xFF]);
+        assert_eq!(bgr444_to_rgba(0x0F00), [0x00, 0x00, 0xFF, 0xFF]);
+        assert_eq!(bgr444_to_rgba(0xF123), [0x33, 0x22, 0x11, 0xFF]);
+    }
+
+    #[test]
+    fn rgb8_and_rgba8_pack_to_bgr555_with_policies() {
+        assert_eq!(rgb8_to_bgr555(0xFF, 0x00, 0x00), 0x001F);
+        assert_eq!(rgb8_to_bgr555(0x00, 0xFF, 0x00), 0x03E0);
+        assert_eq!(rgb8_to_bgr555(0x00, 0x00, 0xFF), 0x7C00);
+        assert_eq!(rgb8_to_bgr555(0xFF, 0xFF, 0xFF), 0x7FFF);
+        assert_eq!(rgb8_to_bgr555(0x07, 0x07, 0x07), 0x0000);
+
+        // Opaque always leaves bit 15 cleared.
+        assert_eq!(
+            rgba8_to_bgr555([0xFF, 0x00, 0x00, 0xFF], Alpha555Policy::Opaque),
+            0x001F
+        );
+        assert_eq!(
+            rgba8_to_bgr555([0xFF, 0x00, 0x00, 0x00], Alpha555Policy::Opaque),
+            0x001F
+        );
+
+        // TopBitAlpha sets bit 15 when alpha >= 0x80.
+        assert_eq!(
+            rgba8_to_bgr555([0xFF, 0x00, 0x00, 0x80], Alpha555Policy::TopBitAlpha),
+            0x801F
+        );
+        assert_eq!(
+            rgba8_to_bgr555([0xFF, 0x00, 0x00, 0x7F], Alpha555Policy::TopBitAlpha),
+            0x001F
+        );
+
+        // ZeroIsTransparent returns 0 when alpha < 0x80.
+        assert_eq!(
+            rgba8_to_bgr555([0xFF, 0xFF, 0xFF, 0x7F], Alpha555Policy::ZeroIsTransparent),
+            0x0000
+        );
+        assert_eq!(
+            rgba8_to_bgr555([0x00, 0xFF, 0x00, 0x80], Alpha555Policy::ZeroIsTransparent),
+            0x03E0
+        );
+
+        // Round-trip quantized values through bgr555_to_rgba.
+        for word in [0x001Fu16, 0x03E0, 0x7C00, 0x801F, 0xFFFF] {
+            let rgba = bgr555_to_rgba(word, Alpha555Policy::TopBitAlpha);
+            assert_eq!(rgba8_to_bgr555(rgba, Alpha555Policy::TopBitAlpha), word);
+        }
+    }
 }
 
 pub mod dxt;
 pub use dxt::{decode_dxt, decode_masked, is_contiguous, rgb565_to_rgba, ChannelMasks, DxtFormat};
+
+pub mod planar;
+pub use planar::{pack_planar_tile_8x8_into, unpack_planar_tile_8x8_into};

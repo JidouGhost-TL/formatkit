@@ -41,6 +41,47 @@ impl PaddingSummary {
     }
 }
 
+/// Trailing uniform padding region located at the end of a byte slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TrailingPadding {
+    /// Byte offset where the trailing padding region begins.
+    pub start_offset: usize,
+    /// Classification and byte length of the trailing padding region.
+    pub summary: PaddingSummary,
+}
+
+/// Detect the longest trailing uniform single-byte padding run at the end of `bytes`.
+///
+/// Scans backward from the end of `bytes` to find the longest contiguous run of
+/// identical bytes (`0x00` yields [`PaddingKind::AllZero`], any other byte `b`
+/// yields [`PaddingKind::RepeatedByte`]).
+///
+/// Returns `None` if `min_bytes == 0`, `bytes` is empty, or the trailing run is
+/// shorter than `min_bytes`.
+#[must_use]
+pub fn detect_trailing_padding(bytes: &[u8], min_bytes: usize) -> Option<TrailingPadding> {
+    if min_bytes == 0 || bytes.len() < min_bytes {
+        return None;
+    }
+    let fill = *bytes.last()?;
+    let run_len = bytes.iter().rev().take_while(|&&b| b == fill).count();
+    if run_len < min_bytes {
+        return None;
+    }
+    let kind = if fill == 0 {
+        PaddingKind::AllZero
+    } else {
+        PaddingKind::RepeatedByte(fill)
+    };
+    Some(TrailingPadding {
+        start_offset: bytes.len() - run_len,
+        summary: PaddingSummary {
+            kind,
+            byte_len: run_len as u64,
+        },
+    })
+}
+
 /// Classify `bytes` as a uniform padding region if its length is at least
 /// `min_bytes` (and non-empty).
 ///
@@ -311,5 +352,51 @@ mod tests {
         let err2 = classify_padding_source(&double_after, 16, &mut work2).unwrap_err();
         assert_eq!(err2, Error::Malformed("changed after read".into()));
         assert_eq!(double_after.verification_calls(), 2);
+    }
+
+    #[test]
+    fn detects_trailing_zero_and_repeated_byte_padding() {
+        let mut with_zeros = vec![0x11, 0x22, 0x33];
+        with_zeros.extend_from_slice(&[0x00; 16]);
+        assert_eq!(
+            detect_trailing_padding(&with_zeros, 8),
+            Some(TrailingPadding {
+                start_offset: 3,
+                summary: PaddingSummary {
+                    kind: PaddingKind::AllZero,
+                    byte_len: 16,
+                },
+            })
+        );
+
+        let mut with_ff = vec![0x00, 0x00, 0xAA];
+        with_ff.extend_from_slice(&[0xFF; 5]);
+        assert_eq!(
+            detect_trailing_padding(&with_ff, 5),
+            Some(TrailingPadding {
+                start_offset: 3,
+                summary: PaddingSummary {
+                    kind: PaddingKind::RepeatedByte(0xFF),
+                    byte_len: 5,
+                },
+            })
+        );
+
+        // Entire slice uniform gives start_offset 0.
+        assert_eq!(
+            detect_trailing_padding(&[0xEE; 4], 4),
+            Some(TrailingPadding {
+                start_offset: 0,
+                summary: PaddingSummary {
+                    kind: PaddingKind::RepeatedByte(0xEE),
+                    byte_len: 4,
+                },
+            })
+        );
+
+        // Short runs, empty slices, and min_bytes == 0 return None.
+        assert_eq!(detect_trailing_padding(&with_ff, 6), None);
+        assert_eq!(detect_trailing_padding(&[], 1), None);
+        assert_eq!(detect_trailing_padding(&[0x00; 8], 0), None);
     }
 }

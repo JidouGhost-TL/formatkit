@@ -341,3 +341,81 @@ mod crc16_tests {
         assert_eq!(crc.finish(), params.compute(b"abcdef"));
     }
 }
+
+/// Wrapping 8-bit sum of bytes starting from `seed`.
+pub fn sum_bytes_u8(bytes: &[u8], seed: u8) -> u8 {
+    bytes.iter().fold(seed, |acc, &b| acc.wrapping_add(b))
+}
+
+/// Wrapping 16-bit sum of individual bytes starting from `seed`.
+pub fn sum_bytes_u16(bytes: &[u8], seed: u16) -> u16 {
+    bytes
+        .iter()
+        .fold(seed, |acc, &b| acc.wrapping_add(u16::from(b)))
+}
+
+/// Wrapping 32-bit sum of individual bytes starting from `seed`.
+pub fn sum_bytes_u32(bytes: &[u8], seed: u32) -> u32 {
+    bytes
+        .iter()
+        .fold(seed, |acc, &b| acc.wrapping_add(u32::from(b)))
+}
+
+/// Wrapping 16-bit sum of little-endian `u16` words (ignoring any trailing odd byte).
+pub fn sum_u16_le_words(bytes: &[u8], seed: u16) -> u16 {
+    bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .fold(seed, |acc, &w| acc.wrapping_add(u16::from_le_bytes(w)))
+}
+
+/// Wrapping 16-bit sum of big-endian `u16` words (ignoring any trailing odd byte).
+pub fn sum_u16_be_words(bytes: &[u8], seed: u16) -> u16 {
+    bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .fold(seed, |acc, &w| acc.wrapping_add(u16::from_be_bytes(w)))
+}
+
+/// Wrapping 32-bit sum of little-endian `u32` words (ignoring any trailing `< 4` bytes).
+pub fn sum_u32_le_words(bytes: &[u8], seed: u32) -> u32 {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .fold(seed, |acc, &w| acc.wrapping_add(u32::from_le_bytes(w)))
+}
+
+/// Bitwise XOR of bytes starting from `seed`.
+pub fn xor_bytes_u8(bytes: &[u8], seed: u8) -> u8 {
+    bytes.iter().fold(seed, |acc, &b| acc ^ b)
+}
+
+/// Bitwise XOR of little-endian `u16` words starting from `seed` (ignoring any trailing odd byte).
+pub fn xor_u16_le_words(bytes: &[u8], seed: u16) -> u16 {
+    bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .fold(seed, |acc, &w| acc ^ u16::from_le_bytes(w))
+}
+
+#[cfg(test)]
+mod arithmetic_checksum_tests {
+    use super::*;
+
+    #[test]
+    fn wrapping_sums_and_xors() {
+        let data = [0x01, 0x02, 0x03, 0x04, 0xFF];
+        assert_eq!(sum_bytes_u8(&data, 0), 0x09);
+        assert_eq!(sum_bytes_u16(&data, 1), 0x010A);
+        assert_eq!(sum_bytes_u32(&data, 0), 0x0109);
+        assert_eq!(sum_u16_le_words(&data, 0), 0x0201u16.wrapping_add(0x0403));
+        assert_eq!(sum_u16_be_words(&data, 0), 0x0102u16.wrapping_add(0x0304));
+        assert_eq!(sum_u32_le_words(&data, 0), 0x0403_0201);
+        assert_eq!(xor_bytes_u8(&data, 0), 0xFB);
+        assert_eq!(xor_u16_le_words(&data, 0), 0x0201 ^ 0x0403);
+    }
+}

@@ -106,6 +106,9 @@ pub use bit_rows::MsbFirst1bppRows;
 
 pub mod checksum;
 
+pub mod pointer_table;
+pub use pointer_table::{scan_u32_pointer_tables, PointerTable};
+
 pub mod math;
 
 pub mod topology;

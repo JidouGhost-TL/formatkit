@@ -124,7 +124,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "formatkit"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "formatkit-archive",
  "formatkit-catalog",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "formatkit-archive"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "formatkit-catalog",
  "formatkit-core",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "formatkit-catalog"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "formatkit-core",
  "proptest",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "formatkit-codec"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "formatkit-core",
  "lzma-rs",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "formatkit-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "sha2",
  "thiserror",
@@ -178,11 +178,11 @@ dependencies = [
 
 [[package]]
 name = "formatkit-corpus"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "formatkit-corpus-test"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "formatkit-core",
  "formatkit-corpus",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "formatkit-layout"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "formatkit-core",
  "proptest",
@@ -203,21 +203,21 @@ dependencies = [
 
 [[package]]
 name = "formatkit-patch"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "formatkit-core",
 ]
 
 [[package]]
 name = "formatkit-pixel"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "formatkit-core",
 ]
 
 [[package]]
 name = "formatkit-runtime"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "formatkit-catalog",
  "formatkit-core",

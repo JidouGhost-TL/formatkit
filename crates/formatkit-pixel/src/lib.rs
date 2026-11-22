@@ -21,6 +21,15 @@ pub enum NibbleOrder {
     HighFirst,
 }
 
+/// Bit ordering within a byte for 1bpp and 2bpp packed pixel rows/glyphs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitOrder {
+    /// Least-significant bit(s) hold the first (leftmost) pixel.
+    LsbFirst,
+    /// Most-significant bit(s) hold the first (leftmost) pixel.
+    MsbFirst,
+}
+
 /// Out-of-range index handling when packing 4-bit palette indices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexPolicy {
@@ -131,6 +140,58 @@ pub fn pack_4bpp_into(
             NibbleOrder::LowFirst => n0 | (n1 << 4),
             NibbleOrder::HighFirst => (n0 << 4) | n1,
         };
+    }
+    Ok(())
+}
+
+/// Unpack 1-bit-per-pixel data directly into `out` (`0` or `1` per pixel) without allocation.
+pub fn unpack_1bpp_into(packed: &[u8], order: BitOrder, out: &mut [u8]) -> Result<(), PackError> {
+    let required_bytes = out.len().div_ceil(8);
+    if packed.len() < required_bytes {
+        return Err(PackError::LengthMismatch {
+            expected: required_bytes,
+            actual: packed.len(),
+        });
+    }
+    let mut dst = 0;
+    for &b in &packed[..required_bytes] {
+        for bit in 0..8 {
+            if dst >= out.len() {
+                break;
+            }
+            let shift = match order {
+                BitOrder::LsbFirst => bit,
+                BitOrder::MsbFirst => 7 - bit,
+            };
+            out[dst] = (b >> shift) & 1;
+            dst += 1;
+        }
+    }
+    Ok(())
+}
+
+/// Unpack 2-bit-per-pixel data directly into `out` (`0..=3` per pixel) without allocation.
+pub fn unpack_2bpp_into(packed: &[u8], order: BitOrder, out: &mut [u8]) -> Result<(), PackError> {
+    let required_bytes = out.len().div_ceil(4);
+    if packed.len() < required_bytes {
+        return Err(PackError::LengthMismatch {
+            expected: required_bytes,
+            actual: packed.len(),
+        });
+    }
+    let mut dst = 0;
+    for &b in &packed[..required_bytes] {
+        for slot in 0..4 {
+            if dst >= out.len() {
+                break;
+            }
+            let shift = match order {
+                BitOrder::LsbFirst => slot * 2,
+                BitOrder::MsbFirst => (3 - slot) * 2,
+            };
+            out[dst] = (b >> shift) & 0x03;
+            dst += 1;
+        }
     }
     Ok(())
 }
@@ -393,6 +454,21 @@ mod tests {
             unpack_4bpp_into(&[0x21], NibbleOrder::LowFirst, &mut odd_px),
             Err(PackError::LengthMismatch { expected: 2, actual: 1 })
         );
+    }
+
+    #[test]
+    fn unpack_1bpp_and_2bpp_lsb_and_msb_first() {
+        let mut p1 = [0u8; 8];
+        unpack_1bpp_into(&[0b1011_0010], BitOrder::MsbFirst, &mut p1).unwrap();
+        assert_eq!(p1, [1, 0, 1, 1, 0, 0, 1, 0]);
+        unpack_1bpp_into(&[0b1011_0010], BitOrder::LsbFirst, &mut p1).unwrap();
+        assert_eq!(p1, [0, 1, 0, 0, 1, 1, 0, 1]);
+
+        let mut p2 = [0u8; 4];
+        unpack_2bpp_into(&[0b11_10_01_00], BitOrder::MsbFirst, &mut p2).unwrap();
+        assert_eq!(p2, [3, 2, 1, 0]);
+        unpack_2bpp_into(&[0b11_10_01_00], BitOrder::LsbFirst, &mut p2).unwrap();
+        assert_eq!(p2, [0, 1, 2, 3]);
     }
 }
 

@@ -1024,5 +1024,11 @@ pub use glyph::{
     unpack_glyph_4bpp,
 };
 
+pub mod morton;
+pub use morton::{morton_index, swizzle_morton, unswizzle_morton, MortonAxisOrder};
+
+pub mod palette;
+pub use palette::{grayscale_palette, nearest_palette_index, quantize_rgba, PaletteDistanceMetric};
+
 pub mod planar;
 pub use planar::{pack_planar_tile_8x8_into, unpack_planar_tile_8x8_into};

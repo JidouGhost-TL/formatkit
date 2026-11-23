@@ -200,6 +200,224 @@ impl<'a> MsbBitCursor<'a> {
     }
 }
 
+/// A contiguous, least-significant-bit-first bitstream writer.
+///
+/// Mirror of [`LsbBitCursor`]: bits are packed into each byte from bit 0
+/// upward. Widths `0..=32` are supported. Any partial final byte is
+/// zero-padded when [`Self::align_zero`] or [`Self::finish`] is called.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LsbBitWriter {
+    bytes: Vec<u8>,
+    accumulator: u64,
+    buffered_bits: u32,
+    written_bits: u64,
+}
+
+impl LsbBitWriter {
+    /// Create an empty LSB-first bitstream writer.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            accumulator: 0,
+            buffered_bits: 0,
+            written_bits: 0,
+        }
+    }
+
+    /// Create an empty writer pre-allocated for at least `capacity` bytes.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(capacity),
+            accumulator: 0,
+            buffered_bits: 0,
+            written_bits: 0,
+        }
+    }
+
+    /// Append a single bit (`false` = `0`, `true` = `1`).
+    pub fn write_bit(&mut self, bit: bool) {
+        if bit {
+            self.accumulator |= 1u64 << self.buffered_bits;
+        }
+        self.buffered_bits += 1;
+        self.written_bits += 1;
+        if self.buffered_bits == 8 {
+            self.bytes.push((self.accumulator & 0xff) as u8);
+            self.accumulator = 0;
+            self.buffered_bits = 0;
+        }
+    }
+
+    /// Append the lowest `width` bits of `value` LSB first.
+    ///
+    /// Returns [`crate::Error::InvalidField`] without mutating the writer when
+    /// `width > 32`.
+    pub fn write_bits(&mut self, value: u32, width: u32) -> crate::Result<()> {
+        if width > 32 {
+            return Err(crate::Error::InvalidField {
+                what: "bit width",
+                value: u64::from(width),
+            });
+        }
+        if width == 0 {
+            return Ok(());
+        }
+        let mask = if width == 32 {
+            u64::from(u32::MAX)
+        } else {
+            (1u64 << width) - 1
+        };
+        self.accumulator |= (u64::from(value) & mask) << self.buffered_bits;
+        self.buffered_bits += width;
+        self.written_bits += u64::from(width);
+        while self.buffered_bits >= 8 {
+            self.bytes.push((self.accumulator & 0xff) as u8);
+            self.accumulator >>= 8;
+            self.buffered_bits -= 8;
+        }
+        Ok(())
+    }
+
+    /// Zero-pad the current partial byte to a byte boundary.
+    ///
+    /// Does nothing if the writer is already byte-aligned.
+    pub fn align_zero(&mut self) {
+        if self.buffered_bits > 0 {
+            let pad = 8 - self.buffered_bits;
+            self.bytes.push((self.accumulator & 0xff) as u8);
+            self.accumulator = 0;
+            self.buffered_bits = 0;
+            self.written_bits += u64::from(pad);
+        }
+    }
+
+    /// Total number of bits written so far, including any explicit alignment padding.
+    #[must_use]
+    pub const fn bit_len(&self) -> u64 {
+        self.written_bits
+    }
+
+    /// Flush any partial final byte with zero padding and return the encoded bytes.
+    #[must_use]
+    pub fn finish(mut self) -> Vec<u8> {
+        self.align_zero();
+        self.bytes
+    }
+}
+
+/// A contiguous, most-significant-bit-first bitstream writer.
+///
+/// Mirror of [`MsbBitCursor`]: bits are packed into each byte from bit 7
+/// downward. Widths `0..=32` are supported. Any partial final byte is
+/// zero-padded in its low bits when [`Self::align_zero`] or [`Self::finish`] is
+/// called.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MsbBitWriter {
+    bytes: Vec<u8>,
+    accumulator: u64,
+    buffered_bits: u32,
+    written_bits: u64,
+}
+
+impl MsbBitWriter {
+    /// Create an empty MSB-first bitstream writer.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            accumulator: 0,
+            buffered_bits: 0,
+            written_bits: 0,
+        }
+    }
+
+    /// Create an empty writer pre-allocated for at least `capacity` bytes.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(capacity),
+            accumulator: 0,
+            buffered_bits: 0,
+            written_bits: 0,
+        }
+    }
+
+    /// Append a single bit (`false` = `0`, `true` = `1`).
+    pub fn write_bit(&mut self, bit: bool) {
+        self.accumulator = (self.accumulator << 1) | u64::from(bit);
+        self.buffered_bits += 1;
+        self.written_bits += 1;
+        if self.buffered_bits == 8 {
+            self.bytes.push((self.accumulator & 0xff) as u8);
+            self.accumulator = 0;
+            self.buffered_bits = 0;
+        }
+    }
+
+    /// Append the lowest `width` bits of `value` MSB first (bit `width - 1` down to bit `0`).
+    ///
+    /// Returns [`crate::Error::InvalidField`] without mutating the writer when
+    /// `width > 32`.
+    pub fn write_bits(&mut self, value: u32, width: u32) -> crate::Result<()> {
+        if width > 32 {
+            return Err(crate::Error::InvalidField {
+                what: "bit width",
+                value: u64::from(width),
+            });
+        }
+        if width == 0 {
+            return Ok(());
+        }
+        let mask = if width == 32 {
+            u64::from(u32::MAX)
+        } else {
+            (1u64 << width) - 1
+        };
+        self.accumulator = (self.accumulator << width) | (u64::from(value) & mask);
+        self.buffered_bits += width;
+        self.written_bits += u64::from(width);
+        while self.buffered_bits >= 8 {
+            self.buffered_bits -= 8;
+            self.bytes
+                .push(((self.accumulator >> self.buffered_bits) & 0xff) as u8);
+        }
+        self.accumulator &= if self.buffered_bits == 0 {
+            0
+        } else {
+            (1u64 << self.buffered_bits) - 1
+        };
+        Ok(())
+    }
+
+    /// Zero-pad the current partial byte to a byte boundary.
+    ///
+    /// Does nothing if the writer is already byte-aligned.
+    pub fn align_zero(&mut self) {
+        if self.buffered_bits > 0 {
+            let pad = 8 - self.buffered_bits;
+            self.bytes.push(((self.accumulator << pad) & 0xff) as u8);
+            self.accumulator = 0;
+            self.buffered_bits = 0;
+            self.written_bits += u64::from(pad);
+        }
+    }
+
+    /// Total number of bits written so far, including any explicit alignment padding.
+    #[must_use]
+    pub const fn bit_len(&self) -> u64 {
+        self.written_bits
+    }
+
+    /// Flush any partial final byte with zero padding and return the encoded bytes.
+    #[must_use]
+    pub fn finish(mut self) -> Vec<u8> {
+        self.align_zero();
+        self.bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +525,71 @@ mod tests {
         cursor.align_to_byte();
         assert_eq!(cursor.read_aligned_bytes(1), Some(&bytes[4..5]));
         assert_eq!(cursor.remaining_bits(), 0);
+    }
+
+    #[test]
+    fn lsb_writer_round_trips_with_cursor_across_widths_and_alignment() {
+        let mut w = LsbBitWriter::new();
+        assert_eq!(w.bit_len(), 0);
+        w.write_bits(0, 0).unwrap();
+        assert_eq!(w.bit_len(), 0);
+        assert!(w.write_bits(1, 33).is_err());
+        assert_eq!(w.bit_len(), 0);
+
+        w.write_bit(true);
+        w.write_bit(false);
+        w.write_bit(true);
+        assert_eq!(w.bit_len(), 3);
+        w.write_bits(0xDEAD_BEEF, 32).unwrap();
+        assert_eq!(w.bit_len(), 35);
+        w.align_zero();
+        assert_eq!(w.bit_len(), 40);
+        w.align_zero();
+        assert_eq!(w.bit_len(), 40);
+        w.write_bits(0b1_0110, 5).unwrap();
+        assert_eq!(w.bit_len(), 45);
+        let bytes = w.finish();
+        assert_eq!(bytes.len(), 6);
+
+        let mut c = LsbBitCursor::new(&bytes);
+        assert_eq!(c.read(1), Some(1));
+        assert_eq!(c.read(1), Some(0));
+        assert_eq!(c.read(1), Some(1));
+        assert_eq!(c.read(32), Some(0xDEAD_BEEF));
+        assert_eq!(c.read(5), Some(0));
+        assert_eq!(c.read(5), Some(0b1_0110));
+        assert_eq!(c.read(3), Some(0));
+        assert_eq!(c.remaining_bits(), 0);
+    }
+
+    #[test]
+    fn msb_writer_round_trips_with_cursor_across_widths_and_alignment() {
+        let mut w = MsbBitWriter::with_capacity(8);
+        assert_eq!(w.bit_len(), 0);
+        w.write_bits(0, 0).unwrap();
+        assert!(w.write_bits(1, 33).is_err());
+        assert_eq!(w.bit_len(), 0);
+
+        w.write_bit(true);
+        w.write_bit(false);
+        w.write_bit(true);
+        w.write_bits(0xCAFE_BABE, 32).unwrap();
+        assert_eq!(w.bit_len(), 35);
+        w.align_zero();
+        assert_eq!(w.bit_len(), 40);
+        w.write_bits(0b1_0110, 5).unwrap();
+        assert_eq!(w.bit_len(), 45);
+        let bytes = w.finish();
+        assert_eq!(bytes.len(), 6);
+
+        let mut c = MsbBitCursor::new(&bytes);
+        assert_eq!(c.read(1), Some(1));
+        assert_eq!(c.read(1), Some(0));
+        assert_eq!(c.read(1), Some(1));
+        assert_eq!(c.read(32), Some(0xCAFE_BABE));
+        assert_eq!(c.read(5), Some(0));
+        assert_eq!(c.read(5), Some(0b1_0110));
+        assert_eq!(c.read(3), Some(0));
+        assert_eq!(c.remaining_bits(), 0);
     }
 }

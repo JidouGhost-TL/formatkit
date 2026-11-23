@@ -20,7 +20,7 @@ mod bits;
 pub use bits::{Bit, BitRange, BitValueTooWide};
 
 mod bit_cursor;
-pub use bit_cursor::{LsbBitCursor, MsbBitCursor};
+pub use bit_cursor::{LsbBitCursor, LsbBitWriter, MsbBitCursor, MsbBitWriter};
 
 mod interleaved_bits;
 pub use interleaved_bits::{
@@ -107,7 +107,8 @@ pub use bit_rows::MsbFirst1bppRows;
 
 pub mod checksum;
 pub use checksum::{
-    compute_with_zeroed_range, sum_bytes_u16, xor_bytes, FoldChecksum, FoldOp, FoldUnit,
+    compute_with_zeroed_range, sum_bytes_u16, xor_bytes, Crc32, Crc32Params, FoldChecksum, FoldOp,
+    FoldUnit,
 };
 
 pub mod pointer_table;

@@ -123,7 +123,172 @@ impl Crc16 {
 
 const CRC32_ISO_HDLC_POLYNOMIAL: u32 = 0xEDB8_8320;
 const CRC32_MPEG2_POLYNOMIAL: u32 = 0x04C1_1DB7;
+const CRC32C_POLYNOMIAL: u32 = 0x82F6_3B78;
 const ADLER32_MODULUS: u32 = 65_521;
+
+/// Parameters for a 32-bit CRC with matching input/output bit orientation.
+///
+/// Reflected algorithms supply the reflected polynomial (for example
+/// `0xEDB8_8320`), while MSB-first algorithms supply the normal polynomial
+/// (for example `0x04C1_1DB7`). Byte swapping is final presentation only,
+/// never applied between updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Crc32Params {
+    /// Normal (when `reflected == false`) or reflected (when `reflected == true`) polynomial.
+    pub polynomial: u32,
+    /// Initial shift-register value.
+    pub seed: u32,
+    /// Final XOR mask applied on completion.
+    pub xor_out: u32,
+    /// Whether input bytes and shift-register state are processed LSB first.
+    pub reflected: bool,
+    /// Whether the finalized 32-bit value has its byte order reversed.
+    pub swap_bytes: bool,
+}
+
+impl Crc32Params {
+    /// CRC-32/ISO-HDLC (Ethernet, PKZIP, PNG, gzip). Check value: `0xCBF4_3926`.
+    pub const ISO_HDLC: Self = Self {
+        polynomial: CRC32_ISO_HDLC_POLYNOMIAL,
+        seed: 0xFFFF_FFFF,
+        xor_out: 0xFFFF_FFFF,
+        reflected: true,
+        swap_bytes: false,
+    };
+
+    /// CRC-32/JAMCRC (reflected ISO-HDLC without final complement). Check value: `0x340B_C6D9`.
+    pub const JAMCRC: Self = Self {
+        polynomial: CRC32_ISO_HDLC_POLYNOMIAL,
+        seed: 0xFFFF_FFFF,
+        xor_out: 0x0000_0000,
+        reflected: true,
+        swap_bytes: false,
+    };
+
+    /// CRC-32/MPEG-2 (MSB-first, no final XOR). Check value: `0x0376_E6E7`.
+    pub const MPEG2: Self = Self {
+        polynomial: CRC32_MPEG2_POLYNOMIAL,
+        seed: 0xFFFF_FFFF,
+        xor_out: 0x0000_0000,
+        reflected: false,
+        swap_bytes: false,
+    };
+
+    /// CRC-32/BZIP2 (MSB-first with final complement). Check value: `0xFC89_1918`.
+    pub const BZIP2: Self = Self {
+        polynomial: CRC32_MPEG2_POLYNOMIAL,
+        seed: 0xFFFF_FFFF,
+        xor_out: 0xFFFF_FFFF,
+        reflected: false,
+        swap_bytes: false,
+    };
+
+    /// CRC-32/ISCSI (Castagnoli / CRC-32C). Check value: `0xE306_9283`.
+    pub const CRC32C: Self = Self {
+        polynomial: CRC32C_POLYNOMIAL,
+        seed: 0xFFFF_FFFF,
+        xor_out: 0xFFFF_FFFF,
+        reflected: true,
+        swap_bytes: false,
+    };
+
+    /// Compute the finalized CRC-32 over `bytes`.
+    pub fn compute(self, bytes: &[u8]) -> u32 {
+        let mut state = Crc32::new(self);
+        state.update(bytes);
+        state.finalize()
+    }
+
+    /// Compute the finalized CRC-32 over `bytes` with `zero_range` treated as zero bytes.
+    ///
+    /// Validates `zero_range.start <= zero_range.end && zero_range.end <= bytes.len()`
+    /// without allocating a temporary copy of `bytes`.
+    pub fn compute_with_zeroed_range(
+        self,
+        bytes: &[u8],
+        zero_range: std::ops::Range<usize>,
+    ) -> crate::Result<u32> {
+        if zero_range.start > zero_range.end {
+            return Err(crate::Error::InvalidField {
+                what: "checksum zero range start",
+                value: zero_range.start as u64,
+            });
+        }
+        if zero_range.end > bytes.len() {
+            return Err(crate::Error::InvalidField {
+                what: "checksum zero range end",
+                value: zero_range.end as u64,
+            });
+        }
+        let mut state = Crc32::new(self);
+        state.update(&bytes[..zero_range.start]);
+        let zeros = [0u8; 64];
+        let mut remaining = zero_range.len();
+        while remaining > 0 {
+            let chunk = remaining.min(zeros.len());
+            state.update(&zeros[..chunk]);
+            remaining -= chunk;
+        }
+        state.update(&bytes[zero_range.end..]);
+        Ok(state.finalize())
+    }
+}
+
+/// Incremental CRC-32 arithmetic. Coverage and stored-byte order are owner policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Crc32 {
+    params: Crc32Params,
+    state: u32,
+}
+
+impl Crc32 {
+    /// Start an incremental CRC-32 calculation with `params`.
+    pub const fn new(params: Crc32Params) -> Self {
+        Self {
+            state: params.seed,
+            params,
+        }
+    }
+
+    /// Incorporate another byte sequence into the running CRC-32 state.
+    pub fn update(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            if self.params.reflected {
+                self.state ^= u32::from(byte);
+                for _ in 0..8 {
+                    let mask = (self.state & 1).wrapping_neg();
+                    self.state = (self.state >> 1) ^ (self.params.polynomial & mask);
+                }
+            } else {
+                self.state ^= u32::from(byte) << 24;
+                for _ in 0..8 {
+                    let mask = (self.state >> 31).wrapping_neg();
+                    self.state = (self.state << 1) ^ (self.params.polynomial & mask);
+                }
+            }
+        }
+    }
+
+    /// Unfinalized shift-register state, useful for explicit chained records.
+    pub const fn raw_state(self) -> u32 {
+        self.state
+    }
+
+    /// Finalize the CRC-32 by applying `xor_out` and optional byte swap.
+    pub const fn finalize(self) -> u32 {
+        let value = self.state ^ self.params.xor_out;
+        if self.params.swap_bytes {
+            value.swap_bytes()
+        } else {
+            value
+        }
+    }
+
+    /// Alias for [`Self::finalize`], symmetric with [`Crc16::finish`].
+    pub const fn finish(self) -> u32 {
+        self.finalize()
+    }
+}
 
 /// Streaming reflected CRC-32/ISO-HDLC state.
 ///
@@ -363,6 +528,56 @@ mod crc16_tests {
         crc.update(b"def");
         assert_eq!(crc.finish(), chained);
         assert_eq!(crc.finish(), params.compute(b"abcdef"));
+    }
+
+    #[test]
+    fn crc32_presets_streaming_and_zeroed_range() {
+        for (params, check) in [
+            (Crc32Params::ISO_HDLC, 0xCBF4_3926),
+            (Crc32Params::JAMCRC, 0x340B_C6D9),
+            (Crc32Params::MPEG2, 0x0376_E6E7),
+            (Crc32Params::BZIP2, 0xFC89_1918),
+            (Crc32Params::CRC32C, 0xE306_9283),
+        ] {
+            assert_eq!(params.compute(b"123456789"), check);
+            for split in 0..=9 {
+                let mut state = Crc32::new(params);
+                state.update(&b"123456789"[..split]);
+                state.update(&[]);
+                state.update(&b"123456789"[split..]);
+                assert_eq!(state.finalize(), check);
+                assert_eq!(state.finish(), check);
+                assert_eq!(state.raw_state() ^ params.xor_out, check);
+            }
+        }
+
+        let buf = [1u8, 2, 0xAA, 0xBB, 0xCC, 0xDD, 7, 8];
+        let mut expected = buf;
+        expected[2..6].fill(0);
+        assert_eq!(
+            Crc32Params::ISO_HDLC
+                .compute_with_zeroed_range(&buf, 2..6)
+                .unwrap(),
+            Crc32Params::ISO_HDLC.compute(&expected)
+        );
+        assert_eq!(
+            Crc32Params::CRC32C
+                .compute_with_zeroed_range(&buf, 4..4)
+                .unwrap(),
+            Crc32Params::CRC32C.compute(&buf)
+        );
+        assert!(Crc32Params::ISO_HDLC
+            .compute_with_zeroed_range(&buf, std::ops::Range { start: 5, end: 3 })
+            .is_err());
+        assert!(Crc32Params::ISO_HDLC
+            .compute_with_zeroed_range(&buf, 0..9)
+            .is_err());
+
+        let swapped = Crc32Params {
+            swap_bytes: true,
+            ..Crc32Params::ISO_HDLC
+        };
+        assert_eq!(swapped.compute(b"123456789"), 0xCBF4_3926u32.swap_bytes());
     }
 }
 

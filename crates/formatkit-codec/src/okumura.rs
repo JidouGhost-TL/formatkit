@@ -1,3 +1,5 @@
+//! Okumura ring-buffer LZSS decompression and compression.
+
 use crate::DecodeOutcome;
 
 /// Okumura LZSS parameters shared by every variant.
@@ -48,7 +50,9 @@ pub enum OkumuraDecodeError {
 /// codec grammar merely to validate their trailing-byte policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OkumuraBoundaryOutcome {
+    /// Decoded bytes and exact consumed source extent.
     pub outcome: DecodeOutcome,
+    /// Whether the final token completed an 8-token flag group.
     pub completed_flag_group: bool,
     /// Number of literal and back-reference tokens consumed by the stream.
     pub token_count: usize,

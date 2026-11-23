@@ -1,5 +1,6 @@
 //! Container-independent palette, packed-pixel and block-codec mechanics.
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 /// Bits per palette index in a CLUT (paletted) image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,15 +44,36 @@ pub enum IndexPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackError {
     /// Output or input slice length did not match the required length.
-    LengthMismatch { expected: usize, actual: usize },
+    LengthMismatch {
+        /// Required slice length in bytes or pixels.
+        expected: usize,
+        /// Actual slice length supplied by the caller.
+        actual: usize,
+    },
     /// An index exceeded the maximum allowed by the target bit depth under [`IndexPolicy::Reject`].
-    IndexOutOfRange { index: usize, value: u8 },
+    IndexOutOfRange {
+        /// Position of the offending index in the input slice.
+        index: usize,
+        /// Out-of-range index value.
+        value: u8,
+    },
     /// A planar tile bitplane count is not supported.
-    UnsupportedPlanes { planes: u8 },
+    UnsupportedPlanes {
+        /// Unsupported bitplane count.
+        planes: u8,
+    },
     /// A layout parameter (dimension, stride, or scale) was invalid or overflowed.
-    InvalidLayout { reason: &'static str },
+    InvalidLayout {
+        /// Short static description of the layout error.
+        reason: &'static str,
+    },
     /// A requested output buffer size exceeded an explicit caller limit.
-    LimitExceeded { requested: usize, limit: usize },
+    LimitExceeded {
+        /// Requested buffer size in bytes or pixels.
+        requested: usize,
+        /// Caller-imposed upper bound.
+        limit: usize,
+    },
 }
 
 impl core::fmt::Display for PackError {

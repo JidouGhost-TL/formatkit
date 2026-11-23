@@ -351,16 +351,34 @@ pub fn decode_pcx_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
     }
 
     let rgba_len = Image::rgba_len(width, height)?;
+    let available_stream = bytes.len() - PCX_HEADER_LEN;
+    if encoding == 0 {
+        if (available_stream as u64) < total_scanline_bytes {
+            return Err(Error::Truncated {
+                offset: PCX_HEADER_LEN,
+                needed: total_scanline_bytes.min(usize::MAX as u64) as usize,
+                available: available_stream,
+            });
+        }
+    } else if available_stream == 0 {
+        return Err(Error::Truncated {
+            offset: PCX_HEADER_LEN,
+            needed: 1,
+            available: 0,
+        });
+    }
+
+    const INITIAL_DECODE_CAP: usize = 64 * 1024;
     let mut scanline_buf = vec![0u8; scanline_stride];
     let mut decoded_indices = if bits_per_pixel == 8 && color_planes == 1 {
-        Vec::with_capacity(pixels as usize)
+        Vec::with_capacity((pixels as usize).min(INITIAL_DECODE_CAP))
     } else {
         Vec::new()
     };
     let mut rgba = if bits_per_pixel == 8 && color_planes == 1 {
         Vec::new()
     } else {
-        Vec::with_capacity(rgba_len)
+        Vec::with_capacity(rgba_len.min(INITIAL_DECODE_CAP))
     };
 
     let mut pos = PCX_HEADER_LEN;
@@ -762,6 +780,38 @@ mod tests {
         let trunc_rle = build_raw_pcx(5, 1, 8, 1, 2, 1, 2, &[0u8; 48], &[0xC2], None);
         assert!(matches!(
             decode_pcx_rgba(&trunc_rle, 16),
+            Err(Error::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn crafted_128_byte_4096x4096_pcx_fails_truncated_fast() {
+        for encoding in [0u8, 1u8] {
+            for (bpp, planes) in [(8u8, 1u8), (8, 3)] {
+                let crafted = build_raw_pcx(
+                    5,
+                    encoding,
+                    bpp,
+                    planes,
+                    4096,
+                    4096,
+                    4096,
+                    &[0u8; 48],
+                    &[],
+                    None,
+                );
+                assert_eq!(crafted.len(), PCX_HEADER_LEN);
+                assert!(matches!(
+                    decode_pcx_rgba(&crafted, 4096 * 4096),
+                    Err(Error::Truncated { .. })
+                ));
+            }
+        }
+
+        // Even with 1 byte of RLE payload, decoding fails truncated without a 64 MB pre-allocation.
+        let crafted_129 = build_raw_pcx(5, 1, 8, 3, 4096, 4096, 4096, &[0u8; 48], &[0x01], None);
+        assert!(matches!(
+            decode_pcx_rgba(&crafted_129, 4096 * 4096),
             Err(Error::Truncated { .. })
         ));
     }

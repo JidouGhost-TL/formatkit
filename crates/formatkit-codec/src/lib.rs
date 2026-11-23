@@ -1,5 +1,6 @@
 //! Reusable bounded compression codecs; no platform catalog or envelope policy.
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 /// Bytes decoded from one framed stream and the exact number of source bytes
 /// consumed by that stream.
@@ -28,7 +29,9 @@ pub mod rnc;
 pub use rnc::*;
 
 pub mod counted_lsb;
+#[cfg(feature = "dds")]
 pub mod dds;
+#[cfg(feature = "dds")]
 pub use dds::{
     encode_dds_level, encode_dds_like, patch_dds_rects, Dds, DdsFormat, DdsPatch, DdsPatchLevel,
     DdsRect, DDS_ENCODER_ID,

@@ -8,6 +8,10 @@ repository.workspace = true
 readme.workspace = true
 description = "Checked bytes, bits, sources, budgets and shared binary-data values"
 
+[features]
+default = ["shift-jis"]
+shift-jis = []
+
 [dependencies]
 thiserror.workspace = true
 sha2 = "0.10"

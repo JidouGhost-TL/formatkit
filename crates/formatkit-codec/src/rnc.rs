@@ -15,11 +15,17 @@ const IDENTIFY_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 /// Parsed fields from an `RNC\x02` data envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rnc2Header {
+    /// Declared uncompressed payload size in bytes.
     pub unpacked_size: u32,
+    /// Declared compressed payload size in bytes.
     pub packed_size: u32,
+    /// CRC-16/IBM over the uncompressed payload.
     pub unpacked_crc16: u16,
+    /// CRC-16/IBM over the compressed payload.
     pub packed_crc16: u16,
+    /// Extra safety margin for in-place decompression.
     pub leeway: u8,
+    /// Number of encoded chunks in the stream.
     pub chunks: u8,
 }
 

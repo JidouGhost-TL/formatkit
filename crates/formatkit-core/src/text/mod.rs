@@ -8,9 +8,12 @@
 
 use crate::{Error, Result};
 
+#[cfg(feature = "shift-jis")]
 mod shift_jis;
+#[cfg(feature = "shift-jis")]
 mod shift_jis_table;
 
+#[cfg(feature = "shift-jis")]
 pub use shift_jis::{
     classify_shift_jis_byte, decode_cp932, decode_cp932_lossy, decode_cp932_pair,
     decode_jis0208_pair, decode_jis_x_0201, decode_shift_jis_jis0208,

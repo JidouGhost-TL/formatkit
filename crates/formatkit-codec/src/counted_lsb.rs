@@ -24,29 +24,40 @@ fn tick(work: &mut WorkBudget) -> Result<()> {
         .ok_or_else(|| invalid("counted LSB nodes overflow"))?;
     work.charge(R::Nodes, 1)
 }
+/// Exact stream extents and token statistics observed while scanning or decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Extent {
+    /// Source bytes consumed from the input slice.
     pub consumed: usize,
+    /// Decoded bytes produced (or expected when scanning).
     pub produced: usize,
+    /// Number of unread control bits left in the final control byte.
     pub unused_control_bits: u8,
+    /// Raw value of the unread control bits in the final control byte.
     pub remaining_control: u8,
+    /// Counts of each of the four command categories observed.
     pub token_kinds: [u32; 4],
 }
+/// Decoded counted-LSB output paired with its extent and retained memory permit.
 pub struct Decoded {
     bytes: Vec<u8>,
     extent: Extent,
     resident: RetainedResidentPermit,
 }
 impl Decoded {
+    /// Borrow the decoded output bytes.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+    /// Return the stream extent and token statistics.
     pub fn extent(&self) -> Extent {
         self.extent
     }
+    /// Return the allocated backing capacity in bytes.
     pub fn capacity_bytes(&self) -> u64 {
         self.bytes.capacity() as u64
     }
+    /// Decompose into owned bytes, extent summary, and retained resident permit.
     pub fn into_parts(self) -> (Vec<u8>, Extent, RetainedResidentPermit) {
         (self.bytes, self.extent, self.resident)
     }

@@ -386,18 +386,24 @@ pub fn build_code_lengths(frequencies: &[u64], max_bits: u8) -> Result<Vec<u8>> 
 
         // Reduce Kraft sum if oversubscribed by lengthening the least-frequent
         // symbols that are still shorter than max_bits.
-        while kraft_sum(&leaf_depths) > limit {
+        let mut current = kraft_sum(&leaf_depths);
+        while current > limit {
+            let mut lengthened = false;
             for &idx in order.iter().rev() {
                 if leaf_depths[idx] < u32::from(max_bits) {
                     leaf_depths[idx] += 1;
+                    current -= 1u64 << (u32::from(max_bits) - leaf_depths[idx]);
+                    lengthened = true;
                     break;
                 }
+            }
+            if !lengthened {
+                break;
             }
         }
 
         // Fill any remaining Kraft slack by shortening the most-frequent symbols
         // whose weight increase fits inside the slack.
-        let mut current = kraft_sum(&leaf_depths);
         while current < limit {
             let slack = limit - current;
             let mut shortened = false;
@@ -503,6 +509,37 @@ mod tests {
                 .decode_symbols(&encoded, order, symbols.len())
                 .unwrap();
             assert_eq!(decoded, symbols);
+        }
+    }
+
+    #[test]
+    fn build_code_lengths_handles_large_skewed_alphabet_within_max_bits() {
+        // 256-symbol heavily skewed frequency distribution forcing deep natural tree
+        // and Kraft rebalancing down to max_bits = 12.
+        let mut freqs = vec![0u64; 256];
+        for (i, slot) in freqs.iter_mut().enumerate() {
+            *slot = if i < 60 {
+                1u64 << (i / 2)
+            } else {
+                1 + (i as u64)
+            };
+        }
+        let lengths = build_code_lengths(&freqs, 12).unwrap();
+        assert_eq!(lengths.len(), 256);
+        assert!(lengths.iter().all(|&l| (1..=12).contains(&l)));
+
+        let table = CanonicalHuffmanTable::from_code_lengths_strict(&lengths).unwrap();
+        assert!(table.is_complete());
+        assert!(table.max_code_length() <= 12);
+
+        let message: Vec<usize> = (0..256).collect();
+        for order in [HuffmanBitOrder::MsbFirst, HuffmanBitOrder::LsbFirst] {
+            let encoded = table.encode_symbols(&message, order).unwrap();
+            let (decoded, consumed) = table
+                .decode_symbols(&encoded, order, message.len())
+                .unwrap();
+            assert_eq!(decoded, message);
+            assert_eq!(consumed, encoded.len());
         }
     }
 }

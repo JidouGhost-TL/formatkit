@@ -232,10 +232,11 @@ pub fn decode_tga_rgba(data: &[u8], max_pixels: usize) -> Result<Image> {
     let cmap_slice = &data[cmap_start..pixels_start];
     let pixel_stream = &data[pixels_start..payload_end];
     let alpha_bits = header.alpha_bits();
+    let rgba_len = Image::rgba_len(u32::from(header.width), u32::from(header.height))?;
+    let flip_y = header.origin() == TgaOrigin::BottomLeft;
+    let flip_x = header.right_to_left();
 
-    let mut linear_rgba = vec![0u8; pixel_count * 4];
-
-    match header.image_type {
+    let rgba = match header.image_type {
         1 => {
             if header.color_map_type != 1 {
                 return Err(Error::Malformed(
@@ -277,18 +278,28 @@ pub fn decode_tga_rgba(data: &[u8], max_pixels: usize) -> Result<Image> {
                 ));
             }
             let first = usize::from(header.color_map_first_entry);
-            for (i, &idx) in pixel_stream[..pixel_count].iter().enumerate() {
-                let raw_idx = usize::from(idx);
-                let pal_idx = raw_idx.checked_sub(first).ok_or(Error::InvalidField {
-                    what: "TGA color map index",
-                    value: u64::from(idx),
-                })?;
-                let color = *palette.get(pal_idx).ok_or(Error::InvalidField {
-                    what: "TGA color map index",
-                    value: u64::from(idx),
-                })?;
-                linear_rgba[i * 4..i * 4 + 4].copy_from_slice(&color);
+            let mut out = vec![0u8; rgba_len];
+            for src_y in 0..height {
+                let dst_y = if flip_y { height - 1 - src_y } else { src_y };
+                let src_row = src_y * width;
+                let dst_row = dst_y * width;
+                for src_x in 0..width {
+                    let idx = pixel_stream[src_row + src_x];
+                    let raw_idx = usize::from(idx);
+                    let pal_idx = raw_idx.checked_sub(first).ok_or(Error::InvalidField {
+                        what: "TGA color map index",
+                        value: u64::from(idx),
+                    })?;
+                    let color = *palette.get(pal_idx).ok_or(Error::InvalidField {
+                        what: "TGA color map index",
+                        value: u64::from(idx),
+                    })?;
+                    let dst_x = if flip_x { width - 1 - src_x } else { src_x };
+                    let dst_off = (dst_row + dst_x) * 4;
+                    out[dst_off..dst_off + 4].copy_from_slice(&color);
+                }
             }
+            out
         }
         2 => {
             if !matches!(header.pixel_depth, 16 | 24 | 32) {
@@ -308,12 +319,24 @@ pub fn decode_tga_rgba(data: &[u8], max_pixels: usize) -> Result<Image> {
                     available: pixel_stream.len(),
                 });
             }
-            for (dst, raw) in linear_rgba
-                .chunks_exact_mut(4)
-                .zip(pixel_stream[..needed].chunks_exact(bpp))
-            {
-                dst.copy_from_slice(&decode_tga_pixel(raw, header.pixel_depth, alpha_bits));
+            let mut out = vec![0u8; rgba_len];
+            for src_y in 0..height {
+                let dst_y = if flip_y { height - 1 - src_y } else { src_y };
+                let src_row = src_y * width;
+                let dst_row = dst_y * width;
+                for src_x in 0..width {
+                    let raw_off = (src_row + src_x) * bpp;
+                    let raw = &pixel_stream[raw_off..raw_off + bpp];
+                    let dst_x = if flip_x { width - 1 - src_x } else { src_x };
+                    let dst_off = (dst_row + dst_x) * 4;
+                    out[dst_off..dst_off + 4].copy_from_slice(&decode_tga_pixel(
+                        raw,
+                        header.pixel_depth,
+                        alpha_bits,
+                    ));
+                }
             }
+            out
         }
         10 => {
             if !matches!(header.pixel_depth, 16 | 24 | 32) {
@@ -323,39 +346,40 @@ pub fn decode_tga_rgba(data: &[u8], max_pixels: usize) -> Result<Image> {
                 )));
             }
             let bpp = usize::from(header.pixel_depth / 8);
+            if pixel_stream.is_empty() {
+                return Err(Error::Truncated {
+                    offset: pixels_start,
+                    needed: 1,
+                    available: 0,
+                });
+            }
             let outcome = decode_high_bit_rle(
                 pixel_stream,
                 pixel_count,
                 HighBitRleConfig::pixel_units(bpp),
             )?;
-            for (dst, raw) in linear_rgba
-                .chunks_exact_mut(4)
-                .zip(outcome.bytes.chunks_exact(bpp))
-            {
-                dst.copy_from_slice(&decode_tga_pixel(raw, header.pixel_depth, alpha_bits));
+            let mut out = vec![0u8; rgba_len];
+            for src_y in 0..height {
+                let dst_y = if flip_y { height - 1 - src_y } else { src_y };
+                let src_row = src_y * width;
+                let dst_row = dst_y * width;
+                for src_x in 0..width {
+                    let raw_off = (src_row + src_x) * bpp;
+                    let raw = &outcome.bytes[raw_off..raw_off + bpp];
+                    let dst_x = if flip_x { width - 1 - src_x } else { src_x };
+                    let dst_off = (dst_row + dst_x) * 4;
+                    out[dst_off..dst_off + 4].copy_from_slice(&decode_tga_pixel(
+                        raw,
+                        header.pixel_depth,
+                        alpha_bits,
+                    ));
+                }
             }
+            out
         }
         other => {
             return Err(Error::Unsupported(format!("TGA image type {other}")));
         }
-    }
-
-    let flip_y = header.origin() == TgaOrigin::BottomLeft;
-    let flip_x = header.right_to_left();
-    let rgba = if !flip_y && !flip_x {
-        linear_rgba
-    } else {
-        let mut out = vec![0u8; pixel_count * 4];
-        for src_y in 0..height {
-            let dst_y = if flip_y { height - 1 - src_y } else { src_y };
-            for src_x in 0..width {
-                let dst_x = if flip_x { width - 1 - src_x } else { src_x };
-                let src_off = (src_y * width + src_x) * 4;
-                let dst_off = (dst_y * width + dst_x) * 4;
-                out[dst_off..dst_off + 4].copy_from_slice(&linear_rgba[src_off..src_off + 4]);
-            }
-        }
-        out
     };
 
     Image::try_new(u32::from(header.width), u32::from(header.height), rgba)
@@ -404,7 +428,20 @@ pub fn encode_tga_rgba(
 
     let w = usize::from(width);
     let h = usize::from(height);
-    let mut bgra = Vec::with_capacity(w * h * 4);
+    let rgba_len = Image::rgba_len(image.width, image.height)?;
+    let footer_len = if include_footer { TGA_FOOTER_LEN } else { 0 };
+    let min_output_len = match encoding {
+        TgaEncoding::Uncompressed => TGA_HEADER_LEN
+            .checked_add(rgba_len)
+            .and_then(|n| n.checked_add(footer_len))
+            .ok_or_else(|| Error::Malformed("TGA output length overflow".into()))?,
+        TgaEncoding::Rle => TGA_HEADER_LEN
+            .checked_add(footer_len)
+            .ok_or_else(|| Error::Malformed("TGA output length overflow".into()))?,
+    };
+    check_max_bytes(min_output_len, max_bytes)?;
+
+    let mut bgra = Vec::with_capacity(rgba_len);
     for row in 0..h {
         let src_y = match origin {
             TgaOrigin::TopLeft => row,
@@ -424,7 +461,6 @@ pub fn encode_tga_rgba(
         ),
     };
 
-    let footer_len = if include_footer { TGA_FOOTER_LEN } else { 0 };
     let total_len = TGA_HEADER_LEN
         .checked_add(payload.len())
         .and_then(|n| n.checked_add(footer_len))
@@ -643,5 +679,93 @@ mod tests {
             Err(Error::ResourceLimit { .. })
         ));
         assert!(decode_tga_rgba(&bytes[..10], 16).is_err());
+    }
+
+    #[test]
+    fn crafted_18_byte_4096x4096_tga_fails_truncated_fast() {
+        for (image_type, color_map_type, pixel_depth) in [(2u8, 0u8, 32u8), (10, 0, 32), (1, 1, 8)]
+        {
+            let mut header = [0u8; TGA_HEADER_LEN];
+            header[1] = color_map_type;
+            header[2] = image_type;
+            if color_map_type == 1 {
+                header[5..7].copy_from_slice(&1u16.to_le_bytes());
+                header[7] = 32;
+            }
+            header[12..14].copy_from_slice(&4096u16.to_le_bytes());
+            header[14..16].copy_from_slice(&4096u16.to_le_bytes());
+            header[16] = pixel_depth;
+            header[17] = 0x20;
+            assert!(matches!(
+                decode_tga_rgba(&header, 4096 * 4096),
+                Err(Error::Truncated { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn flipped_tga_direct_write_parity_all_orientations_and_types() {
+        // 3x2 distinct pixels so every flip combination produces a unique layout.
+        let expected = Image::try_new(
+            3,
+            2,
+            vec![
+                10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, // row 0
+                40, 0, 0, 255, 50, 0, 0, 255, 60, 0, 0, 255, // row 1
+            ],
+        )
+        .unwrap();
+
+        for (flip_y, flip_x) in [(false, false), (true, false), (false, true), (true, true)] {
+            let desc = 0x08 | if flip_y { 0x00 } else { 0x20 } | if flip_x { 0x10 } else { 0x00 };
+
+            // Build file-order BGRA pixels matching (flip_y, flip_x).
+            let mut file_bgra = Vec::with_capacity(6 * 4);
+            let mut file_indices = Vec::with_capacity(6);
+            for src_y in 0..2usize {
+                let ey = if flip_y { 1 - src_y } else { src_y };
+                for src_x in 0..3usize {
+                    let ex = if flip_x { 2 - src_x } else { src_x };
+                    let off = (ey * 3 + ex) * 4;
+                    let px = &expected.rgba[off..off + 4];
+                    file_bgra.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+                    file_indices.push((ey * 3 + ex) as u8);
+                }
+            }
+
+            // Type 2 uncompressed.
+            let mut t2 = vec![0u8; TGA_HEADER_LEN];
+            t2[2] = 2;
+            t2[12..14].copy_from_slice(&3u16.to_le_bytes());
+            t2[14..16].copy_from_slice(&2u16.to_le_bytes());
+            t2[16] = 32;
+            t2[17] = desc;
+            t2.extend_from_slice(&file_bgra);
+            assert_eq!(decode_tga_rgba(&t2, 16).unwrap(), expected);
+
+            // Type 10 RLE.
+            let mut t10 = t2[..TGA_HEADER_LEN].to_vec();
+            t10[2] = 10;
+            t10.extend_from_slice(
+                &encode_high_bit_rle(&file_bgra, HighBitRleConfig::pixel_units(4)).unwrap(),
+            );
+            assert_eq!(decode_tga_rgba(&t10, 16).unwrap(), expected);
+
+            // Type 1 color-mapped.
+            let mut t1 = vec![0u8; TGA_HEADER_LEN];
+            t1[1] = 1;
+            t1[2] = 1;
+            t1[5..7].copy_from_slice(&6u16.to_le_bytes());
+            t1[7] = 32;
+            t1[12..14].copy_from_slice(&3u16.to_le_bytes());
+            t1[14..16].copy_from_slice(&2u16.to_le_bytes());
+            t1[16] = 8;
+            t1[17] = desc;
+            for px in expected.rgba.chunks_exact(4) {
+                t1.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+            }
+            t1.extend_from_slice(&file_indices);
+            assert_eq!(decode_tga_rgba(&t1, 16).unwrap(), expected);
+        }
     }
 }

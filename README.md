@@ -25,19 +25,21 @@ without the umbrella.
 
 | Package | Responsibility |
 | --- | --- |
-| `formatkit-core` | Checked bytes/bits, sources, budgets, errors, images and PCM |
+| `formatkit-core` | Checked bytes/bits, sources, budgets, errors, images, PCM and optional Shift-JIS text |
 | `formatkit-layout` | Configured fields, records, tables, ranges and resident edits |
 | `formatkit-catalog` | Open typed identities, detection and operation contracts |
 | `formatkit-runtime` | Explicit owner-module composition and operation dispatch |
 | `formatkit-archive` | Mounted browsing, extraction to caller sinks and injected traversal |
 | `formatkit-pixel` | Generic packed pixels, palettes, channel masks and S3TC |
-| `formatkit-codec` | Bounded generic compression and consumed-stream extents |
+| `formatkit-codec` | Bounded generic compression, Huffman, RLE, PNG, PCX, TGA and optional DDS codecs |
 | `formatkit-patch` | IPS parsing, serialization, creation and policy-controlled application |
 | `formatkit-corpus` | Explicit-root discovery without a built-in sample set |
 | `formatkit-corpus-test` | JSON specs, golden digests, codec pairs and sealed packages |
 
-There are no platform dependency cycles: layout, pixel and codec depend on
-core; patch depends on core; catalog depends on core; archive and runtime depend on catalog and core.
+There are no platform dependency cycles: layout, pixel, patch and catalog depend on
+core; codec depends on core and optionally on pixel (via its default `dds` feature);
+archive and runtime depend on catalog and core. `formatkit-core` also gates its
+Shift-JIS/CP932 conversion tables behind a default-enabled `shift-jis` feature.
 Corpus discovery has no dependencies, and the golden-test harness is opt-in.
 
 ## Verification

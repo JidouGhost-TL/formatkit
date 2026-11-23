@@ -21,6 +21,8 @@
 //! would reverse the dependency boundary. Its owner can project registrations
 //! into per-format rows during shadow composition.
 
+#![forbid(unsafe_code)]
+
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;

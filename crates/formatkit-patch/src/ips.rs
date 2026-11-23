@@ -6,18 +6,29 @@ use formatkit_core::{Error, ErrorContext, Reader, Result, Writer};
 pub const MAX_OFFSET: u32 = 0xff_ffff;
 /// This offset is reserved by the EOF marker and cannot begin a record.
 pub const EOF_OFFSET: u32 = 0x45_4f_46;
+/// Maximum payload length of a single IPS record (`0xFFFF`).
 pub const MAX_RECORD_SIZE: usize = 0xffff;
+/// Default cap on the number of records accepted by [`Patch::parse`].
 pub const DEFAULT_MAX_RECORDS: usize = 1_000_000;
 /// Application resource policy, independent of any hardware image geometry.
 pub const DEFAULT_MAX_OUTPUT_SIZE: usize = 64 * 1024 * 1024;
 
+/// Payload carried by a single IPS patch record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordData<'a> {
+    /// Verbatim replacement bytes borrowed from the patch input.
     Literal(&'a [u8]),
-    Rle { len: u16, value: u8 },
+    /// Run-length encoded fill of `len` copies of `value`.
+    Rle {
+        /// Number of repeated bytes (`1..=65535`).
+        len: u16,
+        /// Byte value written across the run.
+        value: u8,
+    },
 }
 
 impl RecordData<'_> {
+    /// Number of bytes written by this record.
     pub fn len(&self) -> usize {
         match self {
             Self::Literal(bytes) => bytes.len(),
@@ -25,14 +36,18 @@ impl RecordData<'_> {
         }
     }
 
+    /// Return whether this record writes zero bytes.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
+/// One IPS patch hunk targeting `offset`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record<'a> {
+    /// 24-bit destination offset in the target image.
     pub offset: u32,
+    /// Bytes or run to write at `offset`.
     pub data: RecordData<'a>,
 }
 
@@ -59,28 +74,36 @@ impl Record<'_> {
 /// Literal data borrows the patch input; RLE data stays compact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Patch<'a> {
+    /// Ordered patch records as stored in the IPS stream.
     pub records: Vec<Record<'a>>,
     /// Exact final image size, applied after every record (zero-fill if larger).
     pub truncate_to: Option<u32>,
 }
 
+/// Policy for handling records whose byte ranges intersect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlapPolicy {
+    /// Reject any patch containing overlapping record ranges.
     Reject,
     /// Apply records in file order; the last write wins.
     LastWriteWins,
 }
 
+/// Policy for handling records or EOF sizes that extend past the input length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrowthPolicy {
+    /// Reject patches that would grow the input image.
     Reject,
     /// Newly exposed image bytes, including gaps, are zero-filled.
     ZeroFill,
 }
 
+/// Explicit policy and size bounds for validating and applying an IPS [`Patch`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApplyOptions {
+    /// How overlapping records are handled.
     pub overlaps: OverlapPolicy,
+    /// How writes extending past the input length are handled.
     pub growth: GrowthPolicy,
     /// Bounds both the intermediate record extent and the final image size.
     pub max_output_size: usize,
@@ -96,13 +119,18 @@ impl Default for ApplyOptions {
     }
 }
 
+/// Summary produced by [`Patch::validate`] before applying a patch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Validation {
+    /// Total number of records in the patch.
     pub record_count: usize,
     /// Number of records intersecting an earlier range in offset-sorted order.
     pub overlapping_records: usize,
+    /// Original input image size in bytes.
     pub input_size: usize,
+    /// Peak working buffer size needed during application.
     pub working_size: usize,
+    /// Final output image size in bytes after optional EOF truncation.
     pub output_size: usize,
 }
 
@@ -120,6 +148,7 @@ fn allocation_error() -> Error {
 }
 
 impl<'a> Patch<'a> {
+    /// Parse an IPS byte stream using [`DEFAULT_MAX_RECORDS`].
     pub fn parse(bytes: &'a [u8]) -> Result<Self> {
         Self::parse_with_record_limit(bytes, DEFAULT_MAX_RECORDS)
     }
@@ -172,6 +201,7 @@ impl<'a> Patch<'a> {
         }
     }
 
+    /// Validate this patch against `input_size` and `options` without modifying data.
     pub fn validate(&self, input_size: usize, options: ApplyOptions) -> Result<Validation> {
         if self.truncate_to.is_some_and(|size| size > MAX_OFFSET) {
             return Err(Error::InvalidField {

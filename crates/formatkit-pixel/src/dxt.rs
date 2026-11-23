@@ -30,9 +30,13 @@ pub enum DxtFormat {
 /// whose stored value happens to be zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelMasks {
+    /// Bit mask selecting the red channel.
     pub red: u32,
+    /// Bit mask selecting the green channel.
     pub green: u32,
+    /// Bit mask selecting the blue channel.
     pub blue: u32,
+    /// Bit mask selecting the alpha channel, or `0` if opaque.
     pub alpha: u32,
 }
 

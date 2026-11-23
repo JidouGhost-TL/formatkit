@@ -74,6 +74,40 @@ impl Crc16Params {
         state.update(bytes);
         state.finish()
     }
+
+    /// Compute the finalized CRC-16 over `bytes` with `zero_range` treated as zero bytes.
+    ///
+    /// Validates `zero_range.start <= zero_range.end && zero_range.end <= bytes.len()`
+    /// without allocating a temporary copy of `bytes`.
+    pub fn compute_with_zeroed_range(
+        self,
+        bytes: &[u8],
+        zero_range: core::ops::Range<usize>,
+    ) -> crate::Result<u16> {
+        if zero_range.start > zero_range.end {
+            return Err(crate::Error::InvalidField {
+                what: "checksum zero range start",
+                value: zero_range.start as u64,
+            });
+        }
+        if zero_range.end > bytes.len() {
+            return Err(crate::Error::InvalidField {
+                what: "checksum zero range end",
+                value: zero_range.end as u64,
+            });
+        }
+        let mut state = Crc16::new(self);
+        state.update(&bytes[..zero_range.start]);
+        let zeros = [0u8; 64];
+        let mut remaining = zero_range.len();
+        while remaining > 0 {
+            let chunk = remaining.min(zeros.len());
+            state.update(&zeros[..chunk]);
+            remaining -= chunk;
+        }
+        state.update(&bytes[zero_range.end..]);
+        Ok(state.finish())
+    }
 }
 
 /// Incremental CRC-16 arithmetic. Coverage and stored-byte order are owner policy.
@@ -297,34 +331,30 @@ impl Crc32 {
 /// raw state directly, so both outcomes are exposed explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Crc32IsoHdlc {
-    state: u32,
+    inner: Crc32,
 }
 
 impl Crc32IsoHdlc {
     /// Start a CRC-32/ISO-HDLC calculation.
     pub const fn new() -> Self {
-        Self { state: u32::MAX }
+        Self {
+            inner: Crc32::new(Crc32Params::ISO_HDLC),
+        }
     }
 
     /// Incorporate another byte sequence.
     pub fn update(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.state ^= u32::from(byte);
-            for _ in 0..8 {
-                let mask = (self.state & 1).wrapping_neg();
-                self.state = (self.state >> 1) ^ (CRC32_ISO_HDLC_POLYNOMIAL & mask);
-            }
-        }
+        self.inner.update(bytes);
     }
 
     /// Return the conventional complemented CRC-32/ISO-HDLC checksum.
     pub const fn finish(self) -> u32 {
-        !self.state
+        self.inner.finalize()
     }
 
     /// Return the uncomplemented shift-register state.
     pub const fn raw_state(self) -> u32 {
-        self.state
+        self.inner.raw_state()
     }
 }
 
@@ -346,29 +376,25 @@ pub fn crc32_iso_hdlc(bytes: &[u8]) -> u32 {
 /// This variant is non-reflected, starts from all ones, and has no final XOR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Crc32Mpeg2 {
-    state: u32,
+    inner: Crc32,
 }
 
 impl Crc32Mpeg2 {
     /// Start a CRC-32/MPEG-2 calculation.
     pub const fn new() -> Self {
-        Self { state: u32::MAX }
+        Self {
+            inner: Crc32::new(Crc32Params::MPEG2),
+        }
     }
 
     /// Incorporate another byte sequence.
     pub fn update(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.state ^= u32::from(byte) << 24;
-            for _ in 0..8 {
-                let top_bit = (self.state >> 31).wrapping_neg();
-                self.state = (self.state << 1) ^ (CRC32_MPEG2_POLYNOMIAL & top_bit);
-            }
-        }
+        self.inner.update(bytes);
     }
 
     /// Return the current CRC-32/MPEG-2 checksum.
     pub const fn finish(self) -> u32 {
-        self.state
+        self.inner.finalize()
     }
 }
 
@@ -579,6 +605,42 @@ mod crc16_tests {
         };
         assert_eq!(swapped.compute(b"123456789"), 0xCBF4_3926u32.swap_bytes());
     }
+
+    #[test]
+    fn crc16_compute_with_zeroed_range_matches_zeroed_copy_and_validates_bounds() {
+        let buf = [0x11u8, 0x22, 0xAA, 0xBB, 0xCC, 0xDD, 0x77, 0x88];
+        let mut expected = buf;
+        expected[2..6].fill(0);
+        assert_eq!(
+            Crc16Params::CCITT_FALSE
+                .compute_with_zeroed_range(&buf, 2..6)
+                .unwrap(),
+            Crc16Params::CCITT_FALSE.compute(&expected)
+        );
+        assert_eq!(
+            Crc16Params::MODBUS
+                .compute_with_zeroed_range(&buf, 4..4)
+                .unwrap(),
+            Crc16Params::MODBUS.compute(&buf)
+        );
+
+        let large = [0x5Au8; 100];
+        let mut large_expected = large;
+        large_expected[10..90].fill(0);
+        assert_eq!(
+            Crc16Params::X25
+                .compute_with_zeroed_range(&large, 10..90)
+                .unwrap(),
+            Crc16Params::X25.compute(&large_expected)
+        );
+
+        assert!(Crc16Params::ARC
+            .compute_with_zeroed_range(&buf, core::ops::Range { start: 5, end: 3 })
+            .is_err());
+        assert!(Crc16Params::ARC
+            .compute_with_zeroed_range(&buf, 0..9)
+            .is_err());
+    }
 }
 
 /// Wrapping 8-bit sum of bytes starting from `seed`.
@@ -717,6 +779,10 @@ pub enum FoldOp {
     RotateLeftThenSum(u32),
     /// Add, then rotate accumulator left within `bits`: `acc = rotl((acc + unit) & mask, shift)`.
     SumThenRotateLeft(u32),
+    /// Rotate accumulator left within `bits`, then XOR: `acc = (rotl(acc, shift) ^ unit) & mask`.
+    RotateLeftThenXor(u32),
+    /// XOR, then rotate accumulator left within `bits`: `acc = rotl((acc ^ unit) & mask, shift)`.
+    XorThenRotateLeft(u32),
     /// Wrapping weighted sum by 0-based unit index: `acc = (acc + unit * (base + index)) & mask`.
     WeightedOffset { base: u64 },
     /// Wrapping weighted sum by 0-based byte offset: `acc = (acc + unit * (base + byte_offset)) & mask`.
@@ -752,6 +818,38 @@ fn rotate_left_bits(value: u64, shift: u32, bits: u8, mask: u64) -> u64 {
 impl FoldChecksum {
     /// Compute the fold checksum over `bytes`.
     pub fn compute(&self, bytes: &[u8]) -> crate::Result<u64> {
+        self.compute_masked(bytes, 0..0)
+    }
+
+    /// Compute the fold checksum over `bytes` with `zero_range` treated as zero bytes.
+    ///
+    /// Validates `zero_range.start <= zero_range.end && zero_range.end <= bytes.len()`
+    /// without allocating a temporary copy of `bytes`.
+    pub fn compute_with_zeroed_range(
+        &self,
+        bytes: &[u8],
+        zero_range: core::ops::Range<usize>,
+    ) -> crate::Result<u64> {
+        if zero_range.start > zero_range.end {
+            return Err(crate::Error::InvalidField {
+                what: "checksum zero range start",
+                value: zero_range.start as u64,
+            });
+        }
+        if zero_range.end > bytes.len() {
+            return Err(crate::Error::InvalidField {
+                what: "checksum zero range end",
+                value: zero_range.end as u64,
+            });
+        }
+        self.compute_masked(bytes, zero_range)
+    }
+
+    fn compute_masked(
+        &self,
+        bytes: &[u8],
+        zero_range: core::ops::Range<usize>,
+    ) -> crate::Result<u64> {
         if self.bits == 0 || self.bits > 64 {
             return Err(crate::Error::InvalidField {
                 what: "checksum bit width",
@@ -783,6 +881,12 @@ impl FoldChecksum {
                 FoldOp::SumThenRotateLeft(shift) => {
                     rotate_left_bits(acc.wrapping_add(val) & mask, shift, self.bits, mask)
                 }
+                FoldOp::RotateLeftThenXor(shift) => {
+                    (rotate_left_bits(acc, shift, self.bits, mask) ^ val) & mask
+                }
+                FoldOp::XorThenRotateLeft(shift) => {
+                    rotate_left_bits((acc ^ val) & mask, shift, self.bits, mask)
+                }
                 FoldOp::WeightedOffset { base } => {
                     let weight = base.wrapping_add(idx);
                     acc.wrapping_add(val.wrapping_mul(weight)) & mask
@@ -795,15 +899,28 @@ impl FoldChecksum {
             }
         };
 
+        let read_byte = |pos: usize| -> u8 {
+            if zero_range.contains(&pos) {
+                0
+            } else {
+                bytes[pos]
+            }
+        };
+
         match self.unit {
             FoldUnit::Byte => {
-                for (idx, &b) in bytes.iter().enumerate() {
-                    acc = step(acc, u64::from(b), idx as u64);
+                for idx in 0..bytes.len() {
+                    acc = step(acc, u64::from(read_byte(idx)), idx as u64);
                 }
             }
             FoldUnit::U16(endian) => {
                 for (idx, chunk) in bytes.chunks_exact(2).enumerate() {
-                    let raw = [chunk[0], chunk[1]];
+                    let base = idx * 2;
+                    let raw = if base + 2 <= zero_range.start || base >= zero_range.end {
+                        [chunk[0], chunk[1]]
+                    } else {
+                        [read_byte(base), read_byte(base + 1)]
+                    };
                     let val = match endian {
                         crate::Endian::Little => u16::from_le_bytes(raw),
                         crate::Endian::Big => u16::from_be_bytes(raw),
@@ -813,7 +930,17 @@ impl FoldChecksum {
             }
             FoldUnit::U32(endian) => {
                 for (idx, chunk) in bytes.chunks_exact(4).enumerate() {
-                    let raw = [chunk[0], chunk[1], chunk[2], chunk[3]];
+                    let base = idx * 4;
+                    let raw = if base + 4 <= zero_range.start || base >= zero_range.end {
+                        [chunk[0], chunk[1], chunk[2], chunk[3]]
+                    } else {
+                        [
+                            read_byte(base),
+                            read_byte(base + 1),
+                            read_byte(base + 2),
+                            read_byte(base + 3),
+                        ]
+                    };
                     let val = match endian {
                         crate::Endian::Little => u32::from_le_bytes(raw),
                         crate::Endian::Big => u32::from_be_bytes(raw),
@@ -823,10 +950,24 @@ impl FoldChecksum {
             }
             FoldUnit::U64(endian) => {
                 for (idx, chunk) in bytes.chunks_exact(8).enumerate() {
-                    let raw = [
-                        chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
-                        chunk[7],
-                    ];
+                    let base = idx * 8;
+                    let raw = if base + 8 <= zero_range.start || base >= zero_range.end {
+                        [
+                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
+                            chunk[7],
+                        ]
+                    } else {
+                        [
+                            read_byte(base),
+                            read_byte(base + 1),
+                            read_byte(base + 2),
+                            read_byte(base + 3),
+                            read_byte(base + 4),
+                            read_byte(base + 5),
+                            read_byte(base + 6),
+                            read_byte(base + 7),
+                        ]
+                    };
                     let val = match endian {
                         crate::Endian::Little => u64::from_le_bytes(raw),
                         crate::Endian::Big => u64::from_be_bytes(raw),
@@ -980,6 +1121,38 @@ mod arithmetic_checksum_tests {
         // Step 0: rotl8((0x80 + 1) & 0xFF, 1) = rotl8(0x81, 1) = 0x03
         assert_eq!(sum_then_rot.compute(&[1]).unwrap(), 0x03);
 
+        let rot_then_xor = FoldChecksum {
+            unit: FoldUnit::Byte,
+            op: FoldOp::RotateLeftThenXor(1),
+            bits: 16,
+            seed: 0x8000,
+            xor_out: 0,
+        };
+        // Step 0: rotl16(0x8000, 1) ^ 0x03 = 0x0001 ^ 0x03 = 0x0002
+        // Step 1: rotl16(0x0002, 1) ^ 0x05 = 0x0004 ^ 0x05 = 0x0001
+        assert_eq!(rot_then_xor.compute(&[0x03, 0x05]).unwrap(), 0x0001);
+
+        let xor_then_rot = FoldChecksum {
+            unit: FoldUnit::Byte,
+            op: FoldOp::XorThenRotateLeft(1),
+            bits: 8,
+            seed: 0x80,
+            xor_out: 0,
+        };
+        // Step 0: rotl8((0x80 ^ 0x01) & 0xFF, 1) = rotl8(0x81, 1) = 0x03
+        // Step 1: rotl8((0x03 ^ 0x02) & 0xFF, 1) = rotl8(0x01, 1) = 0x02
+        assert_eq!(xor_then_rot.compute(&[0x01, 0x02]).unwrap(), 0x02);
+
+        let rot_xor_12bit = FoldChecksum {
+            unit: FoldUnit::U16(Endian::Big),
+            op: FoldOp::RotateLeftThenXor(13), // 13 % 12 == 1
+            bits: 12,
+            seed: 0x0800,
+            xor_out: 0,
+        };
+        // Step 0: (rotl12(0x800, 1) ^ 0xF005) & 0xFFF = (0x001 ^ 0x005) = 0x004
+        assert_eq!(rot_xor_12bit.compute(&[0xF0, 0x05]).unwrap(), 0x004);
+
         let weighted = FoldChecksum {
             unit: FoldUnit::Byte,
             op: FoldOp::WeightedOffset { base: 1 },
@@ -1099,6 +1272,67 @@ mod arithmetic_checksum_tests {
             Err(Error::InvalidField {
                 what: "checksum zero range end",
                 value: 7
+            })
+        ));
+    }
+
+    #[test]
+    fn fold_checksum_compute_with_zeroed_range_matches_zeroed_copy_and_validates_bounds() {
+        let data = [
+            0x01, 0x02, 0xAA, 0xBB, 0xCC, 0xDD, 0x07, 0x08, //
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+        ];
+        // Unaligned range straddling U16/U32/U64 boundaries.
+        let range = 3..9;
+        let mut expected = data;
+        expected[range.clone()].fill(0);
+
+        for unit in [
+            FoldUnit::Byte,
+            FoldUnit::U16(Endian::Little),
+            FoldUnit::U16(Endian::Big),
+            FoldUnit::U32(Endian::Little),
+            FoldUnit::U32(Endian::Big),
+            FoldUnit::U64(Endian::Little),
+            FoldUnit::U64(Endian::Big),
+        ] {
+            let fold = FoldChecksum {
+                unit,
+                op: FoldOp::XorThenRotateLeft(3),
+                bits: 32,
+                seed: 0x1234_5678,
+                xor_out: 0x00FF_00FF,
+            };
+            assert_eq!(
+                fold.compute_with_zeroed_range(&data, range.clone())
+                    .unwrap(),
+                fold.compute(&expected).unwrap()
+            );
+            assert_eq!(
+                fold.compute_with_zeroed_range(&data, 4..4).unwrap(),
+                fold.compute(&data).unwrap()
+            );
+        }
+
+        let fold = FoldChecksum {
+            unit: FoldUnit::U32(Endian::Little),
+            op: FoldOp::Sum,
+            bits: 32,
+            seed: 0,
+            xor_out: 0,
+        };
+        assert!(matches!(
+            fold.compute_with_zeroed_range(&data, core::ops::Range { start: 6, end: 2 }),
+            Err(Error::InvalidField {
+                what: "checksum zero range start",
+                value: 6
+            })
+        ));
+        assert!(matches!(
+            fold.compute_with_zeroed_range(&data, 0..17),
+            Err(Error::InvalidField {
+                what: "checksum zero range end",
+                value: 17
             })
         ));
     }

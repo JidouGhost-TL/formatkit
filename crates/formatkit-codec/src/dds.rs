@@ -308,9 +308,17 @@ impl<'a> Dds<'a> {
         Ok(&self.surface[offset as usize..end as usize])
     }
 
-    /// Decode one level of one face to RGBA8888.
-    pub fn decode_level(&self, face: u32, level: u32) -> Result<Image> {
+    /// Decode one level of one face to RGBA8888, enforcing `max_pixels` before decoding.
+    pub fn decode_level_with_limit(&self, face: u32, level: u32, max_pixels: u64) -> Result<Image> {
         let (width, height) = self.level_extent(level)?;
+        let pixels = u64::from(width) * u64::from(height);
+        if pixels > max_pixels {
+            return Err(Error::ResourceLimit {
+                resource: "DDS pixels",
+                requested: pixels,
+                limit: max_pixels,
+            });
+        }
         let bytes = self.level_bytes(face, level)?;
         let rgba = match self.format {
             DdsFormat::Dxt(dxt) => decode_dxt(bytes, width, height, dxt)?,
@@ -320,6 +328,16 @@ impl<'a> Dds<'a> {
             } => decode_masked(bytes, width, height, bits_per_pixel, masks)?,
         };
         Image::try_new(width, height, rgba)
+    }
+
+    /// Decode one level of one face to RGBA8888.
+    pub fn decode_level(&self, face: u32, level: u32) -> Result<Image> {
+        self.decode_level_with_limit(face, level, u64::MAX)
+    }
+
+    /// Decode the base level of the first face, enforcing `max_pixels` before decoding.
+    pub fn decode_with_limit(&self, max_pixels: u64) -> Result<Image> {
+        self.decode_level_with_limit(0, 0, max_pixels)
     }
 
     /// Decode the base level of the first face.
@@ -639,7 +657,7 @@ fn mip_chain(source: &Image, levels: u32) -> Result<Vec<Image>> {
         let previous = chain.last().expect("base mip exists");
         let width = mip_extent(previous.width, 1);
         let height = mip_extent(previous.height, 1);
-        let mut rgba = vec![0; width as usize * height as usize * 4];
+        let mut rgba = vec![0; Image::rgba_len(width, height)?];
         for y in 0..height {
             for x in 0..width {
                 for channel in 0..4usize {
@@ -673,8 +691,11 @@ fn encode_masked(image: &Image, bits: u32, masks: ChannelMasks) -> Result<Vec<u8
         )));
     }
     let bytes_per_pixel = (bits / 8) as usize;
-    let mut out =
-        Vec::with_capacity(image.width as usize * image.height as usize * bytes_per_pixel);
+    let out_len = (image.width as usize)
+        .checked_mul(image.height as usize)
+        .and_then(|n| n.checked_mul(bytes_per_pixel))
+        .ok_or_else(|| Error::Malformed("DDS masked output length overflow".into()))?;
+    let mut out = Vec::with_capacity(out_len);
     for pixel in image.rgba.chunks_exact(4) {
         let mut value = 0u32;
         for (channel, mask) in [pixel[0], pixel[1], pixel[2], pixel[3]].into_iter().zip([
@@ -699,7 +720,11 @@ fn encode_masked(image: &Image, bits: u32, masks: ChannelMasks) -> Result<Vec<u8
 fn encode_dxt(image: &Image, format: DxtFormat) -> Result<Vec<u8>> {
     let blocks_x = image.width.div_ceil(4);
     let blocks_y = image.height.div_ceil(4);
-    let mut out = Vec::with_capacity(blocks_x as usize * blocks_y as usize * format.block_bytes());
+    let out_len = (blocks_x as usize)
+        .checked_mul(blocks_y as usize)
+        .and_then(|n| n.checked_mul(format.block_bytes()))
+        .ok_or_else(|| Error::Malformed("DDS DXT output length overflow".into()))?;
+    let mut out = Vec::with_capacity(out_len);
     for by in 0..blocks_y {
         for bx in 0..blocks_x {
             let mut pixels = [[0u8; 4]; 16];
@@ -988,6 +1013,26 @@ mod tests {
         let l1 = dds.decode_level(0, 1).unwrap();
         assert_eq!((l1.width, l1.height), (4, 4));
         assert_eq!(&l1.rgba[0..4], &[0, 0, 255, 255]);
+
+        // Pixel limit enforcement on base and mip levels.
+        assert_eq!(dds.decode_with_limit(64).unwrap(), l0);
+        assert!(matches!(
+            dds.decode_with_limit(63),
+            Err(Error::ResourceLimit {
+                resource: "DDS pixels",
+                requested: 64,
+                limit: 63,
+            })
+        ));
+        assert_eq!(dds.decode_level_with_limit(0, 1, 16).unwrap(), l1);
+        assert!(matches!(
+            dds.decode_level_with_limit(0, 1, 15),
+            Err(Error::ResourceLimit {
+                resource: "DDS pixels",
+                requested: 16,
+                limit: 15,
+            })
+        ));
     }
 
     #[test]

@@ -16,6 +16,7 @@
 //! `cargo test` invocations with `FORMATKIT_CORPUS_DIR` set fail closed.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use std::path::PathBuf;
 

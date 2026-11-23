@@ -40,11 +40,11 @@ pub use ranges::{
 pub use records::{FixedRecords, RecordOverflow};
 pub use tables::{
     AlignedSizeChain, AlignedSizeCursor, AlignedSizeError, AlignedSizeExtent, CountedBoundaryError,
-    CountedBoundaryTable, DerivedAlignedSizes, FirstWordOffsetError, FirstWordOffsetTable,
-    FixedStrideOffsetTable, OffsetLengthRow, OffsetLengthRows, PositiveSizeError,
-    PositiveSizeExtent, PositiveSizeList, SizeAlignment, TableSizeMode, TerminalOffsetError,
-    TerminalOffsetTable, ValidatedCountedBoundaries, ValidatedPositiveSizes,
-    ValidatedTerminalOffsets,
+    CountedBoundaryTable, CountedU16BoundaryError, CountedU16BoundaryTable, DerivedAlignedSizes,
+    FirstWordOffsetError, FirstWordOffsetTable, FixedStrideOffsetTable, OffsetLengthRow,
+    OffsetLengthRows, PositiveSizeError, PositiveSizeExtent, PositiveSizeList, SizeAlignment,
+    TableSizeMode, TerminalOffsetError, TerminalOffsetTable, ValidatedCountedBoundaries,
+    ValidatedCountedU16Boundaries, ValidatedPositiveSizes, ValidatedTerminalOffsets,
 };
 pub use text::{
     format_hex_bytes, parse_hex_bytes, Charmap, CharmapControl, CharmapDecoded, CharmapEntry,

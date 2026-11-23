@@ -105,6 +105,9 @@ pub use audio::{wav_header_pcm, Pcm};
 mod bit_rows;
 pub use bit_rows::MsbFirst1bppRows;
 
+pub mod bcd;
+pub use bcd::{bcd_to_u8, u8_to_bcd};
+
 pub mod checksum;
 pub use checksum::{
     compute_with_zeroed_range, sum_bytes_u16, xor_bytes, Crc32, Crc32Params, FoldChecksum, FoldOp,

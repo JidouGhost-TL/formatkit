@@ -54,7 +54,7 @@ pub use png::{decode_png_rgba, encode_rgba_png};
 pub mod rle;
 pub use rle::{decode_high_bit_rle, encode_high_bit_rle, HighBitRleConfig};
 pub mod sliding_window;
-pub use sliding_window::find_longest_match;
+pub use sliding_window::{find_longest_match, RingBuffer};
 pub mod tga;
 pub use tga::{
     decode_tga_rgba, encode_tga_indexed, encode_tga_rgba, has_tga_footer, TgaEncoding, TgaHeader,

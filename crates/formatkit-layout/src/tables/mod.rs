@@ -2,6 +2,7 @@
 
 mod aligned_sizes;
 mod counted_boundaries;
+mod counted_u16_boundaries;
 mod first_word_offsets;
 mod fixed_stride_offset;
 mod offset_length;
@@ -13,6 +14,9 @@ pub use aligned_sizes::{
 };
 pub use counted_boundaries::{
     CountedBoundaryError, CountedBoundaryTable, ValidatedCountedBoundaries,
+};
+pub use counted_u16_boundaries::{
+    CountedU16BoundaryError, CountedU16BoundaryTable, ValidatedCountedU16Boundaries,
 };
 pub use first_word_offsets::{FirstWordOffsetError, FirstWordOffsetTable};
 pub use fixed_stride_offset::{FixedStrideOffsetTable, TableSizeMode};

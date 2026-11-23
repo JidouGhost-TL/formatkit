@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
-description = "Bounded compression (LZSS, DEFLATE, LZMA, RNC, Huffman, RLE) and image codecs"
+description = "Bounded compression (LZSS, LZ77, DEFLATE, LZMA, RNC, Huffman, RLE, delta) and image codecs"
 keywords = ["compression", "lzss", "codec", "png", "dds"]
 categories = ["compression", "encoding", "graphics"]
 

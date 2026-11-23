@@ -41,7 +41,7 @@ packages can also be consumed directly without the umbrella.
 | `formatkit-runtime` | Explicit owner-module composition (`Strict`/`Legacy`), resident writers and operation dispatch |
 | `formatkit-archive` | Mounted browsing, extraction to caller sinks, injected traversal and `paired_stored_mount` |
 | `formatkit-pixel` | Generic packed pixels, `palette`, `planar`, `glyph`, `morton`, `atlas`, channel masks and `dxt` (S3TC) |
-| `formatkit-codec` | Bounded compression (`okumura`, `flag_lzss`, `counted_lsb`, `sliding_window`, deflate/inflate/gzip/lzma/rnc), delta, Huffman, RLE, PNG, PCX, TGA and optional DDS |
+| `formatkit-codec` | Bounded compression (`okumura`, `flag_lzss`, `counted_lsb`, `sliding_window`, deflate/inflate/gzip/lzma/rnc), tagged-header LZ77/Huffman/RLE/delta streams, `bit_unpack`, delta, Huffman, RLE, PNG, PCX, TGA and optional DDS |
 | `formatkit-patch` | `ips`, `bps`, `ups`, and `vli` parsing, serialization, creation and policy-controlled application |
 | `formatkit-corpus` | Explicit-root discovery without a built-in sample set |
 | `formatkit-corpus-test` | JSON specs, golden digests, codec pairs and sealed packages |

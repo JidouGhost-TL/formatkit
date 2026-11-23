@@ -12,6 +12,10 @@
 //! # Other codecs
 //! - **Stream compression**: [`deflate`], [`mod@inflate`], [`gzip`], [`lzma`], [`rnc`], [`huffman`],
 //!   [`rle`], [`delta`].
+//! - **Tagged-header stream family** (one tag byte + 24-bit size, see [`tagged_header`]):
+//!   [`tagged_lz77`] (compact and extended-length LZ77), [`tagged_huffman`] (packed-tree
+//!   4/8-bit Huffman), [`rle::decode_tagged_rle`], and [`delta::decode_tagged_delta`].
+//! - **Bit-depth widening**: [`mod@bit_unpack`].
 //! - **Image containers**: [`png`], [`pcx`], [`tga`], and optional [`dds`] (feature `dds`).
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -50,6 +54,10 @@ pub use okumura::*;
 pub mod rnc;
 pub use rnc::*;
 
+/// Bit-depth widening of packed 1/2/4/8-bit units with a conditional offset.
+#[doc(alias = "bitunpack")]
+pub mod bit_unpack;
+pub use bit_unpack::{bit_unpack, BitUnpackConfig};
 /// Externally counted LZ commands with lazy interleaved LSB-first control bytes.
 #[doc(alias = "lz")]
 #[doc(alias = "lzss")]
@@ -62,11 +70,14 @@ pub use dds::{
     encode_dds_level, encode_dds_like, patch_dds_rects, Dds, DdsFormat, DdsPatch, DdsPatchLevel,
     DdsRect, DDS_ENCODER_ID,
 };
-/// Allocation-free byte and 16-bit delta encoding and decoding.
+/// Allocation-free byte and 16-bit delta encoding and decoding, plus tagged-header framing.
+#[doc(alias = "diff")]
+#[doc(alias = "delta filter")]
 pub mod delta;
 pub use delta::{
-    delta_decode_u16_be_into, delta_decode_u16_le_into, delta_decode_u8_into,
-    delta_encode_u16_be_into, delta_encode_u16_le_into, delta_encode_u8_into,
+    decode_tagged_delta, delta_decode_u16_be_into, delta_decode_u16_le_into, delta_decode_u8_into,
+    delta_encode_u16_be_into, delta_encode_u16_le_into, delta_encode_u8_into, encode_tagged_delta,
+    TaggedDeltaWidth,
 };
 /// Parameterized flag-byte / flag-word LZSS stream executor.
 #[doc(alias = "lzss")]
@@ -83,12 +94,36 @@ pub use pcx::{decode_pcx_rgba, encode_pcx_indexed, encode_pcx_rgba};
 /// PNG image decoding and RGBA encoding.
 pub mod png;
 pub use png::{decode_png_rgba, encode_rgba_png};
-/// Configurable high-bit run-length encoding (RLE) and decoding.
+/// Configurable high-bit run-length encoding (RLE) and decoding, plus tagged-header framing.
 pub mod rle;
-pub use rle::{decode_high_bit_rle, encode_high_bit_rle, HighBitRleConfig};
+pub use rle::{
+    decode_high_bit_rle, decode_tagged_rle, encode_high_bit_rle, encode_tagged_rle,
+    HighBitRleConfig,
+};
 /// Bounded sliding-window match copying, longest-match search, and ring buffer.
 pub mod sliding_window;
 pub use sliding_window::{append_match, find_longest_match, MatchError, RingBuffer};
+/// Tag byte + 24-bit little-endian size stream headers (with 32-bit extended form).
+pub mod tagged_header;
+pub use tagged_header::{
+    read_tagged_header, read_tagged_header_extended, write_tagged_header,
+    write_tagged_header_extended, TaggedHeader, MAX_TAGGED_SIZE, TAGGED_HEADER_EXTENDED_LEN,
+    TAGGED_HEADER_LEN,
+};
+/// Tagged-header packed-tree Huffman streams with 4-bit or 8-bit symbols.
+#[doc(alias = "huff")]
+pub mod tagged_huffman;
+pub use tagged_huffman::{decode_tagged_huffman, encode_tagged_huffman, TaggedHuffmanWidth};
+/// Tagged-header LZ77 streams (compact 2-byte tokens and extended-length tokens).
+#[doc(alias = "lz77")]
+#[doc(alias = "lz10")]
+#[doc(alias = "lz11")]
+#[doc(alias = "lzss")]
+pub mod tagged_lz77;
+pub use tagged_lz77::{
+    decode_tagged_lz77, decode_tagged_lz77_extended, encode_tagged_lz77,
+    encode_tagged_lz77_extended, encode_tagged_lz77_with_min_distance,
+};
 /// TGA (Truevision TARGA) image decoding and indexed/RGBA encoding.
 pub mod tga;
 pub use tga::{

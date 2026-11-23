@@ -9,9 +9,30 @@
 //! This single parameterization covers both byte-oriented packet RLE
 //! (`unit_bytes = 1, min_run_len = 3, min_literal_len = 1`) and TGA-style
 //! pixel-unit RLE (`unit_bytes = 1..=4, min_run_len = 1, min_literal_len = 1`).
+//!
+//! [`decode_tagged_rle`] and [`encode_tagged_rle`] frame a
+//! [`HighBitRleConfig::BYTE_RUN3`] body with a [`crate::tagged_header`]
+//! (tag [`TAG_RLE`], `0x30`).
+//!
+//! ```
+//! use formatkit_codec::rle::{decode_tagged_rle, encode_tagged_rle};
+//!
+//! // Header (tag 0x30, size 7), run packet 0x81 = 4 x 'B', literal packet 0x02 = "XYZ".
+//! let stream = [0x30, 7, 0, 0, 0x81, b'B', 0x02, b'X', b'Y', b'Z', 0xEE];
+//! let decoded = decode_tagged_rle(&stream, 64).unwrap();
+//! assert_eq!(decoded.bytes, b"BBBBXYZ");
+//! assert_eq!(decoded.consumed, 10);
+//! assert_eq!(encode_tagged_rle(b"BBBBXYZ").unwrap(), stream[..10]);
+//! ```
+//!
+//! [`TAG_RLE`]: crate::tagged_header::TAG_RLE
 
 use formatkit_core::{Error, Result};
 
+pub use crate::tagged_header::TAG_RLE;
+use crate::tagged_header::{
+    check_encode_len, expect_tagged_header, shift_truncated, write_tagged_header, TAGGED_HEADER_LEN,
+};
 use crate::DecodeOutcome;
 
 /// Configuration for a high-bit-flag packet RLE stream.
@@ -220,9 +241,93 @@ pub fn encode_high_bit_rle(src: &[u8], config: HighBitRleConfig) -> Result<Vec<u
     Ok(out)
 }
 
+/// Decode a tagged byte RLE (`0x30`) stream starting at `input[0]`.
+///
+/// The body is [`HighBitRleConfig::BYTE_RUN3`] packet RLE. Rejects a wrong
+/// tag, a zero declared size, or a declared size above `max_output` before
+/// allocating, and reports the exact consumed extent (header included).
+pub fn decode_tagged_rle(input: &[u8], max_output: usize) -> Result<DecodeOutcome> {
+    let header = expect_tagged_header(
+        input,
+        TAG_RLE,
+        "tagged RLE decoded size",
+        "tagged RLE decoded output",
+        max_output,
+    )?;
+    let body = decode_high_bit_rle(
+        &input[TAGGED_HEADER_LEN..],
+        header.decoded_size,
+        HighBitRleConfig::BYTE_RUN3,
+    )
+    .map_err(|err| shift_truncated(err, TAGGED_HEADER_LEN))?;
+    Ok(DecodeOutcome {
+        bytes: body.bytes,
+        consumed: TAGGED_HEADER_LEN + body.consumed,
+    })
+}
+
+/// Encode `data` (`1..=0xFF_FFFF` bytes) as a tagged byte RLE (`0x30`) stream.
+pub fn encode_tagged_rle(data: &[u8]) -> Result<Vec<u8>> {
+    check_encode_len(data.len(), "tagged RLE input size")?;
+    let body = encode_high_bit_rle(data, HighBitRleConfig::BYTE_RUN3)?;
+    let mut out = Vec::with_capacity(TAGGED_HEADER_LEN + body.len());
+    write_tagged_header(&mut out, TAG_RLE, data.len())?;
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tagged_rle_round_trips_with_exact_extent() {
+        let mut data = vec![0xAA; 300];
+        data.extend_from_slice(b"literal-run");
+        data.extend(std::iter::repeat_n(0x00, 2));
+        data.extend((0..=255u8).cycle().take(400));
+        let mut stream = encode_tagged_rle(&data).unwrap();
+        assert_eq!(stream[0], TAG_RLE);
+        let exact = stream.len();
+        stream.extend_from_slice(&[0xFF, 0xFF]);
+        let decoded = decode_tagged_rle(&stream, data.len()).unwrap();
+        assert_eq!(decoded.bytes, data);
+        assert_eq!(decoded.consumed, exact);
+        assert!(encode_tagged_rle(&[]).is_err());
+    }
+
+    #[test]
+    fn tagged_rle_rejects_malformed_frames_without_panicking() {
+        assert!(matches!(
+            decode_tagged_rle(&[0x31, 1, 0, 0, 0, 0], 64),
+            Err(Error::BadMagic { .. })
+        ));
+        assert!(matches!(
+            decode_tagged_rle(&[0x30, 0, 0, 0], 64),
+            Err(Error::InvalidField { .. })
+        ));
+        assert!(matches!(
+            decode_tagged_rle(&[0x30, 0, 0, 0x40, 0x80], 1024),
+            Err(Error::ResourceLimit { .. })
+        ));
+        assert!(matches!(
+            decode_tagged_rle(&[0x30, 0, 0, 0x40, 0x80], 1 << 23),
+            Err(Error::Truncated { offset: 5, .. })
+        ));
+        let stream = encode_tagged_rle(&b"abcabc-zzzzzzzz-abc".repeat(9)).unwrap();
+        for cut in 0..stream.len() {
+            assert!(decode_tagged_rle(&stream[..cut], 1 << 16).is_err());
+        }
+        for at in 0..stream.len() {
+            for flip in [0x01u8, 0x80, 0xFF] {
+                let mut mutated = stream.clone();
+                mutated[at] ^= flip;
+                if let Ok(decoded) = decode_tagged_rle(&mutated, 1 << 16) {
+                    assert!(decoded.consumed <= mutated.len());
+                }
+            }
+        }
+    }
 
     #[test]
     fn byte_run3_round_trips_mixed_runs_and_literals() {

@@ -1,6 +1,6 @@
 //! Fixed-stride offset tables producing validated [`NamespaceEntry`] rows.
 
-use formatkit_core::{u32_at, Error, NamespaceEntry, Result};
+use formatkit_core::{u32_at_endian, Endian, Error, NamespaceEntry, Result};
 
 /// How each entry's byte size is determined in a [`FixedStrideOffsetTable`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,13 +48,24 @@ pub struct FixedStrideOffsetTable {
 }
 
 impl FixedStrideOffsetTable {
-    /// Parse `table_bytes` into validated [`NamespaceEntry`] rows bounded by
-    /// `data_size`.
+    /// Parse little-endian `table_bytes` into validated [`NamespaceEntry`] rows
+    /// bounded by `data_size`.
     ///
     /// Rejects invalid descriptor parameters, truncated table bytes, arithmetic
     /// overflows, out-of-bounds entry ranges, and (in
     /// [`TableSizeMode::SequentialUntil`] mode) non-monotonic offsets.
     pub fn parse_entries(&self, table_bytes: &[u8], data_size: u64) -> Result<Vec<NamespaceEntry>> {
+        self.parse_entries_with_endian(table_bytes, data_size, Endian::Little)
+    }
+
+    /// Parse `table_bytes` into validated [`NamespaceEntry`] rows bounded by
+    /// `data_size`, decoding `u32` offset and size fields in `endian` byte order.
+    pub fn parse_entries_with_endian(
+        &self,
+        table_bytes: &[u8],
+        data_size: u64,
+        endian: Endian,
+    ) -> Result<Vec<NamespaceEntry>> {
         self.validate_descriptor(data_size)?;
 
         let required_bytes = self
@@ -75,11 +86,14 @@ impl FixedStrideOffsetTable {
 
         match self.size_mode {
             TableSizeMode::ExplicitU32 { field_offset, unit } => {
-                self.parse_explicit(table_bytes, data_size, field_offset, unit)
+                self.parse_explicit(table_bytes, data_size, field_offset, unit, endian)
             }
-            TableSizeMode::SequentialUntil { sentinel_end } => {
-                self.parse_sequential(table_bytes, data_size, sentinel_end.unwrap_or(data_size))
-            }
+            TableSizeMode::SequentialUntil { sentinel_end } => self.parse_sequential(
+                table_bytes,
+                data_size,
+                sentinel_end.unwrap_or(data_size),
+                endian,
+            ),
         }
     }
 
@@ -160,18 +174,19 @@ impl FixedStrideOffsetTable {
         data_size: u64,
         field_offset: usize,
         unit: u64,
+        endian: Endian,
     ) -> Result<Vec<NamespaceEntry>> {
         let mut entries = Vec::with_capacity(self.entry_count);
         for index in 0..self.entry_count {
             let row_start = index * self.entry_stride;
             let row = &table_bytes[row_start..row_start + self.entry_stride];
-            let raw_offset = u32_at(row, self.offset_field)?;
+            let raw_offset = u32_at_endian(row, self.offset_field, endian)?;
             let offset = u64::from(raw_offset)
                 .checked_mul(self.offset_unit)
                 .ok_or_else(|| {
                     Error::Malformed(format!("entry {index} offset scaling overflow"))
                 })?;
-            let raw_size = u32_at(row, field_offset)?;
+            let raw_size = u32_at_endian(row, field_offset, endian)?;
             let size = u64::from(raw_size)
                 .checked_mul(unit)
                 .ok_or_else(|| Error::Malformed(format!("entry {index} size scaling overflow")))?;
@@ -199,12 +214,13 @@ impl FixedStrideOffsetTable {
         table_bytes: &[u8],
         data_size: u64,
         end_bound: u64,
+        endian: Endian,
     ) -> Result<Vec<NamespaceEntry>> {
         let mut offsets = Vec::with_capacity(self.entry_count);
         for index in 0..self.entry_count {
             let row_start = index * self.entry_stride;
             let row = &table_bytes[row_start..row_start + self.entry_stride];
-            let raw_offset = u32_at(row, self.offset_field)?;
+            let raw_offset = u32_at_endian(row, self.offset_field, endian)?;
             let offset = u64::from(raw_offset)
                 .checked_mul(self.offset_unit)
                 .ok_or_else(|| {
@@ -462,5 +478,63 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn parses_big_endian_explicit_and_sequential_tables() {
+        let mut be_explicit = Vec::new();
+        for &(off, sz) in &[(16u32, 32u32), (64u32, 16u32)] {
+            be_explicit.extend_from_slice(&off.to_be_bytes());
+            be_explicit.extend_from_slice(&sz.to_be_bytes());
+        }
+        let table = FixedStrideOffsetTable {
+            entry_count: 2,
+            entry_stride: 8,
+            offset_field: 0,
+            offset_unit: 1,
+            size_mode: TableSizeMode::ExplicitU32 {
+                field_offset: 4,
+                unit: 1,
+            },
+            name_prefix: "be",
+        };
+        let entries = table
+            .parse_entries_with_endian(&be_explicit, 128, Endian::Big)
+            .unwrap();
+        assert_eq!(
+            entries,
+            vec![
+                NamespaceEntry {
+                    name: Some("be_0000".into()),
+                    offset: 16,
+                    size: 32,
+                },
+                NamespaceEntry {
+                    name: Some("be_0001".into()),
+                    offset: 64,
+                    size: 16,
+                },
+            ]
+        );
+
+        let mut be_seq = Vec::new();
+        for off in [8u32, 24u32] {
+            be_seq.extend_from_slice(&off.to_be_bytes());
+        }
+        let seq_table = FixedStrideOffsetTable {
+            entry_count: 2,
+            entry_stride: 4,
+            offset_field: 0,
+            offset_unit: 1,
+            size_mode: TableSizeMode::SequentialUntil { sentinel_end: None },
+            name_prefix: "",
+        };
+        let seq_entries = seq_table
+            .parse_entries_with_endian(&be_seq, 64, Endian::Big)
+            .unwrap();
+        assert_eq!(seq_entries[0].offset, 8);
+        assert_eq!(seq_entries[0].size, 16);
+        assert_eq!(seq_entries[1].offset, 24);
+        assert_eq!(seq_entries[1].size, 40);
     }
 }

@@ -577,6 +577,70 @@ impl U64Field {
     }
 }
 
+/// A configured 64-bit signed field.
+///
+/// The descriptor owns only the field's byte offset and encoding. Its format
+/// owner remains responsible for assigning meaning and validating the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct I64Field {
+    offset: usize,
+    endian: Endian,
+}
+
+impl I64Field {
+    /// Configure the byte offset and byte order of the field.
+    #[must_use]
+    pub const fn new(offset: usize, endian: Endian) -> Self {
+        Self { offset, endian }
+    }
+
+    /// Read the field from an arbitrary resident carrier.
+    #[inline]
+    pub fn read(self, bytes: &[u8]) -> Result<i64> {
+        Ok(u64_at_endian(bytes, self.offset, self.endian)? as i64)
+    }
+
+    /// Read after the enclosing fixed-width record has been bounded.
+    ///
+    /// Panics when the configured field exceeds `WIDTH`. That is a static
+    /// descriptor error, rather than a property of the input bytes.
+    #[inline(always)]
+    pub fn read_record<const WIDTH: usize>(self, bytes: &[u8; WIDTH]) -> i64 {
+        assert!(
+            self.offset.checked_add(8).is_some_and(|end| end <= WIDTH),
+            "i64 field exceeds record"
+        );
+        u64_at_endian(bytes, self.offset, self.endian).expect("validated i64 record field") as i64
+    }
+
+    /// Write the field without changing any surrounding bytes.
+    #[inline]
+    pub fn write(self, bytes: &mut [u8], value: i64) -> Result<()> {
+        let encoded = match self.endian {
+            Endian::Little => value.to_le_bytes(),
+            Endian::Big => value.to_be_bytes(),
+        };
+        bytes_at_mut(bytes, self.offset, 8)?.copy_from_slice(&encoded);
+        Ok(())
+    }
+
+    /// Write after the enclosing fixed-width record has been bounded.
+    ///
+    /// Panics when the configured field exceeds `WIDTH`.
+    #[inline(always)]
+    pub fn write_record<const WIDTH: usize>(self, bytes: &mut [u8; WIDTH], value: i64) {
+        assert!(
+            self.offset.checked_add(8).is_some_and(|end| end <= WIDTH),
+            "i64 field exceeds record"
+        );
+        let encoded = match self.endian {
+            Endian::Little => value.to_le_bytes(),
+            Endian::Big => value.to_be_bytes(),
+        };
+        bytes[self.offset..self.offset + 8].copy_from_slice(&encoded);
+    }
+}
+
 /// A configured raw IEEE-754 single-precision field.
 ///
 /// The descriptor assigns no finite-value, coordinate, or numeric policy. All
@@ -644,6 +708,76 @@ impl F32Field {
             Endian::Big => value.to_bits().to_be_bytes(),
         };
         bytes[self.offset..self.offset + 4].copy_from_slice(&encoded);
+    }
+}
+
+/// A configured raw IEEE-754 double-precision field.
+///
+/// The descriptor assigns no finite-value, coordinate, or numeric policy. All
+/// bit patterns, including signed zero and NaN payloads, round-trip unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct F64Field {
+    offset: usize,
+    endian: Endian,
+}
+
+impl F64Field {
+    /// Configure the byte offset and byte order of the field.
+    #[must_use]
+    pub const fn new(offset: usize, endian: Endian) -> Self {
+        Self { offset, endian }
+    }
+
+    /// Read the field from an arbitrary resident carrier.
+    #[inline]
+    pub fn read(self, bytes: &[u8]) -> Result<f64> {
+        Ok(f64::from_bits(u64_at_endian(
+            bytes,
+            self.offset,
+            self.endian,
+        )?))
+    }
+
+    /// Read after the enclosing fixed-width record has been bounded.
+    ///
+    /// Panics when the configured field exceeds `WIDTH`. That is a static
+    /// descriptor error, rather than a property of the input bytes.
+    #[inline(always)]
+    pub fn read_record<const WIDTH: usize>(self, bytes: &[u8; WIDTH]) -> f64 {
+        assert!(
+            self.offset.checked_add(8).is_some_and(|end| end <= WIDTH),
+            "f64 field exceeds record"
+        );
+        f64::from_bits(
+            u64_at_endian(bytes, self.offset, self.endian).expect("validated f64 record field"),
+        )
+    }
+
+    /// Write the field without changing any surrounding bytes.
+    #[inline]
+    pub fn write(self, bytes: &mut [u8], value: f64) -> Result<()> {
+        let encoded = match self.endian {
+            Endian::Little => value.to_bits().to_le_bytes(),
+            Endian::Big => value.to_bits().to_be_bytes(),
+        };
+        bytes_at_mut(bytes, self.offset, 8)?.copy_from_slice(&encoded);
+        Ok(())
+    }
+
+    /// Write after the enclosing fixed-width record has been bounded.
+    ///
+    /// Panics when the configured field exceeds `WIDTH`.
+    #[inline(always)]
+    pub fn write_record<const WIDTH: usize>(self, bytes: &mut [u8; WIDTH], value: f64) {
+        assert!(
+            self.offset.checked_add(8).is_some_and(|end| end <= WIDTH),
+            "f64 field exceeds record"
+        );
+        let encoded = match self.endian {
+            Endian::Little => value.to_bits().to_le_bytes(),
+            Endian::Big => value.to_bits().to_be_bytes(),
+        };
+        bytes[self.offset..self.offset + 8].copy_from_slice(&encoded);
     }
 }
 
@@ -1630,6 +1764,42 @@ mod tests {
             } else {
                 assert!(std::panic::catch_unwind(|| xyz.read_record(&[0; 12])).is_err());
             }
+        }
+    }
+
+    #[test]
+    fn i64_and_f64_fields_round_trip_both_endians_and_bit_patterns() {
+        for endian in [Endian::Little, Endian::Big] {
+            let i_field = I64Field::new(1, endian);
+            let f_field = F64Field::new(1, endian);
+            for value in [i64::MIN, -1, 0, 1, i64::MAX] {
+                let mut buf = [0xaa; 10];
+                i_field.write(&mut buf, value).unwrap();
+                assert_eq!(buf[0], 0xaa);
+                assert_eq!(buf[9], 0xaa);
+                assert_eq!(i_field.read(&buf).unwrap(), value);
+                assert_eq!(i_field.read_record(&buf), value);
+                i_field.write_record(&mut buf, value.wrapping_neg());
+                assert_eq!(i_field.read_record(&buf), value.wrapping_neg());
+            }
+            for bits in [
+                0u64,
+                1u64 << 63,
+                (-12.5f64).to_bits(),
+                0x7ff8_0000_0000_1234u64, // quiet NaN payload
+            ] {
+                let value = f64::from_bits(bits);
+                let mut buf = [0x55; 10];
+                f_field.write(&mut buf, value).unwrap();
+                assert_eq!(buf[0], 0x55);
+                assert_eq!(buf[9], 0x55);
+                assert_eq!(f_field.read(&buf).unwrap().to_bits(), bits);
+                assert_eq!(f_field.read_record(&buf).to_bits(), bits);
+                f_field.write_record(&mut buf, f64::from_bits(bits ^ 1));
+                assert_eq!(f_field.read_record(&buf).to_bits(), bits ^ 1);
+            }
+            assert!(i_field.read(&[0; 8]).is_err());
+            assert!(f_field.read(&[0; 8]).is_err());
         }
     }
 }

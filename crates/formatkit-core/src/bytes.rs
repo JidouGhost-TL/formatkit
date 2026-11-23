@@ -160,9 +160,56 @@ pub fn write_uint_be_at<const BYTES: usize>(b: &mut [u8], offset: usize, value: 
     Ok(())
 }
 
+/// Read an unsigned little-endian integer stored in exactly `BYTES` bytes.
+///
+/// Width is a static codec property and must be in `1..=8`. Carrier bounds use
+/// the same structured truncation diagnostics as [`bytes_at`].
+///
+/// ```compile_fail
+/// let _ = formatkit_core::uint_le_at::<0>(&[], 0);
+/// ```
+#[inline]
+pub fn uint_le_at<const BYTES: usize>(b: &[u8], offset: usize) -> Result<u64> {
+    const { assert!(BYTES >= 1 && BYTES <= 8) }
+    Ok(bytes_at(b, offset, BYTES)?
+        .iter()
+        .rev()
+        .fold(0u64, |value, &byte| (value << 8) | u64::from(byte)))
+}
+
+/// Write an unsigned little-endian integer into exactly `BYTES` existing bytes.
+///
+/// The value fit and destination bounds are both validated before any byte is
+/// changed. Width is a static codec property and must be in `1..=8`.
+///
+/// ```compile_fail
+/// let mut bytes = [0; 9];
+/// formatkit_core::write_uint_le_at::<9>(&mut bytes, 0, 0)?;
+/// # Ok::<(), formatkit_core::Error>(())
+/// ```
+#[inline]
+pub fn write_uint_le_at<const BYTES: usize>(b: &mut [u8], offset: usize, value: u64) -> Result<()> {
+    const { assert!(BYTES >= 1 && BYTES <= 8) }
+    if BYTES < 8 && value >= (1u64 << (BYTES * 8)) {
+        return Err(Error::InvalidField {
+            what: "fixed-width little-endian integer",
+            value,
+        });
+    }
+    let target = bytes_at_mut(b, offset, BYTES)?;
+    target.copy_from_slice(&value.to_le_bytes()[..BYTES]);
+    Ok(())
+}
+
 /// Read a `u8` at absolute offset `off`.
 pub fn u8_at(b: &[u8], off: usize) -> Result<u8> {
     Ok(bytes_at(b, off, 1)?[0])
+}
+
+/// Read an `i8` at absolute offset `off`.
+#[inline]
+pub fn i8_at(b: &[u8], off: usize) -> Result<i8> {
+    Ok(u8_at(b, off)? as i8)
 }
 
 /// Read a little-endian `u16` at absolute offset `off`.
@@ -227,6 +274,24 @@ pub fn i32_at_endian(b: &[u8], off: usize, endian: Endian) -> Result<i32> {
 /// Read a little-endian `i16` at absolute offset `off`.
 pub fn i16_at(b: &[u8], off: usize) -> Result<i16> {
     Ok(u16_at(b, off)? as i16)
+}
+
+/// Read an `i16` in `endian` byte order at absolute offset `off`.
+#[inline]
+pub fn i16_at_endian(b: &[u8], off: usize, endian: Endian) -> Result<i16> {
+    Ok(u16_at_endian(b, off, endian)? as i16)
+}
+
+/// Read a little-endian `i64` at absolute offset `off`.
+#[inline]
+pub fn i64_at(b: &[u8], off: usize) -> Result<i64> {
+    Ok(u64_at(b, off)? as i64)
+}
+
+/// Read an `i64` in `endian` byte order at absolute offset `off`.
+#[inline]
+pub fn i64_at_endian(b: &[u8], off: usize, endian: Endian) -> Result<i64> {
+    Ok(u64_at_endian(b, off, endian)? as i64)
 }
 
 #[cfg(test)]
@@ -536,6 +601,114 @@ mod tests {
                 offset: usize::MAX,
                 needed: 4,
                 available: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn signed_i8_i16_endian_and_i64_reads_preserve_bits_and_bounds() {
+        assert_eq!(i8_at(&[0x80, 0x7f, 0xff], 0).unwrap(), -128);
+        assert_eq!(i8_at(&[0x80, 0x7f, 0xff], 1).unwrap(), 127);
+        assert_eq!(i8_at(&[0x80, 0x7f, 0xff], 2).unwrap(), -1);
+        assert_eq!(
+            i8_at(&[], 0),
+            Err(Error::Truncated {
+                offset: 0,
+                needed: 1,
+                available: 0,
+            })
+        );
+
+        let b16 = [0x80, 0x00, 0xff, 0x7f];
+        assert_eq!(i16_at_endian(&b16, 0, Endian::Big).unwrap(), i16::MIN);
+        assert_eq!(i16_at_endian(&b16, 0, Endian::Little).unwrap(), 0x0080);
+        assert_eq!(i16_at_endian(&b16, 2, Endian::Little).unwrap(), i16::MAX);
+        assert_eq!(
+            i16_at_endian(&b16, 3, Endian::Big),
+            Err(Error::Truncated {
+                offset: 3,
+                needed: 2,
+                available: 1,
+            })
+        );
+
+        for value in [i64::MIN, -1, 0, 1, i64::MAX] {
+            let mut le = [0xa5; 10];
+            le[1..9].copy_from_slice(&value.to_le_bytes());
+            assert_eq!(i64_at(&le, 1).unwrap(), value);
+            assert_eq!(i64_at_endian(&le, 1, Endian::Little).unwrap(), value);
+
+            let mut be = [0x5a; 10];
+            be[1..9].copy_from_slice(&value.to_be_bytes());
+            assert_eq!(i64_at_endian(&be, 1, Endian::Big).unwrap(), value);
+        }
+        assert_eq!(
+            i64_at(&[0; 7], 0),
+            Err(Error::Truncated {
+                offset: 0,
+                needed: 8,
+                available: 7,
+            })
+        );
+    }
+
+    #[test]
+    fn fixed_width_little_endian_codec_covers_every_width_and_errors() {
+        for width in 1..=8 {
+            let value = if width == 8 {
+                0x0123_4567_89ab_cdef
+            } else {
+                (1u64 << (width * 8)) - 1
+            };
+            let mut bytes = [0xa5; 10];
+            match width {
+                1 => write_uint_le_at::<1>(&mut bytes, 1, value).unwrap(),
+                2 => write_uint_le_at::<2>(&mut bytes, 1, value).unwrap(),
+                3 => write_uint_le_at::<3>(&mut bytes, 1, value).unwrap(),
+                4 => write_uint_le_at::<4>(&mut bytes, 1, value).unwrap(),
+                5 => write_uint_le_at::<5>(&mut bytes, 1, value).unwrap(),
+                6 => write_uint_le_at::<6>(&mut bytes, 1, value).unwrap(),
+                7 => write_uint_le_at::<7>(&mut bytes, 1, value).unwrap(),
+                8 => write_uint_le_at::<8>(&mut bytes, 1, value).unwrap(),
+                _ => unreachable!(),
+            }
+            let decoded = match width {
+                1 => uint_le_at::<1>(&bytes, 1).unwrap(),
+                2 => uint_le_at::<2>(&bytes, 1).unwrap(),
+                3 => uint_le_at::<3>(&bytes, 1).unwrap(),
+                4 => uint_le_at::<4>(&bytes, 1).unwrap(),
+                5 => uint_le_at::<5>(&bytes, 1).unwrap(),
+                6 => uint_le_at::<6>(&bytes, 1).unwrap(),
+                7 => uint_le_at::<7>(&bytes, 1).unwrap(),
+                8 => uint_le_at::<8>(&bytes, 1).unwrap(),
+                _ => unreachable!(),
+            };
+            assert_eq!(decoded, value);
+            assert_eq!(bytes[0], 0xa5);
+            assert!(bytes[1 + width..].iter().all(|&byte| byte == 0xa5));
+        }
+
+        // Verify byte order explicitly for 3-byte value 0x123456.
+        let mut buf = [0u8; 3];
+        write_uint_le_at::<3>(&mut buf, 0, 0x12_3456).unwrap();
+        assert_eq!(buf, [0x56, 0x34, 0x12]);
+        assert_eq!(uint_le_at::<3>(&buf, 0).unwrap(), 0x12_3456);
+
+        let mut untouched = [0x5a; 4];
+        assert_eq!(
+            write_uint_le_at::<3>(&mut untouched, 1, 0x1_000000),
+            Err(Error::InvalidField {
+                what: "fixed-width little-endian integer",
+                value: 0x1_000000,
+            })
+        );
+        assert_eq!(untouched, [0x5a; 4]);
+        assert_eq!(
+            uint_le_at::<3>(&[0; 2], 0),
+            Err(Error::Truncated {
+                offset: 0,
+                needed: 3,
+                available: 2,
             })
         );
     }

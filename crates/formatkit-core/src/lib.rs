@@ -10,16 +10,17 @@ pub use reader::Reader;
 
 mod bytes;
 pub use bytes::{
-    bytes_at, bytes_at_mut, checked_align_up, checked_align_up_multiple, i16_at, i32_at,
-    i32_at_endian, monotone_bounded, u16_at, u16_at_endian, u32_at, u32_at_endian, u64_at,
-    u64_at_endian, u8_at, uint_be_at, write_uint_be_at, zero_tail_lt, Endian,
+    bytes_at, bytes_at_mut, checked_align_up, checked_align_up_multiple, i16_at, i16_at_endian,
+    i32_at, i32_at_endian, i64_at, i64_at_endian, i8_at, monotone_bounded, u16_at, u16_at_endian,
+    u32_at, u32_at_endian, u64_at, u64_at_endian, u8_at, uint_be_at, uint_le_at, write_uint_be_at,
+    write_uint_le_at, zero_tail_lt, Endian,
 };
 
 mod bits;
 pub use bits::{Bit, BitRange, BitValueTooWide};
 
 mod bit_cursor;
-pub use bit_cursor::LsbBitCursor;
+pub use bit_cursor::{LsbBitCursor, MsbBitCursor};
 
 mod interleaved_bits;
 pub use interleaved_bits::{
@@ -88,7 +89,7 @@ pub use transformed_member::{materialize_transformed_member, TransformMaterializ
 
 mod text;
 pub use text::{
-    fixed_field, nul_terminated, nul_terminated_len, u16_le_prefixed, u8_prefixed,
+    fixed_field, nul_terminated, nul_terminated_len, u16_be_prefixed, u16_le_prefixed, u8_prefixed,
     write_nul_or_full, write_nul_padded, write_nul_terminated,
 };
 

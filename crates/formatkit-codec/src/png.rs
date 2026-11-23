@@ -186,12 +186,13 @@ fn unfilter_scanline(
     Ok(())
 }
 
-/// Decode a standard non-interlaced 8-bit PNG byte stream into an RGBA8 [`Image`].
+/// Decode a standard non-interlaced PNG byte stream into an RGBA8 [`Image`].
 ///
 /// Validates the PNG signature, `IHDR`, chunk CRCs (`Crc32IsoHdlc`),
 /// consecutive `IDAT` chunks, zlib decompression, and scanline filters `0..=4`.
-/// Supports 8-bit Grayscale (color type 0), RGB (2), Indexed (`PLTE` + optional
-/// `tRNS`, 3), GrayAlpha (4), and RGBA (6).
+/// Supports Grayscale (color type 0) and Indexed (`PLTE` + optional `tRNS`, 3)
+/// at bit depths `1`, `2`, `4`, and `8`, plus 8-bit RGB (2), GrayAlpha (4),
+/// and RGBA (6).
 pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
     if bytes.len() < PNG_SIGNATURE.len() {
         return Err(Error::Truncated {
@@ -207,6 +208,7 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
     let mut pos = 8usize;
     let mut width = 0u32;
     let mut height = 0u32;
+    let mut bit_depth = 0u8;
     let mut color_type = 0u8;
     let mut seen_ihdr = false;
     let mut seen_idat = false;
@@ -274,7 +276,7 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
             }
             width = u32::from_be_bytes(data[0..4].try_into().unwrap());
             height = u32::from_be_bytes(data[4..8].try_into().unwrap());
-            let bit_depth = data[8];
+            bit_depth = data[8];
             color_type = data[9];
             let compression = data[10];
             let filter = data[11];
@@ -294,16 +296,21 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
                     limit: max_pixels,
                 });
             }
-            if bit_depth != 8 {
-                return Err(Error::Unsupported(format!(
-                    "PNG bit depth {bit_depth} (only 8-bit is supported)"
-                )));
-            }
             if !matches!(color_type, 0 | 2 | 3 | 4 | 6) {
                 return Err(Error::InvalidField {
                     what: "PNG color type",
                     value: u64::from(color_type),
                 });
+            }
+            let valid_depth = match color_type {
+                0 | 3 => matches!(bit_depth, 1 | 2 | 4 | 8),
+                2 | 4 | 6 => bit_depth == 8,
+                _ => unreachable!(),
+            };
+            if !valid_depth {
+                return Err(Error::Unsupported(format!(
+                    "PNG bit depth {bit_depth} for color type {color_type}"
+                )));
             }
             if compression != 0 {
                 return Err(Error::InvalidField {
@@ -436,12 +443,17 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
         6 => 4,
         _ => unreachable!(),
     };
-    let row_bytes = (width as usize)
-        .checked_mul(bpp)
-        .ok_or(Error::InvalidField {
-            what: "PNG scanline width",
-            value: u64::from(width),
-        })?;
+    let row_bytes = if bit_depth < 8 {
+        let pixels_per_byte = 8 / usize::from(bit_depth);
+        (width as usize).div_ceil(pixels_per_byte)
+    } else {
+        (width as usize)
+            .checked_mul(bpp)
+            .ok_or(Error::InvalidField {
+                what: "PNG scanline width",
+                value: u64::from(width),
+            })?
+    };
     let scanline_bytes = row_bytes.checked_add(1).ok_or(Error::InvalidField {
         what: "PNG scanline width",
         value: u64::from(width),
@@ -489,13 +501,32 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
         unfilter_scanline(scanline[0], &scanline[1..], &prev_row, &mut cur_row, bpp)?;
         match color_type {
             0 => {
-                for &g in &cur_row {
-                    let a = if trns_gray == Some(u16::from(g)) {
-                        0
-                    } else {
-                        255
-                    };
-                    rgba.extend_from_slice(&[g, g, g, a]);
+                if bit_depth == 8 {
+                    for &g in &cur_row {
+                        let a = if trns_gray == Some(u16::from(g)) {
+                            0
+                        } else {
+                            255
+                        };
+                        rgba.extend_from_slice(&[g, g, g, a]);
+                    }
+                } else {
+                    let bd = usize::from(bit_depth);
+                    let pixels_per_byte = 8 / bd;
+                    let mask = (1u8 << bit_depth) - 1;
+                    let scale = 255 / mask;
+                    for x in 0..(width as usize) {
+                        let byte = cur_row[x / pixels_per_byte];
+                        let shift = 8 - bd * ((x % pixels_per_byte) + 1);
+                        let sample = (byte >> shift) & mask;
+                        let g = sample * scale;
+                        let a = if trns_gray == Some(u16::from(sample)) {
+                            0
+                        } else {
+                            255
+                        };
+                        rgba.extend_from_slice(&[g, g, g, a]);
+                    }
                 }
             }
             2 => {
@@ -514,7 +545,21 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
                 let palette = plte.expect("validated PLTE presence");
                 let palette_entries = palette.len() / 3;
                 let alphas = trns.unwrap_or(&[]);
-                for &idx in &cur_row {
+                let bd = usize::from(bit_depth);
+                let pixels_per_byte = 8 / bd;
+                let mask = if bit_depth == 8 {
+                    0xffu8
+                } else {
+                    (1u8 << bit_depth) - 1
+                };
+                for x in 0..(width as usize) {
+                    let idx = if bit_depth == 8 {
+                        cur_row[x]
+                    } else {
+                        let byte = cur_row[x / pixels_per_byte];
+                        let shift = 8 - bd * ((x % pixels_per_byte) + 1);
+                        (byte >> shift) & mask
+                    };
                     let i = usize::from(idx);
                     if i >= palette_entries {
                         return Err(Error::InvalidField {
@@ -736,5 +781,115 @@ mod tests {
         // Corrupt a byte inside the IHDR CRC.
         png[29] ^= 0x80;
         assert!(decode_png_rgba(&png, 4).is_err());
+    }
+
+    fn build_png_with_depth(
+        width: u32,
+        height: u32,
+        bit_depth: u8,
+        color_type: u8,
+        extra_chunks: &[([u8; 4], &[u8])],
+        raw_scanlines: &[u8],
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&PNG_SIGNATURE);
+
+        let mut ihdr = [0u8; 13];
+        ihdr[0..4].copy_from_slice(&width.to_be_bytes());
+        ihdr[4..8].copy_from_slice(&height.to_be_bytes());
+        ihdr[8] = bit_depth;
+        ihdr[9] = color_type;
+        write_chunk(&mut out, *b"IHDR", &ihdr);
+        for &(tag, payload) in extra_chunks {
+            write_chunk(&mut out, tag, payload);
+        }
+        let compressed = crate::zlib_compress(raw_scanlines);
+        write_chunk(&mut out, *b"IDAT", &compressed);
+        write_chunk(&mut out, *b"IEND", &[]);
+        out
+    }
+
+    #[test]
+    fn decodes_sub_byte_grayscale_and_indexed_pngs() {
+        // 1-bit Grayscale (width=5, height=1): bits 1,0,1,1,0 (+ 3 padding bits).
+        let g1_png = build_png_with_depth(5, 1, 1, 0, &[(*b"tRNS", &[0, 0])], &[0, 0b1011_0111]);
+        let g1 = decode_png_rgba(&g1_png, 16).unwrap();
+        assert_eq!(
+            g1.rgba,
+            vec![
+                255, 255, 255, 255, // 1
+                0, 0, 0, 0, // 0 (transparent via tRNS)
+                255, 255, 255, 255, // 1
+                255, 255, 255, 255, // 1
+                0, 0, 0, 0, // 0
+            ]
+        );
+
+        // 2-bit Grayscale (width=3, height=1): samples 0, 1, 3 -> 0, 85, 255.
+        let g2_png = build_png_with_depth(3, 1, 2, 0, &[], &[0, 0b00_01_11_10]);
+        let g2 = decode_png_rgba(&g2_png, 16).unwrap();
+        assert_eq!(
+            g2.rgba,
+            vec![0, 0, 0, 255, 85, 85, 85, 255, 255, 255, 255, 255]
+        );
+
+        // 4-bit Grayscale (width=3, height=1): samples 0, 8, 15 -> 0, 0x88, 0xFF.
+        let g4_png = build_png_with_depth(3, 1, 4, 0, &[], &[0, 0x08, 0xF0]);
+        let g4 = decode_png_rgba(&g4_png, 16).unwrap();
+        assert_eq!(
+            g4.rgba,
+            vec![0, 0, 0, 255, 0x88, 0x88, 0x88, 255, 255, 255, 255, 255]
+        );
+
+        // 1-bit, 2-bit, and 4-bit Indexed with PLTE + tRNS.
+        let plte = [
+            255, 0, 0, // 0
+            0, 255, 0, // 1
+            0, 0, 255, // 2
+            255, 255, 0, // 3
+        ];
+        let trns = [0, 128];
+        let i1_png = build_png_with_depth(
+            3,
+            1,
+            1,
+            3,
+            &[(*b"PLTE", &plte[..6]), (*b"tRNS", &trns)],
+            &[0, 0b1010_0000],
+        );
+        let i1 = decode_png_rgba(&i1_png, 16).unwrap();
+        assert_eq!(i1.rgba, vec![0, 255, 0, 128, 255, 0, 0, 0, 0, 255, 0, 128]);
+
+        let i2_png = build_png_with_depth(
+            3,
+            1,
+            2,
+            3,
+            &[(*b"PLTE", &plte), (*b"tRNS", &trns)],
+            &[0, 0b00_01_10_11],
+        );
+        let i2 = decode_png_rgba(&i2_png, 16).unwrap();
+        assert_eq!(i2.rgba, vec![255, 0, 0, 0, 0, 255, 0, 128, 0, 0, 255, 255]);
+
+        let i4_png = build_png_with_depth(
+            3,
+            1,
+            4,
+            3,
+            &[(*b"PLTE", &plte), (*b"tRNS", &trns)],
+            &[0, 0x32, 0x10],
+        );
+        let i4 = decode_png_rgba(&i4_png, 16).unwrap();
+        assert_eq!(
+            i4.rgba,
+            vec![255, 255, 0, 255, 0, 0, 255, 255, 0, 255, 0, 128]
+        );
+
+        // Sub-byte depth is rejected for RGB (color type 2).
+        let bad_rgb = build_png_with_depth(2, 1, 4, 2, &[], &[0, 0x00]);
+        assert!(matches!(
+            decode_png_rgba(&bad_rgb, 16),
+            Err(Error::Unsupported(_))
+        ));
     }
 }

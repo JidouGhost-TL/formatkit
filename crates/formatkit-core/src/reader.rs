@@ -39,6 +39,9 @@ impl<'a> Reader<'a> {
     pub fn u8(&mut self) -> Result<u8> {
         Ok(self.bytes(1)?[0])
     }
+    pub fn i8(&mut self) -> Result<i8> {
+        Ok(self.bytes(1)?[0] as i8)
+    }
     pub fn u16_le(&mut self) -> Result<u16> {
         let b = self.bytes(2)?;
         Ok(u16::from_le_bytes([b[0], b[1]]))
@@ -51,13 +54,49 @@ impl<'a> Reader<'a> {
         let b = self.bytes(4)?;
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
+    pub fn i32_le(&mut self) -> Result<i32> {
+        let b = self.bytes(4)?;
+        Ok(i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+    pub fn u64_le(&mut self) -> Result<u64> {
+        let b = self.bytes(8)?;
+        Ok(u64::from_le_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        ]))
+    }
+    pub fn i64_le(&mut self) -> Result<i64> {
+        let b = self.bytes(8)?;
+        Ok(i64::from_le_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        ]))
+    }
     pub fn u16_be(&mut self) -> Result<u16> {
         let b = self.bytes(2)?;
         Ok(u16::from_be_bytes([b[0], b[1]]))
     }
+    pub fn i16_be(&mut self) -> Result<i16> {
+        let b = self.bytes(2)?;
+        Ok(i16::from_be_bytes([b[0], b[1]]))
+    }
     pub fn u32_be(&mut self) -> Result<u32> {
         let b = self.bytes(4)?;
         Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    }
+    pub fn i32_be(&mut self) -> Result<i32> {
+        let b = self.bytes(4)?;
+        Ok(i32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    }
+    pub fn u64_be(&mut self) -> Result<u64> {
+        let b = self.bytes(8)?;
+        Ok(u64::from_be_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        ]))
+    }
+    pub fn i64_be(&mut self) -> Result<i64> {
+        let b = self.bytes(8)?;
+        Ok(i64::from_be_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        ]))
     }
 }
 

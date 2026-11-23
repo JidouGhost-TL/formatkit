@@ -94,6 +94,54 @@ pub fn blit_rgba(
     Ok(())
 }
 
+/// Crop an axis-aligned RGBA8888 sub-rectangle `(x, y, w, h)` from `src`
+/// (`src_w` × `src_h`) into `dst` (`w` × `h`).
+///
+/// Validates buffer lengths and requires `x + w <= src_w` and `y + h <= src_h`
+/// without overflow before copying.
+#[allow(clippy::too_many_arguments)]
+pub fn crop_rgba(
+    src: &[u8],
+    src_w: u32,
+    src_h: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    dst: &mut [u8],
+) -> Result<(), PackError> {
+    let expected_src = checked_rgba_len(src_w, src_h)?;
+    if src.len() != expected_src {
+        return Err(PackError::LengthMismatch {
+            expected: expected_src,
+            actual: src.len(),
+        });
+    }
+    let expected_dst = checked_rgba_len(w, h)?;
+    if dst.len() != expected_dst {
+        return Err(PackError::LengthMismatch {
+            expected: expected_dst,
+            actual: dst.len(),
+        });
+    }
+    if x.checked_add(w).is_none_or(|end| end > src_w)
+        || y.checked_add(h).is_none_or(|end| end > src_h)
+    {
+        return Err(PackError::InvalidLayout {
+            reason: "crop rectangle exceeds source bounds",
+        });
+    }
+
+    let row_bytes = (w as usize) * 4;
+    let src_stride = (src_w as usize) * 4;
+    for row in 0..(h as usize) {
+        let src_off = ((y as usize) + row) * src_stride + (x as usize) * 4;
+        let dst_off = row * row_bytes;
+        dst[dst_off..dst_off + row_bytes].copy_from_slice(&src[src_off..src_off + row_bytes]);
+    }
+    Ok(())
+}
+
 /// Geometry and memory limit for [`compose_grid_atlas`].
 ///
 /// Each rendered cell is scaled by `scale` and separated from adjacent cells
@@ -358,6 +406,44 @@ mod tests {
             Err(PackError::LengthMismatch {
                 expected: 16,
                 actual: 12,
+            })
+        );
+    }
+
+    #[test]
+    fn crop_rgba_extracts_subrect_and_validates_bounds() {
+        // 3x3 image where pixel (x, y) has color [x, y, x+y, 255].
+        let mut src = Vec::with_capacity(3 * 3 * 4);
+        for y in 0..3u8 {
+            for x in 0..3u8 {
+                src.extend_from_slice(&[x, y, x + y, 255]);
+            }
+        }
+        let mut dst = vec![0u8; 2 * 2 * 4];
+        crop_rgba(&src, 3, 3, 1, 1, 2, 2, &mut dst).unwrap();
+        assert_eq!(
+            dst,
+            vec![
+                1, 1, 2, 255, 2, 1, 3, 255, //
+                1, 2, 3, 255, 2, 2, 4, 255,
+            ]
+        );
+
+        // Out-of-bounds crop rejected.
+        assert!(matches!(
+            crop_rgba(&src, 3, 3, 2, 0, 2, 2, &mut dst),
+            Err(PackError::InvalidLayout { .. })
+        ));
+        assert!(matches!(
+            crop_rgba(&src, 3, 3, u32::MAX, 0, 1, 1, &mut [0u8; 4]),
+            Err(PackError::InvalidLayout { .. })
+        ));
+        // Destination length mismatch rejected.
+        assert_eq!(
+            crop_rgba(&src, 3, 3, 0, 0, 2, 2, &mut [0u8; 8]),
+            Err(PackError::LengthMismatch {
+                expected: 16,
+                actual: 8,
             })
         );
     }

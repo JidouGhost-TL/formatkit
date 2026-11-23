@@ -69,6 +69,21 @@ pub fn gzip_with_limit(src: &[u8], max_output_len: usize) -> Option<Vec<u8>> {
     (decoded.consumed == src.len()).then_some(decoded.bytes)
 }
 
+/// Compress `data` into a deterministic single-member RFC 1952 gzip stream.
+///
+/// Emits a minimal 10-byte gzip header (no optional fields, OS byte `0xFF`),
+/// a raw DEFLATE stream produced by [`crate::deflate_compress`], and the
+/// 8-byte little-endian CRC-32 and ISIZE trailer.
+pub fn gzip_compress(data: &[u8]) -> Vec<u8> {
+    let deflated = crate::deflate_compress(data);
+    let mut out = Vec::with_capacity(FIXED_HEADER_LEN + deflated.len() + TRAILER_LEN);
+    out.extend_from_slice(&[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff]);
+    out.extend_from_slice(&deflated);
+    out.extend_from_slice(&crc32_iso_hdlc(data).to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +143,19 @@ mod tests {
         let mut reserved = valid.clone();
         reserved[3] |= 0x20;
         assert!(gzip_with_limit(&reserved, 6).is_none());
+    }
+
+    #[test]
+    fn gzip_compress_round_trips_deterministically() {
+        for input in [
+            &b""[..],
+            &b"hello gzip"[..],
+            &b"repeated pattern 0123456789 ".repeat(200)[..],
+        ] {
+            let gz_a = gzip_compress(input);
+            let gz_b = gzip_compress(input);
+            assert_eq!(gz_a, gz_b);
+            assert_eq!(gzip_with_limit(&gz_a, input.len()), Some(input.to_vec()));
+        }
     }
 }

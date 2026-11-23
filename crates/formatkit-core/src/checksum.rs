@@ -54,6 +54,20 @@ impl Crc16Params {
         reflected: false,
         swap_bytes: false,
     };
+    pub const CCITT_FALSE: Self = Self {
+        polynomial: 0x1021,
+        seed: 0xffff,
+        xor_out: 0,
+        reflected: false,
+        swap_bytes: false,
+    };
+    pub const MODBUS: Self = Self {
+        polynomial: 0xa001,
+        seed: 0xffff,
+        xor_out: 0,
+        reflected: true,
+        swap_bytes: false,
+    };
 
     pub fn compute(self, bytes: &[u8]) -> u16 {
         let mut state = Crc16::new(self);
@@ -313,6 +327,8 @@ mod crc16_tests {
             (Crc16Params::X25, 0x906e),
             (Crc16Params::BUYPASS, 0xfee8),
             (Crc16Params::XMODEM, 0x31c3),
+            (Crc16Params::CCITT_FALSE, 0x29b1),
+            (Crc16Params::MODBUS, 0x4b37),
         ] {
             assert_eq!(params.compute(b"123456789"), check);
             for split in 0..=9 {
@@ -396,6 +412,15 @@ pub fn sum_u32_le_words(bytes: &[u8], seed: u32) -> u32 {
         .fold(seed, |acc, &w| acc.wrapping_add(u32::from_le_bytes(w)))
 }
 
+/// Wrapping 32-bit sum of big-endian `u32` words (ignoring any trailing `< 4` bytes).
+pub fn sum_u32_be_words(bytes: &[u8], seed: u32) -> u32 {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .fold(seed, |acc, &w| acc.wrapping_add(u32::from_be_bytes(w)))
+}
+
 /// Bitwise XOR of bytes starting from `seed`.
 pub fn xor_bytes_u8(bytes: &[u8], seed: u8) -> u8 {
     bytes.iter().fold(seed, |acc, &b| acc ^ b)
@@ -415,6 +440,33 @@ pub fn xor_u16_le_words(bytes: &[u8], seed: u16) -> u16 {
         .fold(seed, |acc, &w| acc ^ u16::from_le_bytes(w))
 }
 
+/// Bitwise XOR of big-endian `u16` words starting from `seed` (ignoring any trailing odd byte).
+pub fn xor_u16_be_words(bytes: &[u8], seed: u16) -> u16 {
+    bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .fold(seed, |acc, &w| acc ^ u16::from_be_bytes(w))
+}
+
+/// Bitwise XOR of little-endian `u32` words starting from `seed` (ignoring any trailing `< 4` bytes).
+pub fn xor_u32_le_words(bytes: &[u8], seed: u32) -> u32 {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .fold(seed, |acc, &w| acc ^ u32::from_le_bytes(w))
+}
+
+/// Bitwise XOR of big-endian `u32` words starting from `seed` (ignoring any trailing `< 4` bytes).
+pub fn xor_u32_be_words(bytes: &[u8], seed: u32) -> u32 {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .fold(seed, |acc, &w| acc ^ u32::from_be_bytes(w))
+}
+
 /// Input unit width and byte order for [`FoldChecksum`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoldUnit {
@@ -424,6 +476,8 @@ pub enum FoldUnit {
     U16(crate::Endian),
     /// Unsigned 32-bit words (`4` bytes per step) in the given byte order.
     U32(crate::Endian),
+    /// Unsigned 64-bit words (`8` bytes per step) in the given byte order.
+    U64(crate::Endian),
 }
 
 impl FoldUnit {
@@ -432,6 +486,7 @@ impl FoldUnit {
             Self::Byte => 1,
             Self::U16(_) => 2,
             Self::U32(_) => 4,
+            Self::U64(_) => 8,
         }
     }
 }
@@ -544,6 +599,19 @@ impl FoldChecksum {
                     acc = step(acc, u64::from(val), idx as u64);
                 }
             }
+            FoldUnit::U64(endian) => {
+                for (idx, chunk) in bytes.chunks_exact(8).enumerate() {
+                    let raw = [
+                        chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
+                        chunk[7],
+                    ];
+                    let val = match endian {
+                        crate::Endian::Little => u64::from_le_bytes(raw),
+                        crate::Endian::Big => u64::from_be_bytes(raw),
+                    };
+                    acc = step(acc, val, idx as u64);
+                }
+            }
         }
 
         Ok((acc ^ self.xor_out) & mask)
@@ -597,9 +665,48 @@ mod arithmetic_checksum_tests {
         assert_eq!(sum_u16_le_words(&data, 0), 0x0201u16.wrapping_add(0x0403));
         assert_eq!(sum_u16_be_words(&data, 0), 0x0102u16.wrapping_add(0x0304));
         assert_eq!(sum_u32_le_words(&data, 0), 0x0403_0201);
+        assert_eq!(sum_u32_be_words(&data, 0), 0x0102_0304);
         assert_eq!(xor_bytes_u8(&data, 0), 0xFB);
         assert_eq!(xor_bytes(&data), 0xFB);
         assert_eq!(xor_u16_le_words(&data, 0), 0x0201 ^ 0x0403);
+        assert_eq!(xor_u16_be_words(&data, 0), 0x0102 ^ 0x0304);
+        assert_eq!(
+            xor_u32_le_words(&data, 0x1111_1111),
+            0x1111_1111 ^ 0x0403_0201
+        );
+        assert_eq!(
+            xor_u32_be_words(&data, 0x1111_1111),
+            0x1111_1111 ^ 0x0102_0304
+        );
+
+        let u64_fold_le = FoldChecksum {
+            unit: FoldUnit::U64(Endian::Little),
+            op: FoldOp::Sum,
+            bits: 64,
+            seed: 1,
+            xor_out: 0,
+        };
+        let u64_data = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, //
+            0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80,
+        ];
+        assert_eq!(
+            u64_fold_le.compute(&u64_data).unwrap(),
+            1u64.wrapping_add(0x0807_0605_0403_0201)
+                .wrapping_add(0x8070_6050_4030_2010)
+        );
+        let u64_fold_be = FoldChecksum {
+            unit: FoldUnit::U64(Endian::Big),
+            op: FoldOp::Xor,
+            bits: 64,
+            seed: 0,
+            xor_out: 0,
+        };
+        assert_eq!(
+            u64_fold_be.compute(&u64_data).unwrap(),
+            0x0102_0304_0506_0708 ^ 0x1020_3040_5060_7080
+        );
+        assert!(u64_fold_be.compute(&u64_data[..7]).is_err());
     }
 
     #[test]

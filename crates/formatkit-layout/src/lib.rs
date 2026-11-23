@@ -27,10 +27,11 @@ pub use chunks::{
 };
 pub use edit::{patch_bytes, patched_bytes, same_size_splice, SameSizeSpliceError};
 pub use field::{
-    BytesField, F32ArrayField, F32Field, I16ArrayField, I16Field, I32ArrayField, I32Field, I8Field,
-    ScaledU32Field, U16ArrayField, U16Field, U32ArrayField, U32Field, U64Field, U8Field,
+    BytesField, F32ArrayField, F32Field, F64Field, I16ArrayField, I16Field, I32ArrayField,
+    I32Field, I64Field, I8Field, ScaledU32Field, U16ArrayField, U16Field, U32ArrayField, U32Field,
+    U64Field, U8Field,
 };
-pub use iff::{parse_iff_form, IffChunk, IffForm, IFF_FORM_MAGIC};
+pub use iff::{parse_iff_form, parse_riff_form, IffChunk, IffForm, IFF_FORM_MAGIC, RIFF_MAGIC};
 pub use ranges::{
     audit_exact_tiling, audit_ordered_contiguous_run, audit_ordered_non_overlapping,
     checked_align_up_u64, child_run, nondecreasing_successor_ranges, strict_successor_ranges,

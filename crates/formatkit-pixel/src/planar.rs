@@ -4,6 +4,7 @@ use crate::{BitOrder, IndexPolicy, PackError};
 
 fn expected_tile_bytes(planes: u8) -> Result<usize, PackError> {
     match planes {
+        1 => Ok(8),
         2 => Ok(16),
         4 => Ok(32),
         _ => Err(PackError::UnsupportedPlanes { planes }),
@@ -13,6 +14,7 @@ fn expected_tile_bytes(planes: u8) -> Result<usize, PackError> {
 /// Unpack an interleaved-row planar 8x8 tile into 64 row-major palette indices.
 ///
 /// Supported bitplane depths:
+/// - `planes == 1`: 8 bytes total (1 byte per row: plane 0), indices in `0..=1`.
 /// - `planes == 2`: 16 bytes total (2 bytes per row: plane 0, plane 1), indices in `0..=3`.
 /// - `planes == 4`: 32 bytes total (4 bytes per row: planes 0..=3), indices in `0..=15`.
 pub fn unpack_planar_tile_8x8_into(
@@ -50,6 +52,7 @@ pub fn unpack_planar_tile_8x8_into(
 /// Pack 64 row-major palette indices into an interleaved-row planar 8x8 tile.
 ///
 /// Supported bitplane depths:
+/// - `planes == 1`: writes 8 bytes (1 byte per row), valid index range `0..=1`.
 /// - `planes == 2`: writes 16 bytes (2 bytes per row), valid index range `0..=3`.
 /// - `planes == 4`: writes 32 bytes (4 bytes per row), valid index range `0..=15`.
 pub fn pack_planar_tile_8x8_into(
@@ -99,8 +102,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_2bpp_and_4bpp_both_bit_orders() {
-        for (planes, max_val) in [(2u8, 3u8), (4u8, 15u8)] {
+    fn round_trip_1bpp_2bpp_and_4bpp_both_bit_orders() {
+        for (planes, max_val) in [(1u8, 1u8), (2u8, 3u8), (4u8, 15u8)] {
             let mut tile = [0u8; 64];
             for (i, px) in tile.iter_mut().enumerate() {
                 *px = (i as u8) % (max_val + 1);

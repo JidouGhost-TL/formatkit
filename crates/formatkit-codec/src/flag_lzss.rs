@@ -11,7 +11,7 @@
 //! Header parsing, match-token grammar, trailing-flag policy, and carrier
 //! framing remain with the caller.
 
-use formatkit_core::{u16_at, u32_at, u8_at, Error, Result};
+use formatkit_core::{u16_at, u16_at_endian, u32_at, u32_at_endian, u8_at, Endian, Error, Result};
 
 use crate::sliding_window::{self, MatchError};
 
@@ -22,8 +22,12 @@ pub enum FlagWidth {
     U8,
     /// Little-endian 16-bit flag word (16 tokens per flag group).
     U16Le,
+    /// Big-endian 16-bit flag word (16 tokens per flag group).
+    U16Be,
     /// Little-endian 32-bit flag word (32 tokens per flag group).
     U32Le,
+    /// Big-endian 32-bit flag word (32 tokens per flag group).
+    U32Be,
 }
 
 impl FlagWidth {
@@ -31,8 +35,8 @@ impl FlagWidth {
     const fn bits(self) -> u8 {
         match self {
             Self::U8 => 8,
-            Self::U16Le => 16,
-            Self::U32Le => 32,
+            Self::U16Le | Self::U16Be => 16,
+            Self::U32Le | Self::U32Be => 32,
         }
     }
 }
@@ -159,8 +163,18 @@ where
                     pos += 2;
                     u32::from(v)
                 }
+                FlagWidth::U16Be => {
+                    let v = u16_at_endian(src, pos, Endian::Big)?;
+                    pos += 2;
+                    u32::from(v)
+                }
                 FlagWidth::U32Le => {
                     let v = u32_at(src, pos)?;
+                    pos += 4;
+                    v
+                }
+                FlagWidth::U32Be => {
+                    let v = u32_at_endian(src, pos, Endian::Big)?;
                     pos += 4;
                     v
                 }
@@ -298,7 +312,9 @@ mod tests {
             match config.flag_width {
                 FlagWidth::U8 => out.push(flags as u8),
                 FlagWidth::U16Le => out.extend_from_slice(&(flags as u16).to_le_bytes()),
+                FlagWidth::U16Be => out.extend_from_slice(&(flags as u16).to_be_bytes()),
                 FlagWidth::U32Le => out.extend_from_slice(&flags.to_le_bytes()),
+                FlagWidth::U32Be => out.extend_from_slice(&flags.to_be_bytes()),
             }
             out.extend_from_slice(&payload);
         }
@@ -375,7 +391,13 @@ mod tests {
             expected.push(b);
         }
 
-        let widths = [FlagWidth::U8, FlagWidth::U16Le, FlagWidth::U32Le];
+        let widths = [
+            FlagWidth::U8,
+            FlagWidth::U16Le,
+            FlagWidth::U16Be,
+            FlagWidth::U32Le,
+            FlagWidth::U32Be,
+        ];
         let orders = [FlagBitOrder::LsbFirst, FlagBitOrder::MsbFirst];
         let polarities = [FlagPolarity::LiteralIsOne, FlagPolarity::LiteralIsZero];
 
@@ -551,7 +573,9 @@ mod tests {
         for (flag_width, short_src, needed) in [
             (FlagWidth::U8, &[][..], 1usize),
             (FlagWidth::U16Le, &[0x01][..], 2usize),
+            (FlagWidth::U16Be, &[0x01][..], 2usize),
             (FlagWidth::U32Le, &[0x01, 0x02, 0x03][..], 4usize),
+            (FlagWidth::U32Be, &[0x01, 0x02, 0x03][..], 4usize),
         ] {
             let cfg = FlagLzssConfig {
                 flag_width,

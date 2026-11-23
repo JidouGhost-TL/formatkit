@@ -39,12 +39,31 @@ pub fn delta_encode_u16_le_into(src: &[u8], out: &mut Vec<u8>) {
     }
 }
 
+/// Decode a big-endian 16-bit wrapping delta stream (`src.len()` must be even).
+pub fn delta_decode_u16_be_into(src: &[u8], out: &mut Vec<u8>) {
+    let mut acc = 0u16;
+    for &chunk in src.as_chunks::<2>().0 {
+        acc = acc.wrapping_add(u16::from_be_bytes(chunk));
+        out.extend_from_slice(&acc.to_be_bytes());
+    }
+}
+
+/// Encode big-endian 16-bit words as a wrapping delta stream (`src.len()` must be even).
+pub fn delta_encode_u16_be_into(src: &[u8], out: &mut Vec<u8>) {
+    let mut prev = 0u16;
+    for &chunk in src.as_chunks::<2>().0 {
+        let word = u16::from_be_bytes(chunk);
+        out.extend_from_slice(&word.wrapping_sub(prev).to_be_bytes());
+        prev = word;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn u8_and_u16_le_delta_round_trip() {
+    fn u8_and_u16_le_be_delta_round_trip() {
         let src = [10u8, 12, 12, 5, 250, 3];
         let mut enc = Vec::new();
         delta_encode_u8_into(&src, &mut enc);
@@ -58,5 +77,12 @@ mod tests {
         let mut dec16 = Vec::new();
         delta_decode_u16_le_into(&enc16, &mut dec16);
         assert_eq!(dec16, src16);
+
+        let mut enc16_be = Vec::new();
+        delta_encode_u16_be_into(&src16, &mut enc16_be);
+        assert_ne!(enc16_be, enc16);
+        let mut dec16_be = Vec::new();
+        delta_decode_u16_be_into(&enc16_be, &mut dec16_be);
+        assert_eq!(dec16_be, src16);
     }
 }

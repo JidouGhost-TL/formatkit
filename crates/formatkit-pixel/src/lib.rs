@@ -217,6 +217,92 @@ pub fn unpack_2bpp_into(packed: &[u8], order: BitOrder, out: &mut [u8]) -> Resul
     Ok(())
 }
 
+/// Pack 1-bit-per-pixel palette indices directly into `out` without allocation.
+///
+/// `out.len()` must equal `indices.len().div_ceil(8)`. Trailing bits in the
+/// final byte are zero-padded when `indices.len()` is not a multiple of 8.
+pub fn pack_1bpp_into(
+    indices: &[u8],
+    order: BitOrder,
+    policy: IndexPolicy,
+    out: &mut [u8],
+) -> Result<(), PackError> {
+    let expected_bytes = indices.len().div_ceil(8);
+    if out.len() != expected_bytes {
+        return Err(PackError::LengthMismatch {
+            expected: expected_bytes,
+            actual: out.len(),
+        });
+    }
+    if policy == IndexPolicy::Reject {
+        for (index, &value) in indices.iter().enumerate() {
+            if value > 1 {
+                return Err(PackError::IndexOutOfRange { index, value });
+            }
+        }
+    }
+    for (byte_idx, dst) in out.iter_mut().enumerate() {
+        let base = byte_idx * 8;
+        let mut byte = 0u8;
+        for bit in 0..8 {
+            if base + bit >= indices.len() {
+                break;
+            }
+            let v = indices[base + bit] & 1;
+            let shift = match order {
+                BitOrder::LsbFirst => bit,
+                BitOrder::MsbFirst => 7 - bit,
+            };
+            byte |= v << shift;
+        }
+        *dst = byte;
+    }
+    Ok(())
+}
+
+/// Pack 2-bit-per-pixel palette indices directly into `out` without allocation.
+///
+/// `out.len()` must equal `indices.len().div_ceil(4)`. Trailing 2-bit slots in
+/// the final byte are zero-padded when `indices.len()` is not a multiple of 4.
+pub fn pack_2bpp_into(
+    indices: &[u8],
+    order: BitOrder,
+    policy: IndexPolicy,
+    out: &mut [u8],
+) -> Result<(), PackError> {
+    let expected_bytes = indices.len().div_ceil(4);
+    if out.len() != expected_bytes {
+        return Err(PackError::LengthMismatch {
+            expected: expected_bytes,
+            actual: out.len(),
+        });
+    }
+    if policy == IndexPolicy::Reject {
+        for (index, &value) in indices.iter().enumerate() {
+            if value > 0x03 {
+                return Err(PackError::IndexOutOfRange { index, value });
+            }
+        }
+    }
+    for (byte_idx, dst) in out.iter_mut().enumerate() {
+        let base = byte_idx * 4;
+        let mut byte = 0u8;
+        for slot in 0..4 {
+            if base + slot >= indices.len() {
+                break;
+            }
+            let v = indices[base + slot] & 0x03;
+            let shift = match order {
+                BitOrder::LsbFirst => slot * 2,
+                BitOrder::MsbFirst => (3 - slot) * 2,
+            };
+            byte |= v << shift;
+        }
+        *dst = byte;
+    }
+    Ok(())
+}
+
 /// Extent of one dimension at a floor-halved mip level.
 ///
 /// This is the DDS/GTF/GXT-style rule: each level shifts right and clamps to
@@ -442,6 +528,95 @@ pub fn rgb444_to_rgba(c: u16) -> [u8; 4] {
 pub fn bgr444_to_rgba(c: u16) -> [u8; 4] {
     let nib = |v: u16| (((v << 4) | v) & 0xff) as u8;
     [nib(c & 0xf), nib((c >> 4) & 0xf), nib((c >> 8) & 0xf), 0xff]
+}
+
+/// Pack an RGBA8888 pixel into a 16-bit RGB565 word (`0bRRRRR_GGGGGG_BBBBB`).
+///
+/// Inverse of [`rgb565_to_rgba`]: red occupies the high 5 bits, green occupies
+/// the middle 6 bits, and blue occupies the low 5 bits. Alpha is ignored.
+#[inline]
+pub fn rgba8_to_rgb565(rgba: [u8; 4]) -> u16 {
+    (u16::from(rgba[0] >> 3) << 11) | (u16::from(rgba[1] >> 2) << 5) | u16::from(rgba[2] >> 3)
+}
+
+/// Pack an RGBA8888 pixel into a 16-bit RGBA5650 word (`0bBBBBB_GGGGGG_RRRRR`).
+///
+/// Inverse of [`rgba5650_to_rgba`]: red occupies the low 5 bits, green occupies
+/// the middle 6 bits, and blue occupies the high 5 bits. Alpha is ignored.
+#[inline]
+pub fn rgba8_to_rgba5650(rgba: [u8; 4]) -> u16 {
+    u16::from(rgba[0] >> 3) | (u16::from(rgba[1] >> 2) << 5) | (u16::from(rgba[2] >> 3) << 11)
+}
+
+/// Pack an RGBA8888 pixel into a 16-bit RGBA5551 word.
+///
+/// Inverse of [`rgba5551_to_rgba`]: 5-bit red/green/blue in bits `0..15`, and
+/// 1-bit alpha in bit `15` (`1` when `rgba[3] >= 0x80`, else `0`).
+#[inline]
+pub fn rgba8_to_rgba5551(rgba: [u8; 4]) -> u16 {
+    u16::from(rgba[0] >> 3)
+        | (u16::from(rgba[1] >> 3) << 5)
+        | (u16::from(rgba[2] >> 3) << 10)
+        | if rgba[3] >= 0x80 { 0x8000 } else { 0 }
+}
+
+/// Pack an RGBA8888 pixel into a 16-bit RGBA4444 word.
+///
+/// Inverse of [`rgba4444_to_rgba`]: 4 bits each of red, green, blue, and alpha,
+/// with red in the low nibble.
+#[inline]
+pub fn rgba8_to_rgba4444(rgba: [u8; 4]) -> u16 {
+    u16::from(rgba[0] >> 4)
+        | (u16::from(rgba[1] >> 4) << 4)
+        | (u16::from(rgba[2] >> 4) << 8)
+        | (u16::from(rgba[3] >> 4) << 12)
+}
+
+/// Pack 8-bit RGB channels into a 12-bit RGB444 word (`0x0RGB`).
+///
+/// Inverse of [`rgb444_to_rgba`]: 4-bit red in bits `8..12`, green in `4..8`,
+/// and blue in `0..4`.
+#[inline]
+pub fn rgb8_to_rgb444(r: u8, g: u8, b: u8) -> u16 {
+    (u16::from(r >> 4) << 8) | (u16::from(g >> 4) << 4) | u16::from(b >> 4)
+}
+
+/// Pack 8-bit RGB channels into a 12-bit BGR444 word (`0x0BGR`).
+///
+/// Inverse of [`bgr444_to_rgba`]: 4-bit red in bits `0..4`, green in `4..8`,
+/// and blue in `8..12`.
+#[inline]
+pub fn rgb8_to_bgr444(r: u8, g: u8, b: u8) -> u16 {
+    u16::from(r >> 4) | (u16::from(g >> 4) << 4) | (u16::from(b >> 4) << 8)
+}
+
+/// Encode RGBA8888 pixels into little-endian 16-bit BGR555 words in `out`.
+///
+/// Inverse of [`bgr555_le_words_to_rgba`]. `rgba.len()` must be a multiple of
+/// `4`, and `out.len()` must equal `(rgba.len() / 4) * 2`.
+pub fn rgba_to_bgr555_le_words(
+    rgba: &[u8],
+    alpha: Alpha555Policy,
+    out: &mut [u8],
+) -> Result<(), PackError> {
+    if !rgba.len().is_multiple_of(4) {
+        return Err(PackError::LengthMismatch {
+            expected: rgba.len() + (4 - rgba.len() % 4),
+            actual: rgba.len(),
+        });
+    }
+    let expected_out = (rgba.len() / 4).saturating_mul(2);
+    if out.len() != expected_out {
+        return Err(PackError::LengthMismatch {
+            expected: expected_out,
+            actual: out.len(),
+        });
+    }
+    for (src, dst) in rgba.chunks_exact(4).zip(out.chunks_exact_mut(2)) {
+        let word = rgba8_to_bgr555([src[0], src[1], src[2], src[3]], alpha);
+        dst.copy_from_slice(&word.to_le_bytes());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -760,16 +935,94 @@ mod tests {
             assert_eq!(rgba8_to_bgr555(rgba, Alpha555Policy::TopBitAlpha), word);
         }
     }
+
+    #[test]
+    fn pack_1bpp_and_2bpp_round_trip_and_validate() {
+        let idx1 = [1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0];
+        for order in [BitOrder::MsbFirst, BitOrder::LsbFirst] {
+            let mut packed = [0u8; 2];
+            pack_1bpp_into(&idx1, order, IndexPolicy::Reject, &mut packed).unwrap();
+            let mut unpacked = [0u8; 11];
+            unpack_1bpp_into(&packed, order, &mut unpacked).unwrap();
+            assert_eq!(unpacked, idx1);
+        }
+        let mut out1 = [0xAAu8; 1];
+        assert_eq!(
+            pack_1bpp_into(&[0, 2], BitOrder::MsbFirst, IndexPolicy::Reject, &mut out1),
+            Err(PackError::IndexOutOfRange { index: 1, value: 2 })
+        );
+        assert_eq!(out1, [0xAA]);
+        pack_1bpp_into(&[0, 3], BitOrder::MsbFirst, IndexPolicy::Mask, &mut out1).unwrap();
+        assert_eq!(out1, [0b0100_0000]);
+
+        let idx2 = [3, 2, 1, 0, 2, 3];
+        for order in [BitOrder::MsbFirst, BitOrder::LsbFirst] {
+            let mut packed = [0u8; 2];
+            pack_2bpp_into(&idx2, order, IndexPolicy::Reject, &mut packed).unwrap();
+            let mut unpacked = [0u8; 6];
+            unpack_2bpp_into(&packed, order, &mut unpacked).unwrap();
+            assert_eq!(unpacked, idx2);
+        }
+        let mut out2 = [0xAAu8; 1];
+        assert_eq!(
+            pack_2bpp_into(&[1, 4], BitOrder::LsbFirst, IndexPolicy::Reject, &mut out2),
+            Err(PackError::IndexOutOfRange { index: 1, value: 4 })
+        );
+        assert_eq!(out2, [0xAA]);
+        pack_2bpp_into(&[1, 6], BitOrder::LsbFirst, IndexPolicy::Mask, &mut out2).unwrap();
+        assert_eq!(out2, [0b00_00_10_01]);
+    }
+
+    #[test]
+    fn inverse_color_encoders_and_bgr555_batch_round_trip() {
+        for word in [0x0000u16, 0x001F, 0x07E0, 0xF800, 0x1234, 0xFFFF] {
+            assert_eq!(rgba8_to_rgb565(rgb565_to_rgba(word)), word);
+            assert_eq!(rgba8_to_rgba5650(rgba5650_to_rgba(word)), word);
+            assert_eq!(rgba8_to_rgba5551(rgba5551_to_rgba(word)), word);
+            assert_eq!(rgba8_to_rgba4444(rgba4444_to_rgba(word)), word);
+        }
+        for word in [0x0000u16, 0x0F00, 0x00F0, 0x000F, 0x0123, 0x0FFF] {
+            let rgb = rgb444_to_rgba(word);
+            assert_eq!(rgb8_to_rgb444(rgb[0], rgb[1], rgb[2]), word);
+            let bgr = bgr444_to_rgba(word);
+            assert_eq!(rgb8_to_bgr444(bgr[0], bgr[1], bgr[2]), word);
+        }
+
+        let words = [0x00, 0x00, 0x1F, 0x80, 0xE0, 0x03];
+        let mut rgba = [0u8; 12];
+        bgr555_le_words_to_rgba(&words, Alpha555Policy::TopBitAlpha, &mut rgba).unwrap();
+        let mut repacked = [0u8; 6];
+        rgba_to_bgr555_le_words(&rgba, Alpha555Policy::TopBitAlpha, &mut repacked).unwrap();
+        assert_eq!(repacked, words);
+
+        assert_eq!(
+            rgba_to_bgr555_le_words(&[0u8; 3], Alpha555Policy::Opaque, &mut []),
+            Err(PackError::LengthMismatch {
+                expected: 4,
+                actual: 3
+            })
+        );
+        assert_eq!(
+            rgba_to_bgr555_le_words(&rgba, Alpha555Policy::Opaque, &mut [0u8; 4]),
+            Err(PackError::LengthMismatch {
+                expected: 6,
+                actual: 4
+            })
+        );
+    }
 }
 
 pub mod atlas;
-pub use atlas::{blit_rgba, compose_grid_atlas, GridAtlasLayout};
+pub use atlas::{blit_rgba, compose_grid_atlas, crop_rgba, GridAtlasLayout};
 
 pub mod dxt;
 pub use dxt::{decode_dxt, decode_masked, is_contiguous, rgb565_to_rgba, ChannelMasks, DxtFormat};
 
 pub mod glyph;
-pub use glyph::{unpack_glyph_1bpp, unpack_glyph_2bpp};
+pub use glyph::{
+    pack_glyph_1bpp, pack_glyph_2bpp, pack_glyph_4bpp, unpack_glyph_1bpp, unpack_glyph_2bpp,
+    unpack_glyph_4bpp,
+};
 
 pub mod planar;
 pub use planar::{pack_planar_tile_8x8_into, unpack_planar_tile_8x8_into};

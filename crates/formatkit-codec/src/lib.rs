@@ -29,6 +29,10 @@ pub use rnc::*;
 
 pub mod counted_lsb;
 pub mod delta;
+pub use delta::{
+    delta_decode_u16_be_into, delta_decode_u16_le_into, delta_decode_u8_into,
+    delta_encode_u16_be_into, delta_encode_u16_le_into, delta_encode_u8_into,
+};
 pub mod flag_lzss;
 pub mod png;
 pub use png::{decode_png_rgba, encode_rgba_png};

@@ -152,6 +152,21 @@ pub fn u16_le_prefixed(bytes: &[u8]) -> Result<&[u8]> {
     })
 }
 
+/// Decode a big-endian `u16` byte count followed by that many raw bytes.
+pub fn u16_be_prefixed(bytes: &[u8]) -> Result<&[u8]> {
+    let prefix = bytes.get(..2).ok_or(Error::Truncated {
+        offset: 0,
+        needed: 2,
+        available: bytes.len(),
+    })?;
+    let length = u16::from_be_bytes([prefix[0], prefix[1]]) as usize;
+    bytes.get(2..2 + length).ok_or(Error::Truncated {
+        offset: 2,
+        needed: length,
+        available: bytes.len().saturating_sub(2),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,8 +190,11 @@ mod tests {
         assert_eq!(fixed_field(b"abc\0junk", 4).unwrap(), b"abc");
         assert_eq!(u8_prefixed(b"\x03abcjunk").unwrap(), b"abc");
         assert_eq!(u16_le_prefixed(b"\x03\x00abcjunk").unwrap(), b"abc");
+        assert_eq!(u16_be_prefixed(b"\x00\x03abcjunk").unwrap(), b"abc");
         assert!(u8_prefixed(b"\x05abc").is_err());
         assert!(u16_le_prefixed(b"\x05\x00abc").is_err());
+        assert!(u16_be_prefixed(b"\x00\x05abc").is_err());
+        assert!(u16_be_prefixed(b"\x00").is_err());
     }
 
     #[test]

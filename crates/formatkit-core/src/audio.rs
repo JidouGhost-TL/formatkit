@@ -161,6 +161,165 @@ impl Pcm {
         Ok(out)
     }
 
+    /// Parse a canonical 16-bit signed little-endian PCM RIFF/WAVE byte buffer.
+    ///
+    /// Walks RIFF chunks cleanly, skipping non-`fmt `/`data` chunks (and
+    /// honoring odd-length chunk pad bytes), while validating `"RIFF"` /
+    /// `"WAVE"` framing, PCM format (`1`), non-zero channels and sample rate,
+    /// `bits_per_sample == 16`, `block_align == channels * 2`, and exact frame
+    /// alignment of the `data` payload.
+    pub fn from_wav_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        if bytes.len() < 12 {
+            return Err(crate::Error::Truncated {
+                offset: 0,
+                needed: 12,
+                available: bytes.len(),
+            });
+        }
+        if &bytes[0..4] != b"RIFF" {
+            return Err(crate::Error::BadMagic {
+                offset: 0,
+                expected: u32::from_be_bytes(*b"RIFF"),
+                found: u32::from_be_bytes(bytes[0..4].try_into().unwrap()),
+            });
+        }
+        let riff_size = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        if riff_size < 4 {
+            return Err(crate::Error::InvalidField {
+                what: "WAV RIFF size",
+                value: u64::from(riff_size),
+            });
+        }
+        let riff_end =
+            8usize
+                .checked_add(riff_size as usize)
+                .ok_or(crate::Error::InvalidField {
+                    what: "WAV RIFF size",
+                    value: u64::from(riff_size),
+                })?;
+        if riff_end > bytes.len() {
+            return Err(crate::Error::Truncated {
+                offset: 8,
+                needed: riff_size as usize,
+                available: bytes.len() - 8,
+            });
+        }
+        if &bytes[8..12] != b"WAVE" {
+            return Err(crate::Error::BadMagic {
+                offset: 8,
+                expected: u32::from_be_bytes(*b"WAVE"),
+                found: u32::from_be_bytes(bytes[8..12].try_into().unwrap()),
+            });
+        }
+
+        let mut fmt: Option<(u16, u32, u16)> = None;
+        let mut data: Option<&[u8]> = None;
+        let mut pos = 12usize;
+
+        while pos < riff_end {
+            if riff_end - pos < 8 {
+                return Err(crate::Error::Truncated {
+                    offset: pos,
+                    needed: 8,
+                    available: riff_end - pos,
+                });
+            }
+            let chunk_id = &bytes[pos..pos + 4];
+            let chunk_len =
+                u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            let payload_start = pos + 8;
+            let payload_end =
+                payload_start
+                    .checked_add(chunk_len)
+                    .ok_or(crate::Error::InvalidField {
+                        what: "WAV chunk length",
+                        value: chunk_len as u64,
+                    })?;
+            if payload_end > riff_end {
+                return Err(crate::Error::Truncated {
+                    offset: payload_start,
+                    needed: chunk_len,
+                    available: riff_end - payload_start,
+                });
+            }
+            let payload = &bytes[payload_start..payload_end];
+
+            if chunk_id == b"fmt " {
+                if payload.len() < 16 {
+                    return Err(crate::Error::InvalidField {
+                        what: "WAV fmt chunk length",
+                        value: payload.len() as u64,
+                    });
+                }
+                let audio_format = u16::from_le_bytes([payload[0], payload[1]]);
+                if audio_format != 1 {
+                    return Err(crate::Error::Unsupported(format!(
+                        "WAV audio format {audio_format} (only PCM format 1 is supported)"
+                    )));
+                }
+                let channels = u16::from_le_bytes([payload[2], payload[3]]);
+                if channels == 0 {
+                    return Err(crate::Error::InvalidField {
+                        what: "WAV channel count",
+                        value: 0,
+                    });
+                }
+                let sample_rate =
+                    u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                if sample_rate == 0 {
+                    return Err(crate::Error::InvalidField {
+                        what: "WAV sample rate",
+                        value: 0,
+                    });
+                }
+                let block_align = u16::from_le_bytes([payload[12], payload[13]]);
+                let bits_per_sample = u16::from_le_bytes([payload[14], payload[15]]);
+                if bits_per_sample != 16 {
+                    return Err(crate::Error::Unsupported(format!(
+                        "WAV bits_per_sample {bits_per_sample} (only 16-bit PCM is supported)"
+                    )));
+                }
+                let expected_block_align =
+                    channels.checked_mul(2).ok_or(crate::Error::InvalidField {
+                        what: "WAV block align",
+                        value: u64::from(channels) * 2,
+                    })?;
+                if block_align != expected_block_align {
+                    return Err(crate::Error::InvalidField {
+                        what: "WAV block align",
+                        value: u64::from(block_align),
+                    });
+                }
+                fmt = Some((channels, sample_rate, block_align));
+            } else if chunk_id == b"data" {
+                data = Some(payload);
+            }
+
+            pos = if (chunk_len & 1) == 1 && payload_end < riff_end {
+                payload_end + 1
+            } else {
+                payload_end
+            };
+        }
+
+        let (channels, sample_rate, block_align) =
+            fmt.ok_or_else(|| crate::Error::Malformed("WAV missing fmt chunk".into()))?;
+        let data = data.ok_or_else(|| crate::Error::Malformed("WAV missing data chunk".into()))?;
+
+        if !data.len().is_multiple_of(usize::from(block_align)) {
+            return Err(crate::Error::InvalidField {
+                what: "WAV data size",
+                value: data.len() as u64,
+            });
+        }
+
+        let mut samples = Vec::with_capacity(data.len() / 2);
+        for chunk in data.chunks_exact(2) {
+            samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        Self::try_interleaved(sample_rate, channels, samples)
+    }
+
     /// Write this PCM stream as a canonical RIFF/WAVE file to `out`.
     ///
     /// When `work` is provided, cooperative cancellation is checked before
@@ -318,6 +477,108 @@ mod tests {
                 what: "WAV byte rate",
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn from_wav_bytes_round_trips_and_skips_extra_chunks() {
+        let original =
+            Pcm::try_interleaved(48_000, 2, vec![-32768, -1, 0, 1, 12345, 32767]).unwrap();
+        let canonical = original.to_wav_bytes().unwrap();
+        assert_eq!(Pcm::from_wav_bytes(&canonical).unwrap(), original);
+
+        // Insert an odd-length JUNK chunk before fmt and a trailing LIST chunk after data.
+        let mut body = Vec::new();
+        body.extend_from_slice(b"WAVE");
+        body.extend_from_slice(b"JUNK");
+        body.extend_from_slice(&3u32.to_le_bytes());
+        body.extend_from_slice(b"abc");
+        body.push(0); // odd-chunk pad
+        body.extend_from_slice(&canonical[12..]);
+        body.extend_from_slice(b"LIST");
+        body.extend_from_slice(&4u32.to_le_bytes());
+        body.extend_from_slice(b"INFO");
+
+        let mut wrapped = Vec::new();
+        wrapped.extend_from_slice(b"RIFF");
+        wrapped.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        wrapped.extend_from_slice(&body);
+        assert_eq!(Pcm::from_wav_bytes(&wrapped).unwrap(), original);
+    }
+
+    #[test]
+    fn from_wav_bytes_rejects_malformed_or_unsupported_headers() {
+        let valid = Pcm::new(44_100, vec![1, 2, 3, 4]).to_wav_bytes().unwrap();
+
+        // Bad RIFF magic.
+        let mut bad_riff = valid.clone();
+        bad_riff[0] = b'X';
+        assert!(matches!(
+            Pcm::from_wav_bytes(&bad_riff),
+            Err(Error::BadMagic { offset: 0, .. })
+        ));
+
+        // Bad WAVE magic.
+        let mut bad_wave = valid.clone();
+        bad_wave[8] = b'X';
+        assert!(matches!(
+            Pcm::from_wav_bytes(&bad_wave),
+            Err(Error::BadMagic { offset: 8, .. })
+        ));
+
+        // Non-PCM audio format (3 = IEEE float).
+        let mut float_fmt = valid.clone();
+        float_fmt[20..22].copy_from_slice(&3u16.to_le_bytes());
+        assert!(matches!(
+            Pcm::from_wav_bytes(&float_fmt),
+            Err(Error::Unsupported(_))
+        ));
+
+        // Zero channels.
+        let mut zero_ch = valid.clone();
+        zero_ch[22..24].copy_from_slice(&0u16.to_le_bytes());
+        assert!(matches!(
+            Pcm::from_wav_bytes(&zero_ch),
+            Err(Error::InvalidField {
+                what: "WAV channel count",
+                ..
+            })
+        ));
+
+        // Zero sample rate.
+        let mut zero_rate = valid.clone();
+        zero_rate[24..28].copy_from_slice(&0u32.to_le_bytes());
+        assert!(matches!(
+            Pcm::from_wav_bytes(&zero_rate),
+            Err(Error::InvalidField {
+                what: "WAV sample rate",
+                ..
+            })
+        ));
+
+        // Wrong bits_per_sample (8).
+        let mut bps8 = valid.clone();
+        bps8[34..36].copy_from_slice(&8u16.to_le_bytes());
+        assert!(matches!(
+            Pcm::from_wav_bytes(&bps8),
+            Err(Error::Unsupported(_))
+        ));
+
+        // Wrong block_align (4 for mono 16-bit).
+        let mut bad_align = valid.clone();
+        bad_align[32..34].copy_from_slice(&4u16.to_le_bytes());
+        assert!(matches!(
+            Pcm::from_wav_bytes(&bad_align),
+            Err(Error::InvalidField {
+                what: "WAV block align",
+                ..
+            })
+        ));
+
+        // Truncated data chunk.
+        assert!(matches!(
+            Pcm::from_wav_bytes(&valid[..valid.len() - 1]),
+            Err(Error::Truncated { .. })
         ));
     }
 }

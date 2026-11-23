@@ -87,7 +87,7 @@ pub use namespace::{
 mod transformed_member;
 pub use transformed_member::{materialize_transformed_member, TransformMaterialization};
 
-mod text;
+pub mod text;
 pub use text::{
     fixed_field, nul_terminated, nul_terminated_len, u16_be_prefixed, u16_le_prefixed, u8_prefixed,
     write_nul_or_full, write_nul_padded, write_nul_terminated,

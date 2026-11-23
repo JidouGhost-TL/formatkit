@@ -34,6 +34,8 @@ pub use delta::{
     delta_encode_u16_be_into, delta_encode_u16_le_into, delta_encode_u8_into,
 };
 pub mod flag_lzss;
+pub mod pcx;
+pub use pcx::{decode_pcx_rgba, encode_pcx_indexed, encode_pcx_rgba};
 pub mod png;
 pub use png::{decode_png_rgba, encode_rgba_png};
 pub mod sliding_window;

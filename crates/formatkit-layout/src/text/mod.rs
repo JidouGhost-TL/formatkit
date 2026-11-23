@@ -1,8 +1,16 @@
-//! Fixed-position byte-string fields.
+//! Fixed-position byte-string fields and multi-byte custom character maps.
 //!
-//! These descriptors combine resident placement with raw byte-string framing.
-//! They deliberately do not decode character sets, validate allowed characters,
-//! or assign meaning to empty strings and padding bytes.
+//! [`FixedByteStringField`] combines resident placement with raw byte-string
+//! framing without assigning a character set. [`Charmap`] compiles multi-byte
+//! custom character maps (including `.tbl` definitions) into longest-match
+//! byte and text tries for deterministic decoding and encoding.
+
+pub mod charmap;
+
+pub use charmap::{
+    format_hex_bytes, parse_hex_bytes, Charmap, CharmapControl, CharmapDecoded, CharmapEntry,
+    CharmapLimits, CharmapToken,
+};
 
 use formatkit_core::{
     bytes_at, bytes_at_mut, fixed_field, nul_terminated, write_nul_or_full, write_nul_padded,

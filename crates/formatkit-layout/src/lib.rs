@@ -46,4 +46,7 @@ pub use tables::{
     TerminalOffsetTable, ValidatedCountedBoundaries, ValidatedPositiveSizes,
     ValidatedTerminalOffsets,
 };
-pub use text::FixedByteStringField;
+pub use text::{
+    format_hex_bytes, parse_hex_bytes, Charmap, CharmapControl, CharmapDecoded, CharmapEntry,
+    CharmapLimits, CharmapToken, FixedByteStringField,
+};

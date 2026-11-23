@@ -1,9 +1,24 @@
-//! Bounds-safe framing for common on-disc string fields.
+//! Bounds-safe framing for common on-disc string fields and standard
+//! Shift-JIS / CP932 / JIS X 0201 text codecs.
 //!
-//! These helpers return raw bytes or byte lengths. Character-set interpretation remains with
-//! the format that knows whether a field is ASCII, Shift-JIS, UTF-16, or opaque.
+//! Framing helpers (`nul_terminated`, `fixed_field`, `u8_prefixed`, etc.) return
+//! raw bytes or byte lengths without assuming an encoding. Character-set
+//! helpers provide strict byte classification, validation, and UTF-8 <->
+//! Shift-JIS / CP932 / JIS X 0201 conversion without external dependencies.
 
 use crate::{Error, Result};
+
+mod shift_jis;
+mod shift_jis_table;
+
+pub use shift_jis::{
+    classify_shift_jis_byte, decode_cp932, decode_cp932_lossy, decode_cp932_pair,
+    decode_jis0208_pair, decode_jis_x_0201, decode_shift_jis_jis0208,
+    decode_shift_jis_jis0208_lossy, encode_cp932, encode_cp932_char, encode_jis_x_0201,
+    is_halfwidth_katakana, is_jis0208_lead, is_shift_jis_lead, is_shift_jis_trail, is_valid_cp932,
+    is_valid_jis_x_0201, is_valid_shift_jis_jis0208, is_valid_shift_jis_syntax,
+    ku_ten_to_shift_jis, shift_jis_sequence_len, shift_jis_to_ku_ten, ShiftJisByteClass,
+};
 
 /// Find the byte length before the first NUL within `max_len` bytes.
 ///

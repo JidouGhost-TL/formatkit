@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/formatkit-core", "crates/formatkit-layout", "crates/formatkit-runtime", "crates/formatkit-corpus", "crates/formatkit-corpus-test", "crates/formatkit-catalog", "crates/formatkit-pixel", "crates/formatkit-codec", "crates/formatkit-archive", "crates/formatkit", "crates/formatkit-patch"]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 rust-version = "1.94.1"
 license = "MIT OR Apache-2.0"
@@ -12,13 +12,13 @@ readme = "README.md"
 
 [workspace.dependencies]
 thiserror = "1"
-formatkit-core = { path = "crates/formatkit-core", version = "=0.1.4" }
-formatkit-layout = { path = "crates/formatkit-layout", version = "=0.1.4" }
-formatkit-runtime = { path = "crates/formatkit-runtime", version = "=0.1.4" }
-formatkit-corpus = { path = "crates/formatkit-corpus", version = "=0.1.4" }
-formatkit-corpus-test = { path = "crates/formatkit-corpus-test", version = "=0.1.4" }
-formatkit-catalog = { path = "crates/formatkit-catalog", version = "=0.1.4" }
-formatkit-pixel = { path = "crates/formatkit-pixel", version = "=0.1.4" }
-formatkit-codec = { path = "crates/formatkit-codec", version = "=0.1.4" }
-formatkit-archive = { path = "crates/formatkit-archive", version = "=0.1.4" }
-formatkit-patch = { path = "crates/formatkit-patch", version = "=0.1.4" }
+formatkit-core = { path = "crates/formatkit-core", version = "=0.1.5" }
+formatkit-layout = { path = "crates/formatkit-layout", version = "=0.1.5" }
+formatkit-runtime = { path = "crates/formatkit-runtime", version = "=0.1.5" }
+formatkit-corpus = { path = "crates/formatkit-corpus", version = "=0.1.5" }
+formatkit-corpus-test = { path = "crates/formatkit-corpus-test", version = "=0.1.5" }
+formatkit-catalog = { path = "crates/formatkit-catalog", version = "=0.1.5" }
+formatkit-pixel = { path = "crates/formatkit-pixel", version = "=0.1.5" }
+formatkit-codec = { path = "crates/formatkit-codec", version = "=0.1.5" }
+formatkit-archive = { path = "crates/formatkit-archive", version = "=0.1.5" }
+formatkit-patch = { path = "crates/formatkit-patch", version = "=0.1.5" }

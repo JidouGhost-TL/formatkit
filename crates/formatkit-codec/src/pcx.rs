@@ -2,7 +2,7 @@
 //!
 //! Decoding validates the 128-byte PCX header (`manufacturer == 0x0A`,
 //! `encoding` 0 uncompressed or 1 RLE), checks dimensions, scanline stride,
-//! and pixel/work limits before allocating, and decodes to an RGBA8 [`Image`]:
+//! and pixel/work limits before allocating, and decodes to an RGBA8 [`formatkit_core::Image`]:
 //! - 8bpp 1-plane indexed with trailing `0x0C` + 768-byte VGA RGB24 palette
 //!   (falling back to the 16-color EGA header palette when `version < 5` or no
 //!   `0x0C` palette marker is present),

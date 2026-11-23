@@ -5,8 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-readme.workspace = true
-description = "Reusable bounded compression, Huffman, RLE, PNG, PCX, TGA and optional DDS codecs"
+readme = "README.md"
+description = "Bounded compression (LZSS, DEFLATE, LZMA, RNC, Huffman, RLE) and image codecs"
+keywords = ["compression", "lzss", "codec", "png", "dds"]
+categories = ["compression", "encoding", "graphics"]
 
 [features]
 default = ["dds"]

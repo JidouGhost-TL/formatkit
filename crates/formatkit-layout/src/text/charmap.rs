@@ -346,6 +346,7 @@ struct ParameterizedControl {
 
 /// Validated, compiled multi-byte character map backed by longest-match byte
 /// and UTF-8 tries.
+#[doc(alias = "tbl")]
 #[derive(Debug, Clone)]
 pub struct Charmap {
     initial_page: u8,

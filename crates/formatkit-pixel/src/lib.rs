@@ -1,6 +1,50 @@
-//! Container-independent palette, packed-pixel and block-codec mechanics.
+//! Container-independent palette, packed-pixel, tile, swizzle, and block-codec mechanics.
+//!
+//! # Modules
+//! - [`atlas`]: RGBA cropping, blitting, and grid atlas composition.
+//! - [`dxt`]: S3TC / DXT1–DXT5 block decoding and arbitrary channel-mask pixel unpacking.
+//! - [`glyph`]: 1bpp, 2bpp, and 4bpp packed glyph row unpacking and packing.
+//! - [`morton`]: Morton (Z-order) coordinate interleaving and 2D texture swizzle/unswizzle.
+//! - [`palette`]: Grayscale palettes, nearest-color lookup, and RGBA quantization.
+//! - [`planar`]: Interleaved-row planar 8×8 tile unpacking and packing (1/2/4 bitplanes).
+//!
+//! Crate-root items provide allocation-free 4bpp/8bpp index packing, 16-bit color-word
+//! conversions (`RGB565`, `BGR555`, `RGBA5551`, `RGBA4444`, `RGB444`), and explicit
+//! [`NibbleOrder`], [`BitOrder`], and [`IndexPolicy`] controls.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
+/// RGBA image cropping, blitting, and grid atlas composition.
+pub mod atlas;
+pub use atlas::{blit_rgba, compose_grid_atlas, crop_rgba, GridAtlasLayout};
+
+/// S3TC / DXT1–DXT5 block decoding and arbitrary channel-mask decoding.
+pub mod dxt;
+pub use dxt::{decode_dxt, decode_masked, is_contiguous, rgb565_to_rgba, ChannelMasks, DxtFormat};
+
+/// Packed 1bpp, 2bpp, and 4bpp bitmap glyph unpacking and packing.
+pub mod glyph;
+pub use glyph::{
+    pack_glyph_1bpp, pack_glyph_2bpp, pack_glyph_4bpp, unpack_glyph_1bpp, unpack_glyph_2bpp,
+    unpack_glyph_4bpp,
+};
+
+/// Morton (Z-order) coordinate interleaving and 2D texture swizzle/unswizzle.
+#[doc(alias = "z-order")]
+#[doc(alias = "swizzle")]
+pub mod morton;
+pub use morton::{morton_index, swizzle_morton, unswizzle_morton, MortonAxisOrder};
+
+/// Palette generation, nearest-color lookup, and RGBA quantization.
+pub mod palette;
+pub use palette::{grayscale_palette, nearest_palette_index, quantize_rgba, PaletteDistanceMetric};
+
+/// Interleaved-row planar 8×8 tile packing and unpacking.
+#[doc(alias = "bitplane")]
+#[doc(alias = "tile")]
+#[doc(alias = "chr")]
+pub mod planar;
+pub use planar::{pack_planar_tile_8x8_into, unpack_planar_tile_8x8_into};
 
 /// Bits per palette index in a CLUT (paletted) image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1033,24 +1077,3 @@ mod tests {
         );
     }
 }
-
-pub mod atlas;
-pub use atlas::{blit_rgba, compose_grid_atlas, crop_rgba, GridAtlasLayout};
-
-pub mod dxt;
-pub use dxt::{decode_dxt, decode_masked, is_contiguous, rgb565_to_rgba, ChannelMasks, DxtFormat};
-
-pub mod glyph;
-pub use glyph::{
-    pack_glyph_1bpp, pack_glyph_2bpp, pack_glyph_4bpp, unpack_glyph_1bpp, unpack_glyph_2bpp,
-    unpack_glyph_4bpp,
-};
-
-pub mod morton;
-pub use morton::{morton_index, swizzle_morton, unswizzle_morton, MortonAxisOrder};
-
-pub mod palette;
-pub use palette::{grayscale_palette, nearest_palette_index, quantize_rgba, PaletteDistanceMetric};
-
-pub mod planar;
-pub use planar::{pack_planar_tile_8x8_into, unpack_planar_tile_8x8_into};

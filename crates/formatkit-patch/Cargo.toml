@@ -5,8 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-readme.workspace = true
-description = "Bounded, platform-neutral binary patch parsing and application"
+readme = "README.md"
+description = "Bounded, platform-neutral IPS, BPS, UPS and VLI binary patch parsing and application"
+keywords = ["patch", "ips", "bps", "ups", "binary"]
+categories = ["encoding", "parsing"]
 
 [dependencies]
 formatkit-core.workspace = true

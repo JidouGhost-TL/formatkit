@@ -20,12 +20,17 @@
 #![forbid(unsafe_code)]
 
 mod args;
+/// Codec round-trip oracle for paired compressed/decompressed corpus samples.
 pub mod compress_oracle;
 mod digest;
+/// Common digest, hashing, and round-trip assertion helpers.
 pub mod helpers;
+/// Manifest-driven corpus evaluation runner.
 pub mod manifest;
+/// Mounted namespace golden-digest and traversal test helpers.
 pub mod namespace;
 mod registry;
+/// Sealed-package manifest verification and bounded admission tests.
 pub mod sealed_package;
 mod spec;
 

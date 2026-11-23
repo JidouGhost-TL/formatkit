@@ -39,3 +39,8 @@ are charged exactly, including progress before a sink failure. Errors may leave
 partial output. Staging, collision handling, flushing and publication belong to
 the caller. Stored extraction never implicitly opens transformed or semantic
 content.
+
+For paired directory-plus-content archives whose members are stored ranges,
+`paired_stored_mount` provides the shared role resolution, source verification,
+bounded index I/O, and namespace construction sequence while keeping directory
+grammars and range policies in the owner callback.

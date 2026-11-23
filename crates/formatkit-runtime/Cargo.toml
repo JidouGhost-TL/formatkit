@@ -5,8 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-readme.workspace = true
-description = "Explicit composition and dispatch for owner-defined format modules"
+readme = "README.md"
+description = "Explicit composition, resident writers and dispatch for owner-defined format modules"
+keywords = ["format", "runtime", "dispatch", "modules", "binary"]
+categories = ["parsing", "data-structures"]
 
 [dependencies]
 formatkit-core.workspace = true

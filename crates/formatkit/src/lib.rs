@@ -1,4 +1,17 @@
-//! Shared binary data foundations for independent format libraries.
+//! Umbrella re-export crate for the Formatkit binary data toolkit.
+//!
+//! With `default = []`, the umbrella re-exports the core foundation crates:
+//! - [`core`] (`formatkit-core`): checked bytes/bits, sources, budgets, checksums, and shared values
+//! - [`layout`] (`formatkit-layout`): fields, records, tables, chunks, IFF/RIFF, charmaps, and edits
+//! - [`catalog`] (`formatkit-catalog`): open format identities, detection, and operation contracts
+//! - [`runtime`] (`formatkit-runtime`): explicit owner-module composition and dispatch
+//!
+//! Optional crates are gated behind Cargo features:
+//! - `archive` → `archive` (`formatkit-archive`)
+//! - `pixel` → `pixel` (`formatkit-pixel`)
+//! - `codec` → `codec` (`formatkit-codec`)
+//! - `patch` → `patch` (`formatkit-patch`)
+//! - `corpus` → `corpus` (`formatkit-corpus`) and `corpus_test` (`formatkit-corpus-test`)
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #[cfg(feature = "archive")]

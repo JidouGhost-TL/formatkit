@@ -18,21 +18,31 @@ fn read_tag(bytes: &[u8]) -> Result<u32> {
 }
 ```
 
-The umbrella package enables core, layout, catalog and runtime by default.
-Archive, pixel, codec, patch and corpus re-exports are selected with the `archive`,
-`pixel`, `codec`, `patch` and `corpus` features. Individual packages can be consumed
-without the umbrella.
+The umbrella package enables `core`, `layout`, `catalog` and `runtime` with `default = []`
+(no optional crates enabled by default). Archive, pixel, codec, patch and corpus re-exports
+are opt-in via the `archive`, `pixel`, `codec`, `patch` and `corpus` features. Individual
+packages can also be consumed directly without the umbrella.
+
+## Quick Navigation
+
+- [CAPABILITIES.md](CAPABILITIES.md) — Complete crate-by-crate mechanism inventory and decision guide
+- [docs/NEW-KIT-ONBOARDING.md](docs/NEW-KIT-ONBOARDING.md) — Guide for building a new format kit on Formatkit
+- [docs/NEW-FORMAT-CHECKLIST.md](docs/NEW-FORMAT-CHECKLIST.md) — Checklist for adding a new format owner
+- [docs/capabilities.json](docs/capabilities.json) — Machine-readable capability index
+
+## Packages
 
 | Package | Responsibility |
 | --- | --- |
-| `formatkit-core` | Checked bytes/bits, sources, budgets, errors, images, PCM and optional Shift-JIS text |
-| `formatkit-layout` | Configured fields, records, tables, ranges and resident edits |
-| `formatkit-catalog` | Open typed identities, detection and operation contracts |
-| `formatkit-runtime` | Explicit owner-module composition and operation dispatch |
-| `formatkit-archive` | Mounted browsing, extraction to caller sinks and injected traversal |
-| `formatkit-pixel` | Generic packed pixels, palettes, channel masks and S3TC |
-| `formatkit-codec` | Bounded generic compression, Huffman, RLE, PNG, PCX, TGA and optional DDS codecs |
-| `formatkit-patch` | IPS parsing, serialization, creation and policy-controlled application |
+| `formatkit` | Umbrella re-export crate (`default = []`; optional `archive`, `pixel`, `codec`, `patch`, `corpus` features) |
+| `formatkit-core` | Checked bytes/bits, sources, budgets, errors, images, PCM, `checksum`, `bcd`, `math`, `topology`, `pointer_table`, `padding`, and optional Shift-JIS text |
+| `formatkit-layout` | Configured fields, records, `tables`, `chunks`, `iff`, `charmap`, ranges and resident edits |
+| `formatkit-catalog` | Open typed identities, detection catalogs and executable operation contracts |
+| `formatkit-runtime` | Explicit owner-module composition (`Strict`/`Legacy`), resident writers and operation dispatch |
+| `formatkit-archive` | Mounted browsing, extraction to caller sinks, injected traversal and `paired_stored_mount` |
+| `formatkit-pixel` | Generic packed pixels, `palette`, `planar`, `glyph`, `morton`, `atlas`, channel masks and `dxt` (S3TC) |
+| `formatkit-codec` | Bounded compression (`okumura`, `flag_lzss`, `counted_lsb`, `sliding_window`, deflate/inflate/gzip/lzma/rnc), delta, Huffman, RLE, PNG, PCX, TGA and optional DDS |
+| `formatkit-patch` | `ips`, `bps`, `ups`, and `vli` parsing, serialization, creation and policy-controlled application |
 | `formatkit-corpus` | Explicit-root discovery without a built-in sample set |
 | `formatkit-corpus-test` | JSON specs, golden digests, codec pairs and sealed packages |
 

@@ -1,0 +1,846 @@
+{
+  "schema_version": 1,
+  "toolkit": "formatkit",
+  "capabilities": [
+    {
+      "crate": "formatkit-core",
+      "module": "reader",
+      "path": "formatkit_core::Reader",
+      "summary": "Sequential checked binary cursor over a resident byte slice for LE/BE integers, floats, slices, and fixed arrays.",
+      "domain_aliases": ["binary reader", "cursor", "stream reader", "endian read", "deserializer"],
+      "use_when": "Parsing sequential headers, variable-length streams, or records from an already-resident &[u8].",
+      "avoid_when": "Reading disc-scale files lazily (use RangeSource/SourceMetadataReader) or performing stateless random-access reads (use bytes::*_at).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "bytes",
+      "path": "formatkit_core::{u8_at, u16_at, u32_at, u64_at, i8_at, i16_at, i32_at, i64_at, bytes_at, bytes_at_mut, write_uint_le_at, write_uint_be_at, checked_align_up, Endian}",
+      "summary": "Stateless offset-checked integer/slice reads and writes plus checked alignment and monotonicity helpers.",
+      "domain_aliases": ["random access", "endian", "align up", "slice read", "peek", "poke"],
+      "use_when": "Performing one-off or computed-offset checked reads/writes on a resident &[u8] or &mut [u8].",
+      "avoid_when": "Parsing long sequential streams (use Reader) or reusable declarative record layouts (use formatkit_layout::field).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "writer",
+      "path": "formatkit_core::Writer",
+      "summary": "Sequential checked binary builder for writing LE/BE scalars, slices, and padded fields into a Vec<u8>.",
+      "domain_aliases": ["binary writer", "serializer", "buffer builder", "endian write"],
+      "use_when": "Constructing binary headers, tables, or payloads sequentially in memory.",
+      "avoid_when": "Patching existing bytes in place (use formatkit_layout::edit or bytes::*_at).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "bits",
+      "path": "formatkit_core::{Bit, BitRange, BitValueTooWide}",
+      "summary": "Position-independent bit and bitfield extraction/replacement descriptors on decoded unsigned integers.",
+      "domain_aliases": ["bitfield", "bitflags", "bitmask", "packed flags", "bit extract"],
+      "use_when": "Reading or updating packed flag bits and bitfields inside an already-decoded integer word.",
+      "avoid_when": "Reading variable-width codes spanning multiple bytes (use LsbBitCursor/MsbBitCursor).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "bit_cursor",
+      "path": "formatkit_core::{LsbBitCursor, MsbBitCursor, LsbBitWriter, MsbBitWriter}",
+      "summary": "Allocation-free contiguous byte-wise LSB-first and MSB-first bitstream readers and writers.",
+      "domain_aliases": ["bitstream", "bit reader", "bit writer", "LSB bits", "MSB bits", "variable-width bits"],
+      "use_when": "Reading or writing contiguous bitstreams such as Huffman codes, packed bit arrays, or bit-level codecs.",
+      "avoid_when": "Control bits and raw operand bytes are interleaved on the same cursor (use InterleavedBitReader).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "interleaved_bits",
+      "path": "formatkit_core::{InterleavedBitReader, MsbInterleavedBitReader, LsbInterleavedBitReader, InterleavedBitWriter, MsbInterleavedBitWriter, LsbInterleavedBitWriter}",
+      "summary": "Control-bit stream readers/writers whose raw operand bytes share the same underlying byte cursor.",
+      "domain_aliases": ["interleaved bitstream", "flag byte stream", "control bits", "LZ flag reader"],
+      "use_when": "Decoding or encoding streams where raw operand bytes are consumed while control bits from an earlier byte remain buffered.",
+      "avoid_when": "All bits come from a pure contiguous bitstream (use LsbBitCursor/MsbBitCursor) or standard flag-word LZSS applies (use flag_lzss).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "bit_rows",
+      "path": "formatkit_core::MsbFirst1bppRows",
+      "summary": "Zero-allocation row-by-row iterator over MSB-first 1-bit-per-pixel bitmap rows.",
+      "domain_aliases": ["1bpp", "monochrome bitmap", "bit rows", "font rows"],
+      "use_when": "Iterating MSB-first 1bpp monochrome bitmap rows without allocating an unpacked pixel buffer.",
+      "avoid_when": "Unpacking 1bpp/2bpp/4bpp glyphs into a pixel slice (use formatkit_pixel::glyph).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "bcd",
+      "path": "formatkit_core::bcd::{bcd_to_u8, u8_to_bcd}",
+      "summary": "Checked conversion between packed binary-coded decimal (BCD) bytes and u8 values 0..=99.",
+      "domain_aliases": ["BCD", "binary-coded decimal", "packed decimal", "timecode"],
+      "use_when": "Decoding or encoding BCD-encoded timestamps, track numbers, or numeric counters.",
+      "avoid_when": "Converting plain binary integers or ASCII decimal digits.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "checksum",
+      "path": "formatkit_core::checksum::{Crc16, Crc16Params, Crc32, Crc32Params, Crc32IsoHdlc, Crc32Mpeg2, Adler32, FoldChecksum, sum_bytes_u8, sum_bytes_u16, sum_bytes_u32, sum_u16_le_words, sum_u16_be_words, sum_u32_le_words, sum_u32_be_words, xor_bytes, xor_u16_le_words, xor_u16_be_words, xor_u32_le_words, xor_u32_be_words, compute_with_zeroed_range}",
+      "summary": "Incremental and one-shot CRC-16, CRC-32, Adler-32, additive, XOR, and configurable fold checksums plus zeroed-range evaluation.",
+      "domain_aliases": ["CRC-16", "CRC-32", "Adler-32", "additive checksum", "rolling checksum", "XOR checksum", "CCITT", "XMODEM", "MODBUS", "ISO-HDLC", "MPEG-2"],
+      "use_when": "Verifying or generating format checksums with owner-controlled coverage, endianness, and mismatch policy.",
+      "avoid_when": "Cryptographic hashing is required (use SHA-256 helpers in bounded_cstr or corpus_test).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "math",
+      "path": "formatkit_core::math::{q12_i16_to_f32, binary16_to_f32, fixed_turn_sin_cos, Matrix, quaternion_multiply, normalize_quaternion}",
+      "summary": "Fixed-point Q12 conversion, IEEE 754 binary16 decoding, fixed-turn trigonometry, 3D matrices, and quaternion arithmetic.",
+      "domain_aliases": ["fixed-point", "Q12", "half float", "fp16", "binary16", "matrix", "quaternion"],
+      "use_when": "Decoding 3D geometry, animation transforms, or half-precision floating-point fields.",
+      "avoid_when": "Standard IEEE f32/f64 reads suffice (use Reader or formatkit_layout::field).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "topology",
+      "path": "formatkit_core::topology::{triangle_strip, triangle_fan}",
+      "summary": "Expansion of triangle strips and triangle fans into indexed triangle lists.",
+      "domain_aliases": ["triangle strip", "triangle fan", "mesh topology", "index buffer"],
+      "use_when": "Converting strip or fan mesh primitives into explicit triangle index triples.",
+      "avoid_when": "Geometry is already stored as an independent triangle list.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "text",
+      "path": "formatkit_core::text::{nul_terminated, nul_terminated_len, fixed_field, u8_prefixed, u16_le_prefixed, u16_be_prefixed, write_nul_terminated, write_nul_padded, write_nul_or_full}",
+      "summary": "Bounds-safe framing for NUL-terminated, fixed-width NUL-padded, and length-prefixed raw byte strings.",
+      "domain_aliases": ["C-string", "NUL-terminated", "Pascal string", "fixed string", "length-prefixed string"],
+      "use_when": "Extracting or writing framed byte strings without imposing a character encoding.",
+      "avoid_when": "Custom glyph/table-based text encoding is needed (use formatkit_layout::text::Charmap).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "text::shift_jis",
+      "path": "formatkit_core::text::{decode_cp932, encode_cp932, decode_shift_jis_jis0208, decode_jis_x_0201, encode_jis_x_0201, classify_shift_jis_byte, is_valid_cp932, shift_jis_to_ku_ten, ku_ten_to_shift_jis}",
+      "summary": "Zero-dependency strict and lossy Shift-JIS, CP932, and JIS X 0201 decoding, encoding, validation, and byte classification.",
+      "domain_aliases": ["Shift-JIS", "SJIS", "CP932", "JIS X 0201", "JIS X 0208", "halfwidth katakana", "ku-ten"],
+      "use_when": "Decoding, encoding, or validating Shift-JIS / CP932 / JIS X 0201 text fields.",
+      "avoid_when": "Text uses a custom non-standard character table (use formatkit_layout::text::Charmap) or UTF-8/ASCII only.",
+      "feature_gate": "formatkit-core/shift-jis (default)"
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "bounded_cstr",
+      "path": "formatkit_core::{apply_bounded_cstr_patches, verify_input_sha256, BoundedCstrPatch, BoundedCstrReport}",
+      "summary": "Bounded in-place C-string patch application with optional SHA-256 input verification.",
+      "domain_aliases": ["string patch", "in-place text patch", "bounded cstr", "SHA-256 verify"],
+      "use_when": "Replacing fixed-capacity NUL-terminated strings in place within a verified binary image.",
+      "avoid_when": "Patching arbitrary binary deltas or growing files (use formatkit-patch).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "pointer_table",
+      "path": "formatkit_core::pointer_table::{scan_u32_pointer_tables, PointerTable}",
+      "summary": "Heuristic scanner for candidate monotone u32 pointer tables in binary images.",
+      "domain_aliases": ["pointer table", "offset table scan", "forensic scan"],
+      "use_when": "Discovering candidate pointer tables during binary inspection or analysis.",
+      "avoid_when": "Parsing a known table grammar (use formatkit_layout::tables).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "padding",
+      "path": "formatkit_core::padding::{detect_trailing_padding, classify_padding, classify_padding_source, PaddingKind, PaddingSummary}",
+      "summary": "Detection and classification of trailing or inter-entry padding bytes across slices or RangeSources.",
+      "domain_aliases": ["padding", "alignment gap", "trailing zeros", "slack bytes"],
+      "use_when": "Auditing alignment gaps or trailing carrier padding during parsing or round-trip verification.",
+      "avoid_when": "Only computing aligned offsets (use checked_align_up).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "extent",
+      "path": "formatkit_core::{Extent, ExtentAudit, ExtentStatus, audit_extent}",
+      "summary": "Checked byte-range coverage auditing for gaps, overlaps, and exact partitioning.",
+      "domain_aliases": ["extent", "coverage audit", "overlap check", "gap check"],
+      "use_when": "Auditing whether a set of byte extents cleanly covers a carrier without overlaps or unexpected gaps.",
+      "avoid_when": "Validating ordered contiguous runs over resident tables (see also formatkit_layout::ranges).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "work_budget",
+      "path": "formatkit_core::{WorkBudget, WorkLimits, WorkResource, CancellationToken, ResidentReservation, RetainedResidentPermit, DepthScope, WorkScope}",
+      "summary": "Unified cooperative accounting ledger for I/O, materialization, output, nodes, members, recursion depth, active resident bytes, and cancellation.",
+      "domain_aliases": ["WorkBudget", "budget", "resource limits", "cancellation", "resident memory", "DoS protection"],
+      "use_when": "Bounding any parse, mount, decode, walk, extract, or write operation against untrusted or large inputs.",
+      "avoid_when": "Never substitute legacy ReadBudget in new code; always pass WorkBudget.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "range_source",
+      "path": "formatkit_core::{RangeSource, SliceRangeSource, MemoryRangeSource, FileRangeSource, ArchiveMemberRangeSource, RevalidatedExactSliceSource, CompositeRangeSource, StridedRangeSource, TransformedRangeSource, ObjectPackRangeSource, SharedBytes, SourceRange}",
+      "summary": "Lazy, overflow-safe, random-access byte sources with inode/path revalidation and WorkBudget accounting.",
+      "domain_aliases": ["RangeSource", "lazy I/O", "random access", "file source", "slice source", "subrange", "revalidation"],
+      "use_when": "Reading disc-scale files, mounted archive members, composite segments, or transformed views without eager full-file reads.",
+      "avoid_when": "Data is already a small resident &[u8] with no container/source abstraction needed.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "source_metadata",
+      "path": "formatkit_core::{SourceMetadataReader, SourceMetadataWindow}",
+      "summary": "Bounded metadata reading helper over a RangeSource with WorkBudget accounting.",
+      "domain_aliases": ["metadata reader", "header reader", "bounded source read"],
+      "use_when": "Reading headers and directory tables lazily from a RangeSource.",
+      "avoid_when": "Input is already resident in &[u8] (use Reader or bytes::*_at).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "source_copy",
+      "path": "formatkit_core::{copy_source_range, SourceCopyError}",
+      "summary": "Streaming byte transfer from a RangeSource range into a Write sink with exact partial-write and cancellation accounting.",
+      "domain_aliases": ["stream copy", "extract bytes", "range copy"],
+      "use_when": "Streaming raw byte ranges from a RangeSource to a caller sink without materializing the whole range.",
+      "avoid_when": "Extracting an archive member through IndexedNamespace (use formatkit_archive::extract).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "namespace",
+      "path": "formatkit_core::{IndexedNamespace, StoredRangeNamespace, StoredRangeNamespaceLimits, NamespaceEntry, MountedMember, MemberLayout, MemberTransform, TransformRecipe}",
+      "summary": "Mounted random-access archive/container namespace traits and standard stored-range namespace implementation.",
+      "domain_aliases": ["IndexedNamespace", "StoredRangeNamespace", "archive namespace", "virtual filesystem", "container members"],
+      "use_when": "Exposing archive, pack, or disc entries lazily so formatkit-archive can browse, extract, and walk them.",
+      "avoid_when": "Format is a single leaf object (image, audio, config) with no child entries.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "transformed_member",
+      "path": "formatkit_core::{materialize_transformed_member, TransformMaterialization}",
+      "summary": "Bounded materialization helper for compressed, encrypted, or framed namespace members with resident-byte reservation.",
+      "domain_aliases": ["compressed member", "transformed member", "member decode"],
+      "use_when": "Implementing validated_content_source_with_work for an IndexedNamespace whose members require decompression or decoding.",
+      "avoid_when": "Members are stored uncompressed as direct subranges (use StoredRangeNamespace / SharedRange).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "image",
+      "path": "formatkit_core::Image",
+      "summary": "Canonical decoded RGBA8888 image value shared across codecs, pixel helpers, and catalog leaf outputs.",
+      "domain_aliases": ["RGBA image", "bitmap", "decoded texture"],
+      "use_when": "Returning decoded RGBA8888 image output from a format decoder or leaf operation.",
+      "avoid_when": "Retaining indexed/paletted pixels before palette expansion (keep indices as Vec<u8> or Vec<u16>).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-core",
+      "module": "audio",
+      "path": "formatkit_core::audio::{Pcm, wav_header_pcm}",
+      "summary": "Canonical 16-bit signed PCM audio value and RIFF/WAV header serializer.",
+      "domain_aliases": ["PCM", "WAV", "audio samples", "PCM16"],
+      "use_when": "Returning decoded 16-bit PCM audio or writing standard WAV headers.",
+      "avoid_when": "Encoding compressed audio bitstreams.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "field",
+      "path": "formatkit_layout::field::{U8Field, I8Field, U16Field, I16Field, U32Field, I32Field, U64Field, I64Field, F32Field, F64Field, ScaledU32Field, BytesField, U16ArrayField, I16ArrayField, U32ArrayField, I32ArrayField, F32ArrayField}",
+      "summary": "Static, const-constructible field descriptors for reading and editing typed values at fixed offsets in resident slices.",
+      "domain_aliases": ["struct field", "binary field", "fixed offset", "scaled field", "record field"],
+      "use_when": "Defining declarative fixed-offset header or record fields shared by readers and in-place editors.",
+      "avoid_when": "Parsing variable-length sequential streams (use formatkit_core::Reader).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "records",
+      "path": "formatkit_layout::records::{FixedRecords, RecordOverflow}",
+      "summary": "Overflow-checked slicing and indexing of fixed-stride record arrays in resident bytes.",
+      "domain_aliases": ["fixed records", "struct array", "record table", "fixed stride"],
+      "use_when": "Indexing or iterating uniform-stride binary records inside a resident slice.",
+      "avoid_when": "Records have variable lengths or live lazily on a RangeSource.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "ranges",
+      "path": "formatkit_layout::ranges::{audit_exact_tiling, audit_ordered_contiguous_run, audit_ordered_non_overlapping, child_run, strict_successor_ranges, nondecreasing_successor_ranges, checked_align_up_u64}",
+      "summary": "Checked extent-run validators and successor-offset range builders.",
+      "domain_aliases": ["range validation", "tiling audit", "contiguous ranges", "non-overlapping ranges", "successor offsets"],
+      "use_when": "Validating that decoded byte ranges tile a carrier, are contiguous, or do not overlap.",
+      "avoid_when": "A specialized formatkit_layout::tables descriptor already validates your exact table format.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "edit",
+      "path": "formatkit_layout::edit::{patch_bytes, patched_bytes, same_size_splice, SameSizeSpliceError}",
+      "summary": "Checked in-place byte patching and same-size splicing on resident buffers.",
+      "domain_aliases": ["in-place edit", "splice", "patch slice", "resident edit"],
+      "use_when": "Applying checked fixed-size edits to resident binary buffers.",
+      "avoid_when": "Applying external IPS/BPS/UPS patch files (use formatkit-patch).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "chunks",
+      "path": "formatkit_layout::chunks::{read_payload_chunk, read_header_inclusive_chunk, PayloadChunkSpan, InclusiveChunkSpan}",
+      "summary": "Checked parsing for generic payload-length and header-inclusive binary chunk framing.",
+      "domain_aliases": ["chunk", "TLV", "tag-length-value", "framed chunk"],
+      "use_when": "Iterating length-framed binary chunks whose size excludes or includes the chunk header.",
+      "avoid_when": "Parsing standard IFF/RIFF FORM containers (use formatkit_layout::iff).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "iff",
+      "path": "formatkit_layout::iff::{parse_iff_form, parse_riff_form, IffForm, IffChunk, IFF_FORM_MAGIC, RIFF_MAGIC}",
+      "summary": "Checked parsers for big-endian IFF FORM and little-endian RIFF chunk containers with even-byte pad handling.",
+      "domain_aliases": ["IFF", "RIFF", "FORM", "FourCC", "chunk container"],
+      "use_when": "Parsing IFF or RIFF container structures (e.g., WAV-like or FORM-based containers).",
+      "avoid_when": "Chunk framing does not follow IFF/RIFF 4-byte tag + 4-byte size + pad rules (use chunks).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "text::charmap",
+      "path": "formatkit_layout::text::{Charmap, CharmapLimits, CharmapEntry, CharmapControl, CharmapToken, CharmapDecoded, FixedByteStringField, parse_hex_bytes, format_hex_bytes}",
+      "summary": "Parser and bidirectional codec for .tbl character-mapping tables with multi-byte entries, control codes, and bounded limits.",
+      "domain_aliases": [".tbl", "charmap", "table file", "custom text encoding", "script decoder", "dialogue table"],
+      "use_when": "Decoding or encoding custom binary text encodings defined by .tbl character maps.",
+      "avoid_when": "Text is standard Shift-JIS/CP932/JIS X 0201 (use formatkit_core::text) or UTF-8.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "tables::aligned_sizes",
+      "path": "formatkit_layout::tables::{AlignedSizeChain, AlignedSizeCursor, AlignedSizeExtent, DerivedAlignedSizes}",
+      "summary": "Derives consecutive power-of-two aligned byte extents from a caller-decoded sequence of member sizes.",
+      "domain_aliases": ["aligned size chain", "sequential aligned extents", "size table"],
+      "use_when": "Archive entries are stored consecutively with power-of-two alignment padding and only sizes are listed.",
+      "avoid_when": "Offsets are stored explicitly in the directory.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "tables::counted_boundaries",
+      "path": "formatkit_layout::tables::{CountedBoundaryTable, ValidatedCountedBoundaries}",
+      "summary": "Validates u32-count-prefixed tables of count+1 aligned, strictly increasing u32 byte boundaries closing at EOF.",
+      "domain_aliases": ["counted boundary table", "offset boundary table", "EOF-closed table"],
+      "use_when": "Directory begins with a u32 count followed by count+1 aligned strictly increasing byte offsets ending at carrier EOF.",
+      "avoid_when": "Empty zero-byte entries are allowed or offsets are 16-bit.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "tables::counted_u16_boundaries",
+      "path": "formatkit_layout::tables::{CountedU16BoundaryTable, ValidatedCountedU16Boundaries}",
+      "summary": "Validates u16-count-prefixed tables of count+1 nondecreasing u16 cumulative offsets with configurable unit scaling.",
+      "domain_aliases": ["u16 offset table", "sector boundary table", "cumulative u16 table"],
+      "use_when": "Directory uses a u16 count and count+1 nondecreasing u16 offsets (byte- or sector-scaled) where adjacent equal offsets denote empty slots.",
+      "avoid_when": "Offsets are 32-bit or strictly increasing without empty slots.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "tables::first_word_offsets",
+      "path": "formatkit_layout::tables::FirstWordOffsetTable",
+      "summary": "Decodes self-delimiting u32 offset tables where word 0 is both table byte length and first data offset.",
+      "domain_aliases": ["first-word offset table", "self-delimiting offset table", "headerless offset table"],
+      "use_when": "Table length is implied by its first u32 offset word and all subsequent offsets are strictly increasing.",
+      "avoid_when": "A terminal EOF sentinel word is present and empty ranges are allowed (use TerminalOffsetTable).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "tables::fixed_stride_offset",
+      "path": "formatkit_layout::tables::{FixedStrideOffsetTable, TableSizeMode}",
+      "summary": "Decodes fixed-stride directory records containing a LE u32 offset (with unit scaling and configurable size mode) directly into NamespaceEntry rows.",
+      "domain_aliases": ["fixed-stride directory", "namespace offset table", "sector offset directory"],
+      "use_when": "Fixed-stride directory entries contain a scaled LE u32 offset plus optional extra columns and map directly to NamespaceEntry.",
+      "avoid_when": "Entries are unsorted or require arbitrary custom validation (use OffsetLengthRows).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "tables::offset_length",
+      "path": "formatkit_layout::tables::{OffsetLengthRows, OffsetLengthRow}",
+      "summary": "Decodes fixed-stride rows containing arbitrary unsigned (offset, length) column pairs without imposing order or closure.",
+      "domain_aliases": ["offset-length table", "FAT", "TOC", "directory rows"],
+      "use_when": "Directory stores fixed-stride (offset, length) pairs that may be unsorted, sparse, or validated by custom owner rules.",
+      "avoid_when": "Directory needs built-in monotonicity, alignment, and EOF-closure validation.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "tables::positive_sizes",
+      "path": "formatkit_layout::tables::{PositiveSizeList, SizeAlignment, ValidatedPositiveSizes, PositiveSizeExtent}",
+      "summary": "Validates positive u32 size lists with optional divisibility checks and derives contiguous extents closing at EOF.",
+      "domain_aliases": ["positive size list", "packed size table", "contiguous sizes"],
+      "use_when": "All entries have strictly positive u32 sizes packed contiguously to exact carrier EOF.",
+      "avoid_when": "Zero-byte entries exist or entries have inter-member alignment padding (use AlignedSizeChain).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "tables::terminal_offsets",
+      "path": "formatkit_layout::tables::{TerminalOffsetTable, ValidatedTerminalOffsets}",
+      "summary": "Decodes self-delimiting nondecreasing u32 offset tables whose first word is table byte length and final word equals carrier EOF.",
+      "domain_aliases": ["terminal offset table", "EOF sentinel table", "nondecreasing offset table"],
+      "use_when": "Word 0 gives table byte length, final word equals carrier EOF, and adjacent equal offsets represent empty entries.",
+      "avoid_when": "No terminal EOF word exists (use FirstWordOffsetTable) or an explicit count precedes the offsets (use CountedBoundaryTable).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-pixel",
+      "module": "lib",
+      "path": "formatkit_pixel::{unpack_1bpp_into, pack_1bpp_into, unpack_2bpp_into, pack_2bpp_into, unpack_4bpp_into, pack_4bpp_into, expand_indices, apply_palette, bgr555_to_rgba, bgr555_le_words_to_rgba, rgba8_to_bgr555, rgb8_to_bgr555, rgba_to_bgr555_le_words, rgba5650_to_rgba, rgba8_to_rgba5650, rgba8_to_rgb565, rgba5551_to_rgba, rgba8_to_rgba5551, rgba4444_to_rgba, rgba8_to_rgba4444, rgb444_to_rgba, rgb8_to_rgb444, bgr444_to_rgba, rgb8_to_bgr444, mip_extent, NibbleOrder, BitOrder, IndexPolicy, Alpha555Policy}",
+      "summary": "Allocation-free 1bpp/2bpp/4bpp index packing/unpacking, palette application, 12/15/16-bit color conversions, and mip-extent arithmetic.",
+      "domain_aliases": ["4bpp", "2bpp", "1bpp", "BGR555", "RGB565", "RGBA5551", "RGBA4444", "RGB444", "BGR444", "CLUT", "palette", "mipmap"],
+      "use_when": "Converting packed linear indexed pixels or 12/15/16-bit color words to/from RGBA8888 without format-specific coupling.",
+      "avoid_when": "Decoding 2D byte-aligned glyphs (use glyph), planar 8x8 tiles (use planar), or swizzled textures (use morton).",
+      "feature_gate": "formatkit/pixel"
+    },
+    {
+      "crate": "formatkit-pixel",
+      "module": "glyph",
+      "path": "formatkit_pixel::glyph::{unpack_glyph_1bpp, pack_glyph_1bpp, unpack_glyph_2bpp, pack_glyph_2bpp, unpack_glyph_4bpp, pack_glyph_4bpp}",
+      "summary": "Byte-aligned 2D bitmap glyph packers and unpackers for 1bpp, 2bpp, and 4bpp fonts.",
+      "domain_aliases": ["bitmap font", "glyph", "1bpp glyph", "2bpp glyph", "4bpp glyph", "row-aligned bitmap"],
+      "use_when": "Packing or unpacking 2D glyphs where each horizontal row is padded to a whole byte boundary.",
+      "avoid_when": "Pixels are stored in a continuous 1D stream without per-row padding (use unpack_*bpp_into).",
+      "feature_gate": "formatkit/pixel"
+    },
+    {
+      "crate": "formatkit-pixel",
+      "module": "planar",
+      "path": "formatkit_pixel::planar::{unpack_planar_tile_8x8_into, pack_planar_tile_8x8_into}",
+      "summary": "Interleaved-row planar 8x8 tile packing and unpacking for 1, 2, and 4 bitplanes.",
+      "domain_aliases": ["bitplane", "planar tile", "8x8 tile", "CHR tile", "2bpp planar", "4bpp planar"],
+      "use_when": "Decoding or encoding 8x8 bitplane-interleaved tiles (1, 2, or 4 planes).",
+      "avoid_when": "Tiles are chunky/packed pixels or non-8x8 dimensions.",
+      "feature_gate": "formatkit/pixel"
+    },
+    {
+      "crate": "formatkit-pixel",
+      "module": "morton",
+      "path": "formatkit_pixel::morton::{morton_index, swizzle_morton, unswizzle_morton, MortonAxisOrder}",
+      "summary": "Morton (Z-order) coordinate interleaving and rectangular 2D texture swizzle/unswizzle.",
+      "domain_aliases": ["Morton", "Z-order", "swizzle", "unswizzle", "deswizzle", "tiled texture"],
+      "use_when": "Swizzling or unswizzling 2D textures stored in Morton/Z-order curves.",
+      "avoid_when": "Texture uses linear row-major layout or a non-Morton block permutation.",
+      "feature_gate": "formatkit/pixel"
+    },
+    {
+      "crate": "formatkit-pixel",
+      "module": "dxt",
+      "path": "formatkit_pixel::dxt::{decode_dxt, DxtFormat, decode_masked, ChannelMasks, is_contiguous, rgb565_to_rgba}",
+      "summary": "S3TC/DXT1/DXT3/DXT5 block texture decoder and arbitrary bitmask channel pixel decoder.",
+      "domain_aliases": ["DXT", "DXT1", "DXT3", "DXT5", "S3TC", "BC1", "BC2", "BC3", "channel mask", "RGB565"],
+      "use_when": "Decoding S3TC/DXT compressed blocks or bitmask-described RGB/RGBA pixel formats.",
+      "avoid_when": "Full DDS container parsing or editing is needed (use formatkit_codec::dds).",
+      "feature_gate": "formatkit/pixel"
+    },
+    {
+      "crate": "formatkit-pixel",
+      "module": "palette",
+      "path": "formatkit_pixel::palette::{grayscale_palette, nearest_palette_index, quantize_rgba, PaletteDistanceMetric}",
+      "summary": "Palette generation, nearest-color lookup, and RGBA-to-indexed quantization.",
+      "domain_aliases": ["palette", "CLUT", "color quantization", "nearest color", "grayscale palette"],
+      "use_when": "Quantizing RGBA images to a target palette or generating grayscale ramp palettes.",
+      "avoid_when": "Only expanding existing palette indices to RGBA (use apply_palette).",
+      "feature_gate": "formatkit/pixel"
+    },
+    {
+      "crate": "formatkit-pixel",
+      "module": "atlas",
+      "path": "formatkit_pixel::atlas::{blit_rgba, crop_rgba, compose_grid_atlas, GridAtlasLayout}",
+      "summary": "RGBA8888 blitting, cropping, and uniform grid-atlas composition.",
+      "domain_aliases": ["sprite sheet", "texture atlas", "grid atlas", "blit", "crop"],
+      "use_when": "Composing decoded tiles/glyphs into a preview sheet or cropping sub-rectangles from an RGBA image.",
+      "avoid_when": "Working on raw indexed buffers prior to RGBA conversion.",
+      "feature_gate": "formatkit/pixel"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "okumura",
+      "path": "formatkit_codec::okumura::{okumura_lzss, okumura_lzss_with_limit, okumura_lzss_consumed_with_limit, okumura_lzss_consumed_with_boundary, okumura_lzss_to_end_with_limit, okumura_lzss_compress}",
+      "summary": "Classic 4 KiB space-filled ring-buffer Okumura LZSS decompression, consumed-extent scanning, and compression.",
+      "domain_aliases": ["LZSS", "Okumura", "ring buffer", "4096 window"],
+      "use_when": "Decoding or encoding standard 4 KiB ring-buffer Okumura LZSS streams.",
+      "avoid_when": "Format uses linear distance history or non-Okumura flag/match layouts (use flag_lzss or sliding_window).",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "flag_lzss",
+      "path": "formatkit_codec::flag_lzss::{decode_flag_lzss, FlagLzssConfig, FlagWidth, FlagBitOrder, FlagPolarity, OvershootPolicy, FlagLzssMatch, FlagLzssOutcome}",
+      "summary": "Parameterized bounded flag-byte/flag-word LZSS stream executor with caller-supplied match-token parser.",
+      "domain_aliases": ["LZSS", "flag LZSS", "LZ77", "sliding window", "flag word"],
+      "use_when": "Decoding flag-word LZSS streams with configurable flag width, bit order, polarity, and overshoot policy.",
+      "avoid_when": "Stream uses a pre-filled ring buffer (use okumura) or non-flag-word bit-packed tokens (use sliding_window).",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "counted_lsb",
+      "path": "formatkit_codec::counted_lsb::{scan_with_work, decode_exact_with_work, decode_with_work, Extent, Decoded}",
+      "summary": "Bounded counted-LSB LZ scanner and decoder with WorkBudget accounting and explicit linear history.",
+      "domain_aliases": ["counted LZ", "LSB LZ", "LZSS", "budgeted LZ"],
+      "use_when": "Scanning or decoding counted LSB-flag LZ streams with WorkBudget limits and zero-allocation extent validation.",
+      "avoid_when": "Format uses a different command grammar or implicit ring-buffer initialization.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "sliding_window",
+      "path": "formatkit_codec::sliding_window::{append_match, find_longest_match, RingBuffer, MatchError}",
+      "summary": "Checked overlapping back-reference copy, longest-match search, and explicit ring-buffer primitives.",
+      "domain_aliases": ["sliding window", "ring buffer", "LZ77", "LZSS", "back-reference copy", "overlapping copy"],
+      "use_when": "Building a custom LZ codec that needs checked overlapping copies, match search, or a ring buffer.",
+      "avoid_when": "okumura, flag_lzss, or counted_lsb already matches the stream's control loop.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "inflate",
+      "path": "formatkit_codec::inflate::{inflate, inflate_with_limit, inflate_one_with_limit, inflate_exact_with_work_budget, zlib_inflate, zlib_inflate_with_limit, zlib_inflate_one_with_limit, zlib_inflate_exact_with_work_budget, zlib_store}",
+      "summary": "Bounded raw Deflate and zlib decompression with exact consumed-extent reporting and WorkBudget variants.",
+      "domain_aliases": ["inflate", "deflate", "zlib", "RFC 1950", "RFC 1951"],
+      "use_when": "Decompressing raw Deflate or zlib streams with strict output limits and exact consumed-byte tracking.",
+      "avoid_when": "Stream has a gzip header/trailer (use gzip).",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "deflate",
+      "path": "formatkit_codec::deflate::{deflate_compress, zlib_compress}",
+      "summary": "Raw Deflate and zlib compression helpers.",
+      "domain_aliases": ["deflate", "zlib", "compress"],
+      "use_when": "Compressing payloads into raw Deflate or zlib streams.",
+      "avoid_when": "Gzip framing is required (use gzip::gzip_compress).",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "gzip",
+      "path": "formatkit_codec::gzip::{gzip_with_limit, gzip_one_with_limit, gzip_compress}",
+      "summary": "Bounded gzip decompression (single-member and multi-member) with consumed-extent tracking and gzip compression.",
+      "domain_aliases": ["gzip", "RFC 1952", "gz"],
+      "use_when": "Decompressing or compressing gzip-framed streams with output bounds.",
+      "avoid_when": "Stream is raw Deflate or zlib (use inflate/deflate).",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "lzma",
+      "path": "formatkit_codec::lzma::{lzma_alone_declared_size, lzma_alone_decompress_with_limit}",
+      "summary": "Bounded LZMA-Alone header inspection and decompression.",
+      "domain_aliases": ["LZMA", "LZMA-Alone", "lzma1"],
+      "use_when": "Decompressing LZMA-Alone streams with explicit output caps.",
+      "avoid_when": "Container uses XZ or LZMA2 framing.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "rnc",
+      "path": "formatkit_codec::rnc::{rnc2_identifies, rnc2_decompress, rnc2_decompress_with_limit, rnc2_decompress_with_work_budget, rnc2_decompress_with_key_and_limit, rnc_crc16, Rnc2Header}",
+      "summary": "RNC Method 2 identification, CRC-16 verification, and bounded decompression (with optional key or WorkBudget).",
+      "domain_aliases": ["RNC", "RNC2", "Rob Northen Compression"],
+      "use_when": "Identifying or decompressing RNC Method 2 streams.",
+      "avoid_when": "Stream is RNC Method 1 or another LZ codec.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "huffman",
+      "path": "formatkit_codec::huffman::{CanonicalHuffmanTable, CanonicalCode, HuffmanBitOrder, build_code_lengths, MAX_HUFFMAN_CODE_BITS}",
+      "summary": "Canonical Huffman tree/code-length builder and fast MSB- or LSB-first prefix decoder table.",
+      "domain_aliases": ["Huffman", "canonical Huffman", "prefix code", "entropy coding"],
+      "use_when": "Decoding or encoding canonical Huffman streams in custom compression or text formats.",
+      "avoid_when": "Using standard Deflate/zlib (use inflate/deflate).",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "rle",
+      "path": "formatkit_codec::rle::{decode_high_bit_rle, encode_high_bit_rle, HighBitRleConfig}",
+      "summary": "Configurable high-bit run-length encoding (PackBits-style literal/run control bytes).",
+      "domain_aliases": ["RLE", "run-length encoding", "PackBits", "high-bit RLE"],
+      "use_when": "Decoding or encoding RLE streams where bit 7 of each control byte selects literal vs repeated runs.",
+      "avoid_when": "Stream uses a non-high-bit RLE escape scheme.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "delta",
+      "path": "formatkit_codec::delta::{delta_decode_u8_into, delta_encode_u8_into, delta_decode_u16_le_into, delta_encode_u16_le_into, delta_decode_u16_be_into, delta_encode_u16_be_into}",
+      "summary": "In-place wrapping delta encode and decode for u8, u16 LE, and u16 BE sample streams.",
+      "domain_aliases": ["delta coding", "DPCM", "differential encoding", "prefix sum"],
+      "use_when": "Applying or inverting byte or 16-bit differential filters on audio, geometry, or compressed streams.",
+      "avoid_when": "Non-wrapping or predictor-based filters (e.g., PNG Paeth) are needed.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "png",
+      "path": "formatkit_codec::png::{decode_png_rgba, encode_rgba_png}",
+      "summary": "Self-contained PNG RGBA8888 decoder and encoder.",
+      "domain_aliases": ["PNG", "image codec", "lossless image"],
+      "use_when": "Importing or exporting RGBA8888 PNG images without external image-crate dependencies.",
+      "avoid_when": "Preserving indexed palettes or PNG ancillary metadata chunks is required.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "pcx",
+      "path": "formatkit_codec::pcx::{decode_pcx_rgba, encode_pcx_rgba, encode_pcx_indexed}",
+      "summary": "PCX image decoder (to RGBA) and RGBA/indexed encoder.",
+      "domain_aliases": ["PCX", "ZSoft PCX", "indexed image"],
+      "use_when": "Decoding or encoding PCX raster images.",
+      "avoid_when": "Another standard image container (PNG, TGA, DDS) is required.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "tga",
+      "path": "formatkit_codec::tga::{decode_tga_rgba, encode_tga_rgba, encode_tga_indexed, has_tga_footer, TgaHeader, TgaEncoding, TgaOrigin}",
+      "summary": "Truevision TGA header inspection, footer detection, RGBA decoding, and RGBA/indexed encoding.",
+      "domain_aliases": ["TGA", "Targa", "Truevision"],
+      "use_when": "Decoding or encoding uncompressed or RLE-compressed TGA images.",
+      "avoid_when": "Another standard image container (PNG, PCX, DDS) is required.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "dds",
+      "path": "formatkit_codec::dds::{Dds, DdsFormat, DdsRect, DdsPatch, DdsPatchLevel, encode_dds_level, encode_dds_like, patch_dds_rects}",
+      "summary": "DDS texture container parsing, DXT/uncompressed decoding, mip-level encoding, and rectangular patching.",
+      "domain_aliases": ["DDS", "DirectDraw Surface", "DXT", "S3TC", "mipmap texture"],
+      "use_when": "Parsing, decoding, re-encoding, or rect-patching DDS textures.",
+      "avoid_when": "Only raw S3TC/DXT block decoding without a DDS header is needed (use formatkit_pixel::dxt).",
+      "feature_gate": "formatkit-codec/dds (default)"
+    },
+    {
+      "crate": "formatkit-patch",
+      "module": "ips",
+      "path": "formatkit_patch::ips::{Patch, Record, RecordData, ApplyOptions, OverlapPolicy, GrowthPolicy, Validation, create}",
+      "summary": "IPS binary patch parsing, validation, creation, serialization, and policy-controlled application.",
+      "domain_aliases": ["IPS", "binary patch", "ROM patch", "IPS32"],
+      "use_when": "Reading, creating, or applying IPS patches with explicit overlap, growth, and output-size policies.",
+      "avoid_when": "Patch requires source/target CRC-32 verification or delta-copy encoding (use bps or ups).",
+      "feature_gate": "formatkit/patch"
+    },
+    {
+      "crate": "formatkit-patch",
+      "module": "bps",
+      "path": "formatkit_patch::bps::{BpsPatch, BpsAction, BPS_MAGIC}",
+      "summary": "BPS (Beat Patching System) binary patch parsing, CRC-32 verification, creation, and application.",
+      "domain_aliases": ["BPS", "Beat patch", "delta patch", "binary patch"],
+      "use_when": "Applying or creating size-changing delta patches with source, target, and patch CRC-32 integrity checks.",
+      "avoid_when": "Target workflow requires IPS or XOR-based UPS patches.",
+      "feature_gate": "formatkit/patch"
+    },
+    {
+      "crate": "formatkit-patch",
+      "module": "ups",
+      "path": "formatkit_patch::ups::{UpsPatch, UpsChunk, UPS_MAGIC}",
+      "summary": "UPS XOR-based binary patch parsing, CRC-32 verification, creation, and reversible application.",
+      "domain_aliases": ["UPS", "XOR patch", "binary patch"],
+      "use_when": "Applying or creating XOR-chunk UPS patches with source/target/patch CRC-32 verification.",
+      "avoid_when": "Delta-copy compression is needed for shifted data (use bps).",
+      "feature_gate": "formatkit/patch"
+    },
+    {
+      "crate": "formatkit-patch",
+      "module": "vli",
+      "path": "formatkit_patch::vli::{decode_vli, decode_vli_from_slice, encode_vli, encode_vli_vec}",
+      "summary": "Bijective variable-length integer (varint) encoding and decoding used by BPS and UPS patches.",
+      "domain_aliases": ["varint", "VLI", "variable-length integer", "BPS varint", "UPS varint"],
+      "use_when": "Encoding or decoding bijective base-128 variable-length integers.",
+      "avoid_when": "Standard LEB128 or VLQ encoding is required (bijective VLI adds +1 per continuation byte).",
+      "feature_gate": "formatkit/patch"
+    },
+    {
+      "crate": "formatkit-archive",
+      "module": "lib",
+      "path": "formatkit_archive::{extract, ExtractionMode, ExtractionReceipt, select_index, select_name, SelectionError}",
+      "summary": "Format-neutral member selection and bounded streaming extraction over any IndexedNamespace.",
+      "domain_aliases": ["archive extract", "member select", "stream extraction"],
+      "use_when": "Selecting archive members by index or exact display name and streaming stored or decoded content to a Write sink.",
+      "avoid_when": "You need recursive nested-archive traversal (use walk).",
+      "feature_gate": "formatkit/archive"
+    },
+    {
+      "crate": "formatkit-archive",
+      "module": "paired_stored_mount",
+      "path": "formatkit_archive::paired_stored_mount::{PairedStoredMount, mount_selected}",
+      "summary": "Shared mounting sequence for paired index-plus-data archives whose members are stored byte ranges.",
+      "domain_aliases": ["PairedStoredMount", "paired archive", "index+data archive", "split archive"],
+      "use_when": "Mounting an archive split across an index file and a companion data file with bounded index I/O and source revalidation.",
+      "avoid_when": "Archive is self-contained in a single source (build StoredRangeNamespace directly).",
+      "feature_gate": "formatkit/archive"
+    },
+    {
+      "crate": "formatkit-archive",
+      "module": "walk",
+      "path": "formatkit_archive::{walk, WalkOptions, WalkEvent, WalkControl, Resolver, Resolution, ResolutionVisitor}",
+      "summary": "Depth-bounded, WorkBudget-accounted recursive traversal over nested mounted namespaces with owner-injected resolution.",
+      "domain_aliases": ["archive walk", "recursive traversal", "nested container", "tree walk"],
+      "use_when": "Walking nested archives/containers while enforcing depth, node, member, and cancellation limits.",
+      "avoid_when": "Only inspecting top-level entries of a single namespace (iterate namespace.entries()).",
+      "feature_gate": "formatkit/archive"
+    },
+    {
+      "crate": "formatkit-catalog",
+      "module": "identity",
+      "path": "formatkit_catalog::{FormatId, Category, Id, Method}",
+      "summary": "Open, typed format, category, and method identities without a closed central enum.",
+      "domain_aliases": ["FormatId", "format identity", "format category"],
+      "use_when": "Assigning stable, typed identities to formats in a new kit.",
+      "avoid_when": "Never hardcode a closed central enum across crates when FormatId suffices.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-catalog",
+      "module": "catalog::descriptor",
+      "path": "formatkit_catalog::{FormatDescriptor, Probe, FormatCapabilities, Confidence, DecoderRequirement}",
+      "summary": "Owner-declared format detection probes, precedence, extension tie-breakers, and capability metadata.",
+      "domain_aliases": ["FormatDescriptor", "format detection", "magic probe", "structural probe"],
+      "use_when": "Declaring how a format is identified and what capabilities its owner implements.",
+      "avoid_when": "Avoid CompatibilityRecognitionRule in greenfield kits; use FormatDescriptor directly.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-catalog",
+      "module": "catalog::resolver",
+      "path": "formatkit_catalog::{FormatCatalog, FormatCatalogBuilder, DetectionContext, Resolution, Candidate}",
+      "summary": "Deterministic content-first format identification catalog with path-hint tie-breaking.",
+      "domain_aliases": ["FormatCatalog", "identify", "format resolver", "sniff"],
+      "use_when": "Identifying unknown inputs deterministically across an explicitly composed set of FormatDescriptors.",
+      "avoid_when": "Composing full executable modules (build ModuleCatalog in formatkit-runtime and call catalog.formats().identify()).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-catalog",
+      "module": "catalog::leaf",
+      "path": "formatkit_catalog::{LeafOperationProvider, LeafOperationContract, LeafOperationCatalog, LeafDecodeRequest, LeafDecodeLimits, LeafOutput, LeafOutputKind}",
+      "summary": "Typed contracts and dispatch catalog for decoded leaf formats (images, PCM audio, etc.).",
+      "domain_aliases": ["LeafOperationProvider", "leaf decode", "image decode dispatch", "audio decode dispatch"],
+      "use_when": "Exposing a leaf format decoder (image, audio) through ModuleCatalog.",
+      "avoid_when": "Format is an archive or container with child entries (use NamespaceProvider).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-catalog",
+      "module": "catalog::namespace",
+      "path": "formatkit_catalog::{NamespaceProvider, NamespaceMountContract, RoleBoundNamespaceProvider, RoleBoundNamespaceContract, NamespaceSemantics, WorkMountedNamespace}",
+      "summary": "Typed mount contracts and providers for single-source, paired, and role-bound archive namespaces.",
+      "domain_aliases": ["NamespaceProvider", "archive mount contract", "role-bound namespace"],
+      "use_when": "Registering a container or archive mounter in ModuleCatalog.",
+      "avoid_when": "Format is a leaf object with no child entries (use LeafOperationProvider).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-catalog",
+      "module": "catalog::inputs",
+      "path": "formatkit_catalog::{InputSchema, ByteRole, SelectorRole, BoundInputs, SourceProbeOutcome}",
+      "summary": "Canonical role-based input schemas and bound input validation for multi-source and selector-driven operations.",
+      "domain_aliases": ["InputSchema", "BoundInputs", "multi-file input", "role binding"],
+      "use_when": "Declaring required/optional source roles and selectors for strict ModuleOperation entries.",
+      "avoid_when": "Low-level library helpers that take a direct &[u8] or &dyn RangeSource.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-catalog",
+      "module": "catalog::writer",
+      "path": "formatkit_catalog::{WriterContract, ReproductionContract, EditContract, AuthoringContract, EditMode, OperationScope}",
+      "summary": "Proof-backed writer contracts declaring reproduction, in-place/repack editing, and authoring guarantees.",
+      "domain_aliases": ["WriterContract", "round-trip proof", "edit contract", "authoring contract"],
+      "use_when": "Attaching verified write/edit/round-trip guarantees to a FormatModule.",
+      "avoid_when": "Format is currently read-only.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-catalog",
+      "module": "compatibility",
+      "path": "formatkit_catalog::{CompatibilityRecognitionRule, CompatibilityRecognitionContribution}",
+      "summary": "Migration-only recognition scaffolding for bridging legacy detectors during incremental strict-module adoption.",
+      "domain_aliases": ["legacy detection", "compatibility rule", "migration bridge"],
+      "use_when": "Migrating an existing legacy detector incrementally toward strict FormatModule rows.",
+      "avoid_when": "Building a greenfield kit; always use FormatDescriptor and ModuleState::Strict.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-runtime",
+      "module": "lib",
+      "path": "formatkit_runtime::{FormatModule, ModuleState, ModuleOperation, OperationId, OperationCapabilities, ExistingExecutableOperation, ModuleCatalog, ResidentWriterProvider, ResidentWriteOutput}",
+      "summary": "Explicit per-format module composition kernel validating descriptors, contracts, capabilities, and strict operation dispatch.",
+      "domain_aliases": ["ModuleCatalog", "FormatModule", "ModuleState::Strict", "runtime dispatch", "product catalog"],
+      "use_when": "Composing a kit's selected format modules into a validated detection, leaf-decode, namespace-mount, and writer runtime.",
+      "avoid_when": "A standalone single-format crate that does not need cross-format composition.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-corpus",
+      "module": "lib",
+      "path": "formatkit_corpus::{dir, subdir, file, samples, samples_all, first, is_sample_name}",
+      "summary": "Explicit-root external corpus discovery gated on FORMATKIT_CORPUS_DIR and safe-runner lock enforcement.",
+      "domain_aliases": ["corpus discovery", "FORMATKIT_CORPUS_DIR", "external samples"],
+      "use_when": "Locating external real-world test samples without hardcoding paths or bundling sample bytes.",
+      "avoid_when": "Unit tests using synthetic in-memory fixtures.",
+      "feature_gate": "formatkit/corpus"
+    },
+    {
+      "crate": "formatkit-corpus-test",
+      "module": "lib",
+      "path": "formatkit_corpus_test::{Digest, Registry, Args, run_dir, run_all, run_root, archive_digest, hash_bytes, roundtrip_ok}",
+      "summary": "Specification-driven golden digest test harness comparing computed JSON digests against external spec.json files.",
+      "domain_aliases": ["golden test", "corpus test", "spec.json", "digest harness"],
+      "use_when": "Validating parsers, decoders, and round-trips against external real-world corpora with frozen JSON expectations.",
+      "avoid_when": "Ordinary synthetic unit tests.",
+      "feature_gate": "formatkit/corpus"
+    },
+    {
+      "crate": "formatkit-corpus-test",
+      "module": "compress_oracle",
+      "path": "formatkit_corpus_test::compress_oracle::{load_pairs, run, run_from_corpus, diff, Pair, Ledger, Outcome}",
+      "summary": "Oracle test runner for verifying compression/decompression codec pairs against external corpus fixtures.",
+      "domain_aliases": ["codec oracle", "compression corpus test", "decompress pairs"],
+      "use_when": "Verifying a compression codec against external compressed/decompressed golden pairs.",
+      "avoid_when": "Testing non-codec formats (use Digest + Registry).",
+      "feature_gate": "formatkit/corpus"
+    },
+    {
+      "crate": "formatkit-corpus-test",
+      "module": "manifest",
+      "path": "formatkit_corpus_test::manifest::{run_manifest, Evaluated, ManifestSubject}",
+      "summary": "Root-manifest driven corpus runner for evaluating multi-format collections declared in manifest.json.",
+      "domain_aliases": ["manifest.json", "corpus manifest", "multi-format corpus"],
+      "use_when": "Running corpus verification driven by a top-level manifest.json instead of per-directory spec.json files.",
+      "avoid_when": "Simple per-format subdirectory spec.json suites (use run_dir/run_all).",
+      "feature_gate": "formatkit/corpus"
+    },
+    {
+      "crate": "formatkit-corpus-test",
+      "module": "sealed_package",
+      "path": "formatkit_corpus_test::sealed_package::{SealedPackage, SealedBounds, SealedCase, expected_digest_from_env, MANIFEST_SHA256_ENV_VAR}",
+      "summary": "SHA-256-sealed corpus package verification with bounded case admission and path validation.",
+      "domain_aliases": ["sealed corpus", "frozen corpus", "manifest SHA-256"],
+      "use_when": "Enforcing cryptographic immutability of a frozen external corpus manifest before running validation.",
+      "avoid_when": "Unsealed development corpora.",
+      "feature_gate": "formatkit/corpus"
+    }
+  ]
+}

@@ -5,8 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-readme.workspace = true
-description = "Checked bytes, bits, sources, budgets and shared binary-data values"
+readme = "README.md"
+description = "Checked bytes, bits, sources, work budgets, checksums and shared binary values"
+keywords = ["binary", "parsing", "checksum", "crc", "io"]
+categories = ["parsing", "encoding"]
 
 [features]
 default = ["shift-jis"]

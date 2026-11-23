@@ -196,6 +196,8 @@ impl std::fmt::Debug for ContextualMemberNamespace {
 /// Implementations expose child sources rather than extracted paths. Concrete
 /// format handlers may downcast the parent through [`Self::as_any`] to build a
 /// typed address-space context, while generic walkers remain format-neutral.
+#[doc(alias = "archive")]
+#[doc(alias = "container")]
 pub trait IndexedNamespace: Send + Sync {
     fn entries(&self) -> &[NamespaceEntry];
 

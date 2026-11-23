@@ -4,7 +4,7 @@
 //! (`None`) and stored zlib blocks (`IDAT`), checking `max_bytes` before
 //! allocating. Decoding validates the PNG signature, `IHDR`, chunk CRCs,
 //! consecutive `IDAT` payloads, and standard scanline filter types `0..=4`,
-//! returning an RGBA8 [`Image`].
+//! returning an RGBA8 [`formatkit_core::Image`].
 
 use formatkit_core::checksum::Crc32IsoHdlc;
 use formatkit_core::{Error, Image, Result};

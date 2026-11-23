@@ -451,198 +451,6 @@ pub fn adler32(bytes: &[u8]) -> u32 {
     checksum.finish()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn crc32_matches_published_check_values() {
-        assert_eq!(crc32_iso_hdlc(b""), 0);
-        assert_eq!(crc32_iso_hdlc(b"123456789"), 0xCBF4_3926);
-    }
-
-    #[test]
-    fn crc32_raw_state_is_the_uncomplemented_result() {
-        let mut checksum = Crc32IsoHdlc::new();
-        checksum.update(b"123456789");
-        assert_eq!(checksum.raw_state(), !0xCBF4_3926);
-        assert_eq!(checksum.finish(), 0xCBF4_3926);
-    }
-
-    #[test]
-    fn crc32_updates_are_incremental() {
-        let mut checksum = Crc32IsoHdlc::new();
-        checksum.update(b"123");
-        checksum.update(b"456");
-        checksum.update(b"789");
-        assert_eq!(checksum.finish(), crc32_iso_hdlc(b"123456789"));
-    }
-
-    #[test]
-    fn crc32_mpeg2_matches_published_check_value() {
-        assert_eq!(crc32_mpeg2(b"123456789"), 0x0376_E6E7);
-    }
-
-    #[test]
-    fn crc32_mpeg2_updates_are_incremental() {
-        let mut checksum = Crc32Mpeg2::new();
-        checksum.update(b"123");
-        checksum.update(b"456");
-        checksum.update(b"789");
-        assert_eq!(checksum.finish(), crc32_mpeg2(b"123456789"));
-    }
-
-    #[test]
-    fn adler32_matches_published_check_values() {
-        assert_eq!(adler32(b""), 1);
-        assert_eq!(adler32(b"123456789"), 0x091E_01DE);
-    }
-
-    #[test]
-    fn adler32_updates_are_incremental() {
-        let mut checksum = Adler32::new();
-        checksum.update(b"123");
-        checksum.update(b"456789");
-        assert_eq!(checksum.finish(), adler32(b"123456789"));
-    }
-}
-
-#[cfg(test)]
-mod crc16_tests {
-    use super::*;
-    #[test]
-    fn standard_check_values_and_streaming() {
-        for (params, check) in [
-            (Crc16Params::ARC, 0xbb3d),
-            (Crc16Params::KERMIT, 0x2189),
-            (Crc16Params::X25, 0x906e),
-            (Crc16Params::BUYPASS, 0xfee8),
-            (Crc16Params::XMODEM, 0x31c3),
-            (Crc16Params::CCITT_FALSE, 0x29b1),
-            (Crc16Params::MODBUS, 0x4b37),
-        ] {
-            assert_eq!(params.compute(b"123456789"), check);
-            for split in 0..=9 {
-                let mut state = Crc16::new(params);
-                state.update(&b"123456789"[..split]);
-                state.update(&[]);
-                state.update(&b"123456789"[split..]);
-                assert_eq!(state.finish(), check);
-                assert_eq!(state.raw_state() ^ params.xor_out, check);
-            }
-        }
-    }
-    #[test]
-    fn custom_seed_polynomial_finalization_and_swap() {
-        let params = Crc16Params {
-            seed: 0x1234,
-            xor_out: 0x4567,
-            polynomial: 0x8408,
-            reflected: true,
-            swap_bytes: true,
-        };
-        assert_eq!(params.compute(b""), (0x1234u16 ^ 0x4567).swap_bytes());
-        let mut crc = Crc16::new(params);
-        crc.update(b"abc");
-        let raw = crc.raw_state();
-        assert_eq!(crc.finish(), (raw ^ params.xor_out).swap_bytes());
-        let chained = Crc16Params {
-            seed: raw,
-            ..params
-        }
-        .compute(b"def");
-        crc.update(b"def");
-        assert_eq!(crc.finish(), chained);
-        assert_eq!(crc.finish(), params.compute(b"abcdef"));
-    }
-
-    #[test]
-    fn crc32_presets_streaming_and_zeroed_range() {
-        for (params, check) in [
-            (Crc32Params::ISO_HDLC, 0xCBF4_3926),
-            (Crc32Params::JAMCRC, 0x340B_C6D9),
-            (Crc32Params::MPEG2, 0x0376_E6E7),
-            (Crc32Params::BZIP2, 0xFC89_1918),
-            (Crc32Params::CRC32C, 0xE306_9283),
-        ] {
-            assert_eq!(params.compute(b"123456789"), check);
-            for split in 0..=9 {
-                let mut state = Crc32::new(params);
-                state.update(&b"123456789"[..split]);
-                state.update(&[]);
-                state.update(&b"123456789"[split..]);
-                assert_eq!(state.finalize(), check);
-                assert_eq!(state.finish(), check);
-                assert_eq!(state.raw_state() ^ params.xor_out, check);
-            }
-        }
-
-        let buf = [1u8, 2, 0xAA, 0xBB, 0xCC, 0xDD, 7, 8];
-        let mut expected = buf;
-        expected[2..6].fill(0);
-        assert_eq!(
-            Crc32Params::ISO_HDLC
-                .compute_with_zeroed_range(&buf, 2..6)
-                .unwrap(),
-            Crc32Params::ISO_HDLC.compute(&expected)
-        );
-        assert_eq!(
-            Crc32Params::CRC32C
-                .compute_with_zeroed_range(&buf, 4..4)
-                .unwrap(),
-            Crc32Params::CRC32C.compute(&buf)
-        );
-        assert!(Crc32Params::ISO_HDLC
-            .compute_with_zeroed_range(&buf, std::ops::Range { start: 5, end: 3 })
-            .is_err());
-        assert!(Crc32Params::ISO_HDLC
-            .compute_with_zeroed_range(&buf, 0..9)
-            .is_err());
-
-        let swapped = Crc32Params {
-            swap_bytes: true,
-            ..Crc32Params::ISO_HDLC
-        };
-        assert_eq!(swapped.compute(b"123456789"), 0xCBF4_3926u32.swap_bytes());
-    }
-
-    #[test]
-    fn crc16_compute_with_zeroed_range_matches_zeroed_copy_and_validates_bounds() {
-        let buf = [0x11u8, 0x22, 0xAA, 0xBB, 0xCC, 0xDD, 0x77, 0x88];
-        let mut expected = buf;
-        expected[2..6].fill(0);
-        assert_eq!(
-            Crc16Params::CCITT_FALSE
-                .compute_with_zeroed_range(&buf, 2..6)
-                .unwrap(),
-            Crc16Params::CCITT_FALSE.compute(&expected)
-        );
-        assert_eq!(
-            Crc16Params::MODBUS
-                .compute_with_zeroed_range(&buf, 4..4)
-                .unwrap(),
-            Crc16Params::MODBUS.compute(&buf)
-        );
-
-        let large = [0x5Au8; 100];
-        let mut large_expected = large;
-        large_expected[10..90].fill(0);
-        assert_eq!(
-            Crc16Params::X25
-                .compute_with_zeroed_range(&large, 10..90)
-                .unwrap(),
-            Crc16Params::X25.compute(&large_expected)
-        );
-
-        assert!(Crc16Params::ARC
-            .compute_with_zeroed_range(&buf, core::ops::Range { start: 5, end: 3 })
-            .is_err());
-        assert!(Crc16Params::ARC
-            .compute_with_zeroed_range(&buf, 0..9)
-            .is_err());
-    }
-}
-
 /// Wrapping 8-bit sum of bytes starting from `seed`.
 pub fn sum_bytes_u8(bytes: &[u8], seed: u8) -> u8 {
     bytes.iter().fold(seed, |acc, &b| acc.wrapping_add(b))
@@ -794,6 +602,9 @@ pub enum FoldOp {
 /// The accumulator is masked to `bits` (`1..=64`) at initialization, after each
 /// step, and after applying `xor_out`. Input length must be an exact multiple
 /// of the selected [`FoldUnit`] width.
+#[doc(alias = "additive")]
+#[doc(alias = "rolling")]
+#[doc(alias = "xor")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FoldChecksum {
     pub unit: FoldUnit,
@@ -1012,6 +823,198 @@ where
     let mut copy = bytes.to_vec();
     copy[zero_range].fill(0);
     f(&copy)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crc32_matches_published_check_values() {
+        assert_eq!(crc32_iso_hdlc(b""), 0);
+        assert_eq!(crc32_iso_hdlc(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn crc32_raw_state_is_the_uncomplemented_result() {
+        let mut checksum = Crc32IsoHdlc::new();
+        checksum.update(b"123456789");
+        assert_eq!(checksum.raw_state(), !0xCBF4_3926);
+        assert_eq!(checksum.finish(), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn crc32_updates_are_incremental() {
+        let mut checksum = Crc32IsoHdlc::new();
+        checksum.update(b"123");
+        checksum.update(b"456");
+        checksum.update(b"789");
+        assert_eq!(checksum.finish(), crc32_iso_hdlc(b"123456789"));
+    }
+
+    #[test]
+    fn crc32_mpeg2_matches_published_check_value() {
+        assert_eq!(crc32_mpeg2(b"123456789"), 0x0376_E6E7);
+    }
+
+    #[test]
+    fn crc32_mpeg2_updates_are_incremental() {
+        let mut checksum = Crc32Mpeg2::new();
+        checksum.update(b"123");
+        checksum.update(b"456");
+        checksum.update(b"789");
+        assert_eq!(checksum.finish(), crc32_mpeg2(b"123456789"));
+    }
+
+    #[test]
+    fn adler32_matches_published_check_values() {
+        assert_eq!(adler32(b""), 1);
+        assert_eq!(adler32(b"123456789"), 0x091E_01DE);
+    }
+
+    #[test]
+    fn adler32_updates_are_incremental() {
+        let mut checksum = Adler32::new();
+        checksum.update(b"123");
+        checksum.update(b"456789");
+        assert_eq!(checksum.finish(), adler32(b"123456789"));
+    }
+}
+
+#[cfg(test)]
+mod crc16_tests {
+    use super::*;
+    #[test]
+    fn standard_check_values_and_streaming() {
+        for (params, check) in [
+            (Crc16Params::ARC, 0xbb3d),
+            (Crc16Params::KERMIT, 0x2189),
+            (Crc16Params::X25, 0x906e),
+            (Crc16Params::BUYPASS, 0xfee8),
+            (Crc16Params::XMODEM, 0x31c3),
+            (Crc16Params::CCITT_FALSE, 0x29b1),
+            (Crc16Params::MODBUS, 0x4b37),
+        ] {
+            assert_eq!(params.compute(b"123456789"), check);
+            for split in 0..=9 {
+                let mut state = Crc16::new(params);
+                state.update(&b"123456789"[..split]);
+                state.update(&[]);
+                state.update(&b"123456789"[split..]);
+                assert_eq!(state.finish(), check);
+                assert_eq!(state.raw_state() ^ params.xor_out, check);
+            }
+        }
+    }
+    #[test]
+    fn custom_seed_polynomial_finalization_and_swap() {
+        let params = Crc16Params {
+            seed: 0x1234,
+            xor_out: 0x4567,
+            polynomial: 0x8408,
+            reflected: true,
+            swap_bytes: true,
+        };
+        assert_eq!(params.compute(b""), (0x1234u16 ^ 0x4567).swap_bytes());
+        let mut crc = Crc16::new(params);
+        crc.update(b"abc");
+        let raw = crc.raw_state();
+        assert_eq!(crc.finish(), (raw ^ params.xor_out).swap_bytes());
+        let chained = Crc16Params {
+            seed: raw,
+            ..params
+        }
+        .compute(b"def");
+        crc.update(b"def");
+        assert_eq!(crc.finish(), chained);
+        assert_eq!(crc.finish(), params.compute(b"abcdef"));
+    }
+
+    #[test]
+    fn crc32_presets_streaming_and_zeroed_range() {
+        for (params, check) in [
+            (Crc32Params::ISO_HDLC, 0xCBF4_3926),
+            (Crc32Params::JAMCRC, 0x340B_C6D9),
+            (Crc32Params::MPEG2, 0x0376_E6E7),
+            (Crc32Params::BZIP2, 0xFC89_1918),
+            (Crc32Params::CRC32C, 0xE306_9283),
+        ] {
+            assert_eq!(params.compute(b"123456789"), check);
+            for split in 0..=9 {
+                let mut state = Crc32::new(params);
+                state.update(&b"123456789"[..split]);
+                state.update(&[]);
+                state.update(&b"123456789"[split..]);
+                assert_eq!(state.finalize(), check);
+                assert_eq!(state.finish(), check);
+                assert_eq!(state.raw_state() ^ params.xor_out, check);
+            }
+        }
+
+        let buf = [1u8, 2, 0xAA, 0xBB, 0xCC, 0xDD, 7, 8];
+        let mut expected = buf;
+        expected[2..6].fill(0);
+        assert_eq!(
+            Crc32Params::ISO_HDLC
+                .compute_with_zeroed_range(&buf, 2..6)
+                .unwrap(),
+            Crc32Params::ISO_HDLC.compute(&expected)
+        );
+        assert_eq!(
+            Crc32Params::CRC32C
+                .compute_with_zeroed_range(&buf, 4..4)
+                .unwrap(),
+            Crc32Params::CRC32C.compute(&buf)
+        );
+        assert!(Crc32Params::ISO_HDLC
+            .compute_with_zeroed_range(&buf, std::ops::Range { start: 5, end: 3 })
+            .is_err());
+        assert!(Crc32Params::ISO_HDLC
+            .compute_with_zeroed_range(&buf, 0..9)
+            .is_err());
+
+        let swapped = Crc32Params {
+            swap_bytes: true,
+            ..Crc32Params::ISO_HDLC
+        };
+        assert_eq!(swapped.compute(b"123456789"), 0xCBF4_3926u32.swap_bytes());
+    }
+
+    #[test]
+    fn crc16_compute_with_zeroed_range_matches_zeroed_copy_and_validates_bounds() {
+        let buf = [0x11u8, 0x22, 0xAA, 0xBB, 0xCC, 0xDD, 0x77, 0x88];
+        let mut expected = buf;
+        expected[2..6].fill(0);
+        assert_eq!(
+            Crc16Params::CCITT_FALSE
+                .compute_with_zeroed_range(&buf, 2..6)
+                .unwrap(),
+            Crc16Params::CCITT_FALSE.compute(&expected)
+        );
+        assert_eq!(
+            Crc16Params::MODBUS
+                .compute_with_zeroed_range(&buf, 4..4)
+                .unwrap(),
+            Crc16Params::MODBUS.compute(&buf)
+        );
+
+        let large = [0x5Au8; 100];
+        let mut large_expected = large;
+        large_expected[10..90].fill(0);
+        assert_eq!(
+            Crc16Params::X25
+                .compute_with_zeroed_range(&large, 10..90)
+                .unwrap(),
+            Crc16Params::X25.compute(&large_expected)
+        );
+
+        assert!(Crc16Params::ARC
+            .compute_with_zeroed_range(&buf, core::ops::Range { start: 5, end: 3 })
+            .is_err());
+        assert!(Crc16Params::ARC
+            .compute_with_zeroed_range(&buf, 0..9)
+            .is_err());
+    }
 }
 
 #[cfg(test)]

@@ -5,8 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-readme.workspace = true
-description = "Format identities, detection catalogs and executable operation contracts"
+readme = "README.md"
+description = "Open format identities, detection catalogs and executable operation contracts"
+keywords = ["format", "catalog", "detection", "registry", "binary"]
+categories = ["parsing", "data-structures"]
 
 [dependencies]
 formatkit-core.workspace = true

@@ -5,7 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-readme.workspace = true
+readme = "README.md"
 description = "Explicit-root, platform-neutral corpus discovery"
+keywords = ["corpus", "testing", "fixtures", "discovery"]
+categories = ["development-tools::testing"]
 
 [dependencies]

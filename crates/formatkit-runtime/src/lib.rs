@@ -20,6 +20,15 @@
 //! `archive-owner::ArchiveFormat` is deliberately absent: adapting that type here
 //! would reverse the dependency boundary. Its owner can project registrations
 //! into per-format rows during shadow composition.
+//!
+//! ## `Strict` vs `Legacy` module rows
+//!
+//! Each [`FormatModule`] declares a [`ModuleState`]:
+//! - [`ModuleState::Strict`] rows are owner-authorized modules whose named operations
+//!   participate in strict runtime lookup, carry typed callbacks and input schemas,
+//!   and declare syntax-validated proof selectors.
+//! - [`ModuleState::Legacy`] rows preserve older compatibility projections during
+//!   migration without contributing operations to strict lookup.
 
 #![forbid(unsafe_code)]
 

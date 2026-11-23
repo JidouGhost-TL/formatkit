@@ -6,7 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
-description = "Format-neutral mounted namespace selection, extraction, and traversal"
+description = "Format-neutral mounted namespace selection, extraction, traversal and paired mounts"
+keywords = ["archive", "namespace", "extraction", "traversal", "binary"]
+categories = ["parsing", "filesystem"]
 
 [dependencies]
 formatkit-core.workspace = true

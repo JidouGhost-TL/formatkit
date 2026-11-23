@@ -1,4 +1,19 @@
-//! Checked binary data primitives and bounded source access.
+//! Checked binary data primitives, bounded sources, work budgets, and shared value types.
+//!
+//! # Key areas
+//! - **Checked I/O & cursors**: [`Reader`], [`Writer`], byte-offset helpers (`u16_at`, `u32_at`, …),
+//!   bit cursors ([`LsbBitCursor`], [`MsbBitCursor`]), and interleaved bit readers/writers.
+//! - **Sources & namespaces**: [`RangeSource`], [`SourceBindings`], [`IndexedNamespace`],
+//!   [`WorkBudget`], [`ResidentReservation`], and [`copy_source_range`].
+//! - **Modules**:
+//!   - [`audio`]: PCM buffers and WAV header helpers
+//!   - [`bcd`]: binary-coded decimal conversion
+//!   - [`checksum`]: CRC-16, CRC-32, Adler-32, and configurable fold checksums
+//!   - [`math`]: fixed-point 3-D transform arithmetic
+//!   - [`padding`]: uniform padding classification and trailing-padding detection
+//!   - [`pointer_table`]: contiguous aligned 32-bit pointer-table scanning
+//!   - [`text`]: fixed, prefixed, and NUL-terminated strings (plus optional Shift-JIS via `shift-jis`)
+//!   - [`topology`]: allocation-free triangle strip and fan iterators
 
 #![deny(unsafe_code)]
 
@@ -87,6 +102,7 @@ pub use namespace::{
 mod transformed_member;
 pub use transformed_member::{materialize_transformed_member, TransformMaterialization};
 
+/// Fixed, prefixed, and NUL-terminated string helpers (plus optional Shift-JIS tables).
 pub mod text;
 pub use text::{
     fixed_field, nul_terminated, nul_terminated_len, u16_be_prefixed, u16_le_prefixed, u8_prefixed,
@@ -99,30 +115,38 @@ pub use bounded_cstr::{
     BoundedCstrReport,
 };
 
+/// Shared PCM audio buffers and WAV header encoding.
 pub mod audio;
 pub use audio::{wav_header_pcm, Pcm};
 
 mod bit_rows;
 pub use bit_rows::MsbFirst1bppRows;
 
+/// Binary-coded decimal (BCD) byte conversions.
 pub mod bcd;
 pub use bcd::{bcd_to_u8, u8_to_bcd};
 
+/// Incremental CRC-16, CRC-32, Adler-32, and configurable fold checksums.
 pub mod checksum;
 pub use checksum::{
-    compute_with_zeroed_range, sum_bytes_u16, xor_bytes, Crc32, Crc32Params, FoldChecksum, FoldOp,
-    FoldUnit,
+    adler32, compute_with_zeroed_range, crc32_iso_hdlc, crc32_mpeg2, sum_bytes_u16, xor_bytes,
+    Adler32, Crc16, Crc16Params, Crc32, Crc32IsoHdlc, Crc32Mpeg2, Crc32Params, FoldChecksum,
+    FoldOp, FoldUnit,
 };
 
+/// Scanner for contiguous aligned 32-bit pointer tables.
 pub mod pointer_table;
 pub use pointer_table::{scan_u32_pointer_tables, PointerTable};
 
+/// Uniform padding classification and trailing-padding detection.
 pub mod padding;
 pub use padding::{
     classify_padding, classify_padding_source, detect_trailing_padding, PaddingKind,
     PaddingSummary, TrailingPadding,
 };
 
+/// Fixed-point 3-D transform math (`Q12` scale).
 pub mod math;
 
+/// Allocation-free primitive-topology iterators (triangle strips and fans).
 pub mod topology;

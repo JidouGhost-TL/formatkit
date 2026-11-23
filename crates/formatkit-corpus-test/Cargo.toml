@@ -5,8 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-readme.workspace = true
-description = "JSON specification and golden-digest corpus testing"
+readme = "README.md"
+description = "JSON specification, golden-digest, codec-pair and sealed-package corpus testing"
+keywords = ["corpus", "testing", "golden", "digest", "fixtures"]
+categories = ["development-tools::testing"]
 
 [dependencies]
 formatkit-core.workspace = true

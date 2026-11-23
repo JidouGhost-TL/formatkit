@@ -12,13 +12,21 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// Header-inclusive and payload-sized tagged chunk spans.
 pub mod chunks;
+/// Checked in-place patching and same-size splicing on resident byte slices.
 pub mod edit;
+/// Typed scalar, array, and fixed-byte field descriptors.
 pub mod field;
+/// Generic IFF `FORM` and RIFF container chunk parsing.
 pub mod iff;
+/// Extent tiling, ordered-run audits, and successor-range derivation.
 pub mod ranges;
+/// Fixed-stride record views with checked bounds.
 pub mod records;
+/// Offset tables, boundary tables, and aligned-size chains.
 pub mod tables;
+/// Fixed-width byte strings, hex formatting, and compiled multi-byte charmaps.
 pub mod text;
 
 pub use chunks::{

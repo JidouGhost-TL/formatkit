@@ -11,6 +11,7 @@ use formatkit_core::{
     WorkBudget,
 };
 
+/// Shared mounting sequence for paired directory-plus-content stored-range archives.
 pub mod paired_stored_mount;
 
 mod walk;

@@ -37,3 +37,4 @@ pub mod flag_lzss;
 pub mod png;
 pub use png::{decode_png_rgba, encode_rgba_png};
 pub mod sliding_window;
+pub use sliding_window::find_longest_match;

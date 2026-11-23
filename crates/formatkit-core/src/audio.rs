@@ -1,3 +1,79 @@
+/// Build the canonical 44-byte RIFF/WAVE header for linear PCM (8-bit unsigned
+/// or 16-bit signed).
+///
+/// Validates that `sample_rate > 0`, `channels > 0`, `bits_per_sample` is `8`
+/// or `16`, derived `block_align` and `byte_rate` do not overflow, `data_bytes`
+/// is a whole number of sample frames (`data_bytes % block_align == 0`), and
+/// `data_bytes <= u32::MAX as u64 - 36`.
+pub fn wav_header_pcm(
+    sample_rate: u32,
+    channels: u16,
+    bits_per_sample: u16,
+    data_bytes: u64,
+) -> crate::Result<[u8; 44]> {
+    const RIFF_OVERHEAD: u32 = 36;
+    const MAX_DATA_BYTES: u64 = (u32::MAX - RIFF_OVERHEAD) as u64;
+
+    if sample_rate == 0 {
+        return Err(crate::Error::InvalidField {
+            what: "WAV sample rate",
+            value: 0,
+        });
+    }
+    if channels == 0 {
+        return Err(crate::Error::InvalidField {
+            what: "WAV channel count",
+            value: 0,
+        });
+    }
+    if bits_per_sample != 8 && bits_per_sample != 16 {
+        return Err(crate::Error::InvalidField {
+            what: "WAV bits per sample",
+            value: u64::from(bits_per_sample),
+        });
+    }
+
+    let bytes_per_sample = bits_per_sample / 8;
+    let block_align = channels
+        .checked_mul(bytes_per_sample)
+        .ok_or(crate::Error::InvalidField {
+            what: "WAV block align",
+            value: u64::from(channels) * u64::from(bytes_per_sample),
+        })?;
+    let byte_rate =
+        sample_rate
+            .checked_mul(u32::from(block_align))
+            .ok_or(crate::Error::InvalidField {
+                what: "WAV byte rate",
+                value: u64::from(sample_rate) * u64::from(block_align),
+            })?;
+    if !data_bytes.is_multiple_of(u64::from(block_align)) || data_bytes > MAX_DATA_BYTES {
+        return Err(crate::Error::InvalidField {
+            what: "WAV data size",
+            value: data_bytes,
+        });
+    }
+
+    let data_bytes_u32 = data_bytes as u32;
+    let riff_chunk_size = RIFF_OVERHEAD + data_bytes_u32;
+
+    let mut header = [0u8; 44];
+    header[0..4].copy_from_slice(b"RIFF");
+    header[4..8].copy_from_slice(&riff_chunk_size.to_le_bytes());
+    header[8..12].copy_from_slice(b"WAVE");
+    header[12..16].copy_from_slice(b"fmt ");
+    header[16..20].copy_from_slice(&16u32.to_le_bytes());
+    header[20..22].copy_from_slice(&1u16.to_le_bytes());
+    header[22..24].copy_from_slice(&channels.to_le_bytes());
+    header[24..28].copy_from_slice(&sample_rate.to_le_bytes());
+    header[28..32].copy_from_slice(&byte_rate.to_le_bytes());
+    header[32..34].copy_from_slice(&block_align.to_le_bytes());
+    header[34..36].copy_from_slice(&bits_per_sample.to_le_bytes());
+    header[36..40].copy_from_slice(b"data");
+    header[40..44].copy_from_slice(&data_bytes_u32.to_le_bytes());
+    Ok(header)
+}
+
 /// Interleaved, 16-bit signed PCM audio.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pcm {
@@ -89,55 +165,15 @@ impl Pcm {
     /// Validates the channel/sample shape and verifies that the payload size
     /// and derived RIFF fields fit within their 32-bit / 16-bit header fields.
     pub fn wav_header(&self) -> crate::Result<[u8; 44]> {
-        const RIFF_OVERHEAD: u32 = 36;
-        const MAX_DATA_BYTES: u64 = (u32::MAX - RIFF_OVERHEAD) as u64;
-
         self.validate()?;
-
-        let block_align = self
-            .channels
-            .checked_mul(2)
-            .ok_or(crate::Error::InvalidField {
-                what: "WAV block align",
-                value: u64::from(self.channels) * 2,
-            })?;
-        let byte_rate = self.sample_rate.checked_mul(u32::from(block_align)).ok_or(
-            crate::Error::InvalidField {
-                what: "WAV byte rate",
-                value: u64::from(self.sample_rate) * u64::from(block_align),
-            },
-        )?;
 
         let sample_count = u64::try_from(self.samples.len())
             .map_err(|_| crate::Error::Malformed("WAV sample count exceeds u64".into()))?;
         let data_bytes = sample_count
             .checked_mul(2)
             .ok_or_else(|| crate::Error::Malformed("WAV data size overflow".into()))?;
-        if data_bytes > MAX_DATA_BYTES {
-            return Err(crate::Error::InvalidField {
-                what: "WAV data size",
-                value: data_bytes,
-            });
-        }
 
-        let data_bytes_u32 = data_bytes as u32;
-        let riff_chunk_size = RIFF_OVERHEAD + data_bytes_u32;
-
-        let mut header = [0u8; 44];
-        header[0..4].copy_from_slice(b"RIFF");
-        header[4..8].copy_from_slice(&riff_chunk_size.to_le_bytes());
-        header[8..12].copy_from_slice(b"WAVE");
-        header[12..16].copy_from_slice(b"fmt ");
-        header[16..20].copy_from_slice(&16u32.to_le_bytes());
-        header[20..22].copy_from_slice(&1u16.to_le_bytes());
-        header[22..24].copy_from_slice(&self.channels.to_le_bytes());
-        header[24..28].copy_from_slice(&self.sample_rate.to_le_bytes());
-        header[28..32].copy_from_slice(&byte_rate.to_le_bytes());
-        header[32..34].copy_from_slice(&block_align.to_le_bytes());
-        header[34..36].copy_from_slice(&16u16.to_le_bytes());
-        header[36..40].copy_from_slice(b"data");
-        header[40..44].copy_from_slice(&data_bytes_u32.to_le_bytes());
-        Ok(header)
+        wav_header_pcm(self.sample_rate(), self.channels(), 16, data_bytes)
     }
 
     /// Serialize this PCM stream into a complete RIFF/WAVE byte buffer.
@@ -580,5 +616,85 @@ mod tests {
             Pcm::from_wav_bytes(&valid[..valid.len() - 1]),
             Err(Error::Truncated { .. })
         ));
+    }
+
+    #[test]
+    fn wav_header_pcm_supports_8bit_and_16bit_and_validates_fields() {
+        // 8-bit mono PCM header.
+        let hdr8 = wav_header_pcm(11_025, 1, 8, 100).unwrap();
+        assert_eq!(&hdr8[0..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(hdr8[4..8].try_into().unwrap()), 136);
+        assert_eq!(&hdr8[8..12], b"WAVE");
+        assert_eq!(u16::from_le_bytes(hdr8[20..22].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(hdr8[22..24].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(hdr8[24..28].try_into().unwrap()), 11_025);
+        assert_eq!(u32::from_le_bytes(hdr8[28..32].try_into().unwrap()), 11_025);
+        assert_eq!(u16::from_le_bytes(hdr8[32..34].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(hdr8[34..36].try_into().unwrap()), 8);
+        assert_eq!(u32::from_le_bytes(hdr8[40..44].try_into().unwrap()), 100);
+
+        // 16-bit stereo matches Pcm::wav_header.
+        let pcm = Pcm::try_interleaved(48_000, 2, vec![0; 6]).unwrap();
+        assert_eq!(
+            wav_header_pcm(48_000, 2, 16, 12).unwrap(),
+            pcm.wav_header().unwrap()
+        );
+
+        // Validation errors.
+        assert!(matches!(
+            wav_header_pcm(0, 1, 16, 0),
+            Err(Error::InvalidField {
+                what: "WAV sample rate",
+                value: 0
+            })
+        ));
+        assert!(matches!(
+            wav_header_pcm(44_100, 0, 16, 0),
+            Err(Error::InvalidField {
+                what: "WAV channel count",
+                value: 0
+            })
+        ));
+        assert!(matches!(
+            wav_header_pcm(44_100, 1, 24, 0),
+            Err(Error::InvalidField {
+                what: "WAV bits per sample",
+                value: 24
+            })
+        ));
+        assert!(matches!(
+            wav_header_pcm(44_100, 40_000, 16, 0),
+            Err(Error::InvalidField {
+                what: "WAV block align",
+                ..
+            })
+        ));
+        assert!(matches!(
+            wav_header_pcm(u32::MAX, 2, 16, 0),
+            Err(Error::InvalidField {
+                what: "WAV byte rate",
+                ..
+            })
+        ));
+        // Unaligned data_bytes (not a multiple of block_align=4).
+        assert!(matches!(
+            wav_header_pcm(44_100, 2, 16, 6),
+            Err(Error::InvalidField {
+                what: "WAV data size",
+                value: 6
+            })
+        ));
+        // Data size exceeding RIFF u32 payload limit.
+        let too_large = u64::from(u32::MAX) - 35;
+        assert!(matches!(
+            wav_header_pcm(44_100, 1, 8, too_large),
+            Err(Error::InvalidField {
+                what: "WAV data size",
+                ..
+            })
+        ));
+        // Exact maximum data size succeeds when aligned.
+        let max_aligned = u64::from(u32::MAX - 36);
+        assert!(wav_header_pcm(44_100, 1, 8, max_aligned).is_ok());
     }
 }

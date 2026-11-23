@@ -99,8 +99,8 @@ pub use bounded_cstr::{
     BoundedCstrReport,
 };
 
-mod audio;
-pub use audio::Pcm;
+pub mod audio;
+pub use audio::{wav_header_pcm, Pcm};
 
 mod bit_rows;
 pub use bit_rows::MsbFirst1bppRows;

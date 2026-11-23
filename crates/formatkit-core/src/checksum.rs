@@ -504,6 +504,8 @@ pub enum FoldOp {
     SumThenRotateLeft(u32),
     /// Wrapping weighted sum by 0-based unit index: `acc = (acc + unit * (base + index)) & mask`.
     WeightedOffset { base: u64 },
+    /// Wrapping weighted sum by 0-based byte offset: `acc = (acc + unit * (base + byte_offset)) & mask`.
+    WeightedByteOffset { base: u64 },
 }
 
 /// Configurable arithmetic or bitwise fold checksum over fixed-width units.
@@ -568,6 +570,11 @@ impl FoldChecksum {
                 }
                 FoldOp::WeightedOffset { base } => {
                     let weight = base.wrapping_add(idx);
+                    acc.wrapping_add(val.wrapping_mul(weight)) & mask
+                }
+                FoldOp::WeightedByteOffset { base } => {
+                    let byte_offset = idx.wrapping_mul(unit_size as u64);
+                    let weight = base.wrapping_add(byte_offset);
                     acc.wrapping_add(val.wrapping_mul(weight)) & mask
                 }
             }
@@ -767,6 +774,32 @@ mod arithmetic_checksum_tests {
         };
         // 1*1 + 2*2 + 3*3 + 4*4 = 30
         assert_eq!(weighted.compute(&data).unwrap(), 30);
+
+        let weighted_byte_offset_u16 = FoldChecksum {
+            unit: FoldUnit::U16(Endian::Little),
+            op: FoldOp::WeightedByteOffset { base: 1 },
+            bits: 64,
+            seed: 0,
+            xor_out: 0,
+        };
+        // Unit 0 at byte offset 0: 0x0201 * (1 + 0)
+        // Unit 1 at byte offset 2: 0x0403 * (1 + 2)
+        assert_eq!(
+            weighted_byte_offset_u16.compute(&data).unwrap(),
+            0x0201u64 + 0x0403u64 * 3
+        );
+
+        let weighted_byte_offset_u32 = FoldChecksum {
+            unit: FoldUnit::U32(Endian::Big),
+            op: FoldOp::WeightedByteOffset { base: 10 },
+            bits: 64,
+            seed: 0,
+            xor_out: 0,
+        };
+        let eight = [0, 0, 0, 2, 0, 0, 0, 5];
+        // Unit 0 at byte offset 0: 2 * 10 = 20
+        // Unit 1 at byte offset 4: 5 * 14 = 70
+        assert_eq!(weighted_byte_offset_u32.compute(&eight).unwrap(), 90);
     }
 
     #[test]

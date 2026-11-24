@@ -2,9 +2,10 @@
 //!
 //! # Choosing an LZSS / sliding-window primitive
 //! - [`okumura`]: classic 4096-byte pre-filled ring-buffer LZSS (Okumura `LZSS.C` variants with
-//!   LSB-first or MSB-first flag bytes).
+//!   LSB-first or MSB-first flag bytes and configurable [`OkumuraConfig`] initial cursor).
 //! - [`flag_lzss`]: parameterized flag-byte / flag-word LZSS executor for custom match-token
-//!   grammars, flag polarities, and linear sliding-window history.
+//!   grammars, flag polarities, linear sliding-window history, multi-action [`FlagAction`]
+//!   streams, and fixed-size ring buffers.
 //! - [`counted_lsb`]: externally counted commands with lazy interleaved LSB-first control bytes.
 //! - [`sliding_window`]: low-level linear [`append_match`], [`find_longest_match`], and
 //!   [`RingBuffer`] building blocks when you own the entire control loop.
@@ -94,6 +95,11 @@ pub use ima_adpcm::{
 /// Parameterized flag-byte / flag-word LZSS stream executor.
 #[doc(alias = "lzss")]
 pub mod flag_lzss;
+pub use flag_lzss::{
+    decode_flag_lzss, decode_flag_lzss_actions, decode_flag_lzss_ring_to_end, FlagAction,
+    FlagBitOrder, FlagLzssConfig, FlagLzssMatch, FlagLzssOutcome, FlagPolarity, FlagWidth,
+    OvershootPolicy,
+};
 /// Canonical Huffman code-length construction and table decoding.
 pub mod huffman;
 pub use huffman::{

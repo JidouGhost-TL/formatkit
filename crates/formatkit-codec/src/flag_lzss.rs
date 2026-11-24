@@ -13,7 +13,7 @@
 
 use formatkit_core::{u16_at, u16_at_endian, u32_at, u32_at_endian, u8_at, Endian, Error, Result};
 
-use crate::sliding_window::{self, MatchError};
+use crate::sliding_window::{self, MatchError, RingBuffer};
 
 /// Width of each interleaved control flag word in the compressed stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,15 +90,129 @@ pub struct FlagLzssMatch {
     pub length: usize,
 }
 
+/// Decoded non-literal action returned by a format's token parser in
+/// [`decode_flag_lzss_actions`] or [`decode_flag_lzss_ring_to_end`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlagAction<'a> {
+    /// One-based lookback match into linear `history || output`.
+    LinearMatch {
+        /// One-based lookback distance into `history || output`.
+        distance: usize,
+        /// Number of bytes to copy.
+        length: usize,
+    },
+    /// Absolute ring-buffer match starting at `pos % N` (which is `pos & (N - 1)`
+    /// for power-of-two `N`).
+    RingMatch {
+        /// Starting index in the ring buffer (wrapped modulo `N`).
+        pos: usize,
+        /// Number of bytes to copy.
+        length: usize,
+    },
+    /// Relative ring-buffer lookback starting at `(cursor - distance) mod N`,
+    /// copying byte-by-byte through the write cursor.
+    RingRelativeMatch {
+        /// One-based lookback distance behind the current write cursor (`1..=N`).
+        distance: usize,
+        /// Number of bytes to copy.
+        length: usize,
+    },
+    /// Copy a slice of literal bytes directly into output (and into the ring
+    /// buffer when using [`decode_flag_lzss_ring_to_end`]).
+    LiteralRun(&'a [u8]),
+    /// Cleanly terminate decoding without producing further output.
+    EndOfStream,
+}
+
 /// Result of decoding one bounded flag-word LZSS stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlagLzssOutcome {
-    /// Decoded output bytes (length equals `decoded_size`).
+    /// Decoded output bytes (length equals `decoded_size` when a declared size
+    /// is given and no early [`FlagAction::EndOfStream`] occurs).
     pub output: Vec<u8>,
     /// Exact number of source bytes consumed from `src`.
     pub bytes_consumed: usize,
     /// Unused bits remaining in the last loaded flag word (`0..flag_width.bits()`).
     pub remaining_flag_bits: u8,
+}
+
+#[inline]
+fn load_flag_word(src: &[u8], pos: &mut usize, config: FlagLzssConfig) -> Result<(u32, u8)> {
+    let raw = match config.flag_width {
+        FlagWidth::U8 => {
+            let v = u8_at(src, *pos)?;
+            *pos += 1;
+            u32::from(v)
+        }
+        FlagWidth::U16Le => {
+            let v = u16_at(src, *pos)?;
+            *pos += 2;
+            u32::from(v)
+        }
+        FlagWidth::U16Be => {
+            let v = u16_at_endian(src, *pos, Endian::Big)?;
+            *pos += 2;
+            u32::from(v)
+        }
+        FlagWidth::U32Le => {
+            let v = u32_at(src, *pos)?;
+            *pos += 4;
+            v
+        }
+        FlagWidth::U32Be => {
+            let v = u32_at_endian(src, *pos, Endian::Big)?;
+            *pos += 4;
+            v
+        }
+    };
+    let remaining_bits = config.flag_width.bits();
+    let flag_word = match config.bit_order {
+        FlagBitOrder::LsbFirst => raw,
+        FlagBitOrder::MsbFirst => raw << (32 - u32::from(remaining_bits)),
+    };
+    Ok((flag_word, remaining_bits))
+}
+
+#[inline]
+fn next_flag_is_literal(
+    flag_word: &mut u32,
+    remaining_bits: &mut u8,
+    config: FlagLzssConfig,
+) -> bool {
+    let bit = match config.bit_order {
+        FlagBitOrder::LsbFirst => {
+            let b = (*flag_word & 1) != 0;
+            *flag_word >>= 1;
+            b
+        }
+        FlagBitOrder::MsbFirst => {
+            let b = (*flag_word & 0x8000_0000) != 0;
+            *flag_word <<= 1;
+            b
+        }
+    };
+    *remaining_bits -= 1;
+    match config.polarity {
+        FlagPolarity::LiteralIsOne => bit,
+        FlagPolarity::LiteralIsZero => !bit,
+    }
+}
+
+#[inline]
+fn advance_token_pos(src: &[u8], pos: usize, token_bytes: usize) -> Result<usize> {
+    let next_pos = pos.checked_add(token_bytes).ok_or(Error::Truncated {
+        offset: pos,
+        needed: token_bytes,
+        available: src.len().saturating_sub(pos),
+    })?;
+    if next_pos > src.len() {
+        return Err(Error::Truncated {
+            offset: pos,
+            needed: token_bytes,
+            available: src.len().saturating_sub(pos),
+        });
+    }
+    Ok(next_pos)
 }
 
 /// Decode a bounded flag-byte or flag-word LZSS stream.
@@ -262,6 +376,316 @@ where
                     limit: max_output as u64,
                 },
             })?;
+        }
+    }
+
+    Ok(FlagLzssOutcome {
+        output,
+        bytes_consumed: pos,
+        remaining_flag_bits: remaining_bits,
+    })
+}
+
+#[inline]
+fn output_limit_error(requested: usize, max_output: usize) -> Error {
+    Error::ResourceLimit {
+        resource: "flag_lzss decoded output",
+        requested: requested as u64,
+        limit: max_output as u64,
+    }
+}
+
+#[inline]
+fn ensure_output_room(produced: usize, len: usize, max_output: usize) -> Result<()> {
+    match produced.checked_add(len) {
+        Some(end) if end <= max_output => Ok(()),
+        _ => Err(output_limit_error(produced.saturating_add(len), max_output)),
+    }
+}
+
+/// Apply the declared-size overshoot policy to a token producing `len` bytes.
+#[inline]
+fn declared_token_len(
+    len: usize,
+    produced: usize,
+    decoded_size: Option<usize>,
+    overshoot: OvershootPolicy,
+) -> Result<usize> {
+    let Some(size) = decoded_size else {
+        return Ok(len);
+    };
+    let remaining = size - produced;
+    if len <= remaining {
+        return Ok(len);
+    }
+    match overshoot {
+        OvershootPolicy::Reject => Err(Error::Malformed(format!(
+            "flag_lzss token overshoot: produced {produced}, token length {len}, decoded size {size}"
+        ))),
+        OvershootPolicy::ClampToDecodedSize => Ok(remaining),
+    }
+}
+
+/// Decode a flag-word LZSS stream into a fixed power-of-two ring buffer until
+/// an [`FlagAction::EndOfStream`] token or clean input exhaustion.
+///
+/// The `N`-byte ring is pre-filled with `fill` and written starting at
+/// `initial_cursor`. Literal flag bits copy one source byte; every other flag
+/// bit invokes `decode_token(src, pos)`, which returns the parsed action and
+/// the number of token bytes it consumed at `pos`. Supported actions are
+/// [`FlagAction::RingMatch`], [`FlagAction::RingRelativeMatch`],
+/// [`FlagAction::LiteralRun`] and [`FlagAction::EndOfStream`]; a
+/// [`FlagAction::LinearMatch`] is rejected as malformed. Every produced byte is
+/// written through the ring cursor, so overlapping copies repeat bytes.
+///
+/// Termination: decoding stops after an `EndOfStream` token (leaving any later
+/// bytes unconsumed) or when the input ends exactly after a complete token. The
+/// first token of a freshly loaded flag word is always attempted, so a stream
+/// ending immediately after a flag word fails as truncated (unless that token
+/// consumes no bytes). Output growth is checked against `max_output` before
+/// every token.
+///
+/// Fails with [`Error::InvalidField`] if `N` is not a nonzero power of two or
+/// if `initial_cursor >= N`. The overshoot policy in `config` does not apply,
+/// because no decoded size is declared.
+pub fn decode_flag_lzss_ring_to_end<'a, const N: usize, F>(
+    src: &'a [u8],
+    max_output: usize,
+    config: FlagLzssConfig,
+    fill: u8,
+    initial_cursor: usize,
+    mut decode_token: F,
+) -> Result<FlagLzssOutcome>
+where
+    F: FnMut(&'a [u8], usize) -> Result<(FlagAction<'a>, usize)>,
+{
+    if !N.is_power_of_two() {
+        return Err(Error::InvalidField {
+            what: "flag_lzss ring size",
+            value: N as u64,
+        });
+    }
+    if initial_cursor >= N {
+        return Err(Error::InvalidField {
+            what: "flag_lzss ring initial cursor",
+            value: initial_cursor as u64,
+        });
+    }
+
+    let mut ring = RingBuffer::<N>::new(fill, initial_cursor);
+    let mut output = Vec::with_capacity(src.len().min(max_output));
+    let mut pos = 0usize;
+    let mut flag_word = 0u32;
+    let mut remaining_bits = 0u8;
+
+    loop {
+        if remaining_bits == 0 {
+            if pos == src.len() {
+                break;
+            }
+            (flag_word, remaining_bits) = load_flag_word(src, &mut pos, config)?;
+        } else if pos == src.len() {
+            break;
+        }
+
+        if next_flag_is_literal(&mut flag_word, &mut remaining_bits, config) {
+            let byte = u8_at(src, pos)?;
+            ensure_output_room(output.len(), 1, max_output)?;
+            pos += 1;
+            ring.push(byte);
+            output.push(byte);
+            continue;
+        }
+
+        let (action, token_bytes) = decode_token(src, pos)?;
+        pos = advance_token_pos(src, pos, token_bytes)?;
+        match action {
+            FlagAction::RingMatch { pos: start, length } => {
+                ring.copy_match(start, length, &mut output, max_output)
+                    .map_err(|_| {
+                        output_limit_error(output.len().saturating_add(length), max_output)
+                    })?;
+            }
+            FlagAction::RingRelativeMatch { distance, length } => {
+                if distance == 0 || distance > N {
+                    return Err(Error::Malformed(format!(
+                        "flag_lzss ring distance {distance} out of range at output offset {} (ring {N})",
+                        output.len()
+                    )));
+                }
+                let start = ring.cursor().wrapping_sub(distance) & (N - 1);
+                ring.copy_match(start, length, &mut output, max_output)
+                    .map_err(|_| {
+                        output_limit_error(output.len().saturating_add(length), max_output)
+                    })?;
+            }
+            FlagAction::LiteralRun(bytes) => {
+                ensure_output_room(output.len(), bytes.len(), max_output)?;
+                for &byte in bytes {
+                    ring.push(byte);
+                }
+                output.extend_from_slice(bytes);
+            }
+            FlagAction::EndOfStream => break,
+            FlagAction::LinearMatch { .. } => {
+                return Err(Error::Malformed(format!(
+                    "flag_lzss ring executor received a linear match at output offset {}",
+                    output.len()
+                )));
+            }
+        }
+    }
+
+    Ok(FlagLzssOutcome {
+        output,
+        bytes_consumed: pos,
+        remaining_flag_bits: remaining_bits,
+    })
+}
+
+/// Decode a flag-word LZSS stream with multi-action tokens over linear
+/// `history || output`.
+///
+/// Literal flag bits copy one source byte; every other flag bit invokes
+/// `decode_token(src, pos)`, which returns the parsed action and the number of
+/// token bytes it consumed at `pos`. Supported actions are
+/// [`FlagAction::LinearMatch`] (resolved via
+/// [`crate::sliding_window::append_match`], so overlapping copies repeat
+/// bytes), [`FlagAction::LiteralRun`] and [`FlagAction::EndOfStream`]; ring
+/// actions are rejected as malformed.
+///
+/// With `decoded_size = Some(size)` the loop matches [`decode_flag_lzss`]: it
+/// fails with [`Error::ResourceLimit`] before allocating when
+/// `size > max_output`, stops once `size` bytes exist (leaving later bytes
+/// unconsumed), and applies `config.overshoot` to matches and literal runs that
+/// would cross `size`. An `EndOfStream` token may end the stream early with
+/// fewer than `size` bytes; callers requiring exact output compare lengths.
+///
+/// With `decoded_size = None` decoding stops after an `EndOfStream` token or
+/// when the input ends exactly after a complete token (the first token of a
+/// freshly loaded flag word is always attempted). Output growth is checked
+/// against `max_output` before every token.
+///
+/// ```
+/// use formatkit_codec::flag_lzss::{
+///     decode_flag_lzss_actions, FlagAction, FlagBitOrder, FlagLzssConfig, FlagPolarity,
+///     FlagWidth, OvershootPolicy,
+/// };
+///
+/// let config = FlagLzssConfig {
+///     flag_width: FlagWidth::U8,
+///     bit_order: FlagBitOrder::LsbFirst,
+///     polarity: FlagPolarity::LiteralIsOne,
+///     overshoot: OvershootPolicy::Reject,
+/// };
+/// // Literal 'a', then a match token `[distance, length]`, then a zero end marker.
+/// let stream = [0b0000_0001, b'a', 1, 3, 0];
+/// let outcome = decode_flag_lzss_actions(&stream, &[], None, 16, config, |src, pos| {
+///     Ok(match src[pos] {
+///         0 => (FlagAction::EndOfStream, 1),
+///         distance => (
+///             FlagAction::LinearMatch {
+///                 distance: usize::from(distance),
+///                 length: usize::from(src[pos + 1]),
+///             },
+///             2,
+///         ),
+///     })
+/// })
+/// .unwrap();
+/// assert_eq!(outcome.output, b"aaaa");
+/// assert_eq!(outcome.bytes_consumed, stream.len());
+/// ```
+pub fn decode_flag_lzss_actions<'a, F>(
+    src: &'a [u8],
+    history: &[u8],
+    decoded_size: Option<usize>,
+    max_output: usize,
+    config: FlagLzssConfig,
+    mut decode_token: F,
+) -> Result<FlagLzssOutcome>
+where
+    F: FnMut(&'a [u8], usize) -> Result<(FlagAction<'a>, usize)>,
+{
+    let initial_capacity = match decoded_size {
+        Some(size) => {
+            if size > max_output {
+                return Err(output_limit_error(size, max_output));
+            }
+            size.min(src.len().saturating_mul(16))
+        }
+        None => src.len().min(max_output),
+    };
+    let mut output = Vec::with_capacity(initial_capacity);
+    let mut pos = 0usize;
+    let mut flag_word = 0u32;
+    let mut remaining_bits = 0u8;
+
+    loop {
+        match decoded_size {
+            Some(size) if output.len() >= size => break,
+            Some(_) => {
+                if remaining_bits == 0 {
+                    (flag_word, remaining_bits) = load_flag_word(src, &mut pos, config)?;
+                }
+            }
+            None => {
+                if remaining_bits == 0 {
+                    if pos == src.len() {
+                        break;
+                    }
+                    (flag_word, remaining_bits) = load_flag_word(src, &mut pos, config)?;
+                } else if pos == src.len() {
+                    break;
+                }
+            }
+        }
+
+        if next_flag_is_literal(&mut flag_word, &mut remaining_bits, config) {
+            let byte = u8_at(src, pos)?;
+            ensure_output_room(output.len(), 1, max_output)?;
+            pos += 1;
+            output.push(byte);
+            continue;
+        }
+
+        let (action, token_bytes) = decode_token(src, pos)?;
+        pos = advance_token_pos(src, pos, token_bytes)?;
+        match action {
+            FlagAction::LinearMatch { distance, length } => {
+                let effective_len =
+                    declared_token_len(length, output.len(), decoded_size, config.overshoot)?;
+                sliding_window::append_match(
+                    &mut output,
+                    history,
+                    distance,
+                    effective_len,
+                    max_output,
+                )
+                .map_err(|err| match err {
+                    MatchError::Distance => Error::Malformed(format!(
+                        "flag_lzss match distance {distance} out of range at output offset {} (history {})",
+                        output.len(),
+                        history.len()
+                    )),
+                    MatchError::OutputLimit => {
+                        output_limit_error(output.len().saturating_add(effective_len), max_output)
+                    }
+                })?;
+            }
+            FlagAction::LiteralRun(bytes) => {
+                let effective_len =
+                    declared_token_len(bytes.len(), output.len(), decoded_size, config.overshoot)?;
+                ensure_output_room(output.len(), effective_len, max_output)?;
+                output.extend_from_slice(&bytes[..effective_len]);
+            }
+            FlagAction::EndOfStream => break,
+            FlagAction::RingMatch { .. } | FlagAction::RingRelativeMatch { .. } => {
+                return Err(Error::Malformed(format!(
+                    "flag_lzss linear executor received a ring match at output offset {}",
+                    output.len()
+                )));
+            }
         }
     }
 
@@ -663,5 +1087,304 @@ mod tests {
         let far_dist = encode_synthetic(&[Token::Literal(b'A'), Token::Match(4, 2)], cfg);
         let err = decode_flag_lzss(&far_dist, b"XY", 3, 16, cfg, decode_simple_match).unwrap_err();
         assert!(matches!(err, Error::Malformed(_)));
+    }
+
+    /// Synthetic multi-action token grammar used by the action executor tests:
+    /// `0` = end of stream; `1 lo hi len` = ring match; `2 lo hi len` = ring
+    /// relative match; `3 n bytes..` = literal run; `4 dist len` = linear match.
+    fn decode_synthetic_action(src: &[u8], pos: usize) -> Result<(FlagAction<'_>, usize)> {
+        let u16_arg = |at: usize| -> Result<usize> { Ok(usize::from(u16_at(src, at)?)) };
+        Ok(match u8_at(src, pos)? {
+            0 => (FlagAction::EndOfStream, 1),
+            1 => (
+                FlagAction::RingMatch {
+                    pos: u16_arg(pos + 1)?,
+                    length: usize::from(u8_at(src, pos + 3)?),
+                },
+                4,
+            ),
+            2 => (
+                FlagAction::RingRelativeMatch {
+                    distance: u16_arg(pos + 1)?,
+                    length: usize::from(u8_at(src, pos + 3)?),
+                },
+                4,
+            ),
+            3 => {
+                let n = usize::from(u8_at(src, pos + 1)?);
+                let run = src.get(pos + 2..pos + 2 + n).ok_or(Error::Truncated {
+                    offset: pos + 2,
+                    needed: n,
+                    available: src.len().saturating_sub(pos + 2),
+                })?;
+                (FlagAction::LiteralRun(run), 2 + n)
+            }
+            4 => (
+                FlagAction::LinearMatch {
+                    distance: usize::from(u8_at(src, pos + 1)?),
+                    length: usize::from(u8_at(src, pos + 2)?),
+                },
+                3,
+            ),
+            tag => return Err(Error::Malformed(format!("synthetic tag {tag}"))),
+        })
+    }
+
+    const RUN: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+
+    /// One full flag group exercising every ring action, including a literal run
+    /// that wraps the 1024-byte ring and a relative match across the wrap.
+    fn ring_group() -> (Vec<u8>, Vec<u8>) {
+        let mut stream = vec![0b1111_1000, b'A', b'B', b'C'];
+        stream.extend_from_slice(&[1, 0xDE, 0x03, 5]); // ring[0x3DE..] -> "ABCAB"
+        stream.extend_from_slice(&[2, 3, 0, 4]); // 3 back, overlapping -> "CABC"
+        stream.extend_from_slice(&[3, RUN.len() as u8]);
+        stream.extend_from_slice(RUN); // cursor wraps past 1023
+        stream.extend_from_slice(&[2, 16, 0, 4]); // across the wrap -> "klmn"
+        stream.extend_from_slice(&[1, 0xDD, 0x03, 3]); // untouched fill, then "AB"
+        let mut expected = b"ABCABCABCABC".to_vec();
+        expected.extend_from_slice(RUN);
+        expected.extend_from_slice(b"klmn AB");
+        (stream, expected)
+    }
+
+    #[test]
+    fn ring_executor_runs_every_ring_action_and_stops_at_end_of_stream() {
+        let config = FlagLzssConfig {
+            flag_width: FlagWidth::U8,
+            bit_order: FlagBitOrder::LsbFirst,
+            polarity: FlagPolarity::LiteralIsZero,
+            overshoot: OvershootPolicy::Reject,
+        };
+        let (group, expected) = ring_group();
+        let mut stream = group.clone();
+        stream.extend_from_slice(&[0b0000_0001, 0]); // end-of-stream token
+        let terminated = stream.len();
+        stream.extend_from_slice(b"JUNK");
+
+        let outcome = decode_flag_lzss_ring_to_end::<1024, _>(
+            &stream,
+            expected.len(),
+            config,
+            b' ',
+            0x3DE,
+            decode_synthetic_action,
+        )
+        .unwrap();
+        assert_eq!(outcome.output, expected);
+        assert_eq!(outcome.bytes_consumed, terminated);
+        assert_eq!(outcome.remaining_flag_bits, 7);
+
+        // Clean EOF after a complete token also terminates.
+        let outcome = decode_flag_lzss_ring_to_end::<1024, _>(
+            &group,
+            usize::MAX,
+            config,
+            b' ',
+            0x3DE,
+            decode_synthetic_action,
+        )
+        .unwrap();
+        assert_eq!(outcome.output, expected);
+        assert_eq!(outcome.bytes_consumed, group.len());
+        assert_eq!(outcome.remaining_flag_bits, 0);
+
+        // Empty input is an empty stream.
+        let empty =
+            decode_flag_lzss_ring_to_end::<1024, _>(&[], 0, config, 0, 0, decode_synthetic_action)
+                .unwrap();
+        assert!(empty.output.is_empty());
+        assert_eq!(empty.bytes_consumed, 0);
+
+        // A flag word with no following token is truncated.
+        let dangling = [group.as_slice(), &[0]].concat();
+        let err = decode_flag_lzss_ring_to_end::<1024, _>(
+            &dangling,
+            usize::MAX,
+            config,
+            b' ',
+            0x3DE,
+            decode_synthetic_action,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Truncated { .. }));
+    }
+
+    #[test]
+    fn ring_executor_enforces_limits_and_parameters() {
+        let config = FlagLzssConfig {
+            flag_width: FlagWidth::U8,
+            bit_order: FlagBitOrder::LsbFirst,
+            polarity: FlagPolarity::LiteralIsZero,
+            overshoot: OvershootPolicy::Reject,
+        };
+        let (group, expected) = ring_group();
+        for limit in [0, 3, 7, 12, 47, expected.len() - 1] {
+            let err = decode_flag_lzss_ring_to_end::<1024, _>(
+                &group,
+                limit,
+                config,
+                b' ',
+                0x3DE,
+                decode_synthetic_action,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(err, Error::ResourceLimit { limit: l, .. } if l == limit as u64),
+                "limit {limit}: {err:?}"
+            );
+        }
+
+        let run = |cursor: usize| {
+            decode_flag_lzss_ring_to_end::<1024, _>(
+                &group,
+                usize::MAX,
+                config,
+                b' ',
+                cursor,
+                decode_synthetic_action,
+            )
+        };
+        assert!(matches!(
+            run(1024),
+            Err(Error::InvalidField { value: 1024, .. })
+        ));
+        assert!(matches!(
+            decode_flag_lzss_ring_to_end::<1000, _>(
+                &group,
+                usize::MAX,
+                config,
+                b' ',
+                0,
+                decode_synthetic_action,
+            ),
+            Err(Error::InvalidField { value: 1000, .. })
+        ));
+
+        // Relative distances must be 1..=N; linear matches are not ring actions.
+        for bad in [[0b0000_0001, 2, 0, 0, 1], [0b0000_0001, 2, 1, 4, 1]] {
+            let err = decode_flag_lzss_ring_to_end::<1024, _>(
+                &bad,
+                16,
+                config,
+                0,
+                0,
+                decode_synthetic_action,
+            )
+            .unwrap_err();
+            assert!(matches!(err, Error::Malformed(_)));
+        }
+        let full = decode_flag_lzss_ring_to_end::<1024, _>(
+            &[0b0000_0001, 2, 0, 4, 2],
+            16,
+            config,
+            7,
+            0,
+            decode_synthetic_action,
+        )
+        .unwrap();
+        assert_eq!(full.output, [7, 7]);
+        let err = decode_flag_lzss_ring_to_end::<1024, _>(
+            &[0b0000_0001, 4, 1, 1],
+            16,
+            config,
+            0,
+            0,
+            decode_synthetic_action,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Malformed(_)));
+    }
+
+    #[test]
+    fn linear_action_executor_with_declared_and_open_sizes() {
+        let config = FlagLzssConfig {
+            flag_width: FlagWidth::U8,
+            bit_order: FlagBitOrder::LsbFirst,
+            polarity: FlagPolarity::LiteralIsOne,
+            overshoot: OvershootPolicy::Reject,
+        };
+        // lit 'h', lit 'i', run "abc", match(5, 7) overlapping, match(14, 2) into
+        // history, end of stream.
+        let mut stream = vec![0b0000_0011, b'h', b'i', 3, 3, b'a', b'b', b'c'];
+        stream.extend_from_slice(&[4, 5, 7, 4, 14, 2]);
+        let before_end = stream.len();
+        stream.push(0);
+        let terminated = stream.len();
+        stream.extend_from_slice(b"JUNK");
+        let expected = b"hiabchiabchiXY";
+        let decode = |size: Option<usize>, max: usize, cfg: FlagLzssConfig| {
+            decode_flag_lzss_actions(&stream, b"XY", size, max, cfg, decode_synthetic_action)
+        };
+
+        let open = decode(None, 64, config).unwrap();
+        assert_eq!(open.output, expected);
+        assert_eq!(open.bytes_consumed, terminated);
+        assert_eq!(open.remaining_flag_bits, 2);
+
+        let exact = decode(Some(expected.len()), 64, config).unwrap();
+        assert_eq!(exact.output, expected);
+        assert_eq!(exact.bytes_consumed, before_end);
+        assert_eq!(exact.remaining_flag_bits, 3);
+
+        // End of stream before the declared size ends decoding early.
+        let early = decode(Some(20), 64, config).unwrap();
+        assert_eq!(early.output, expected);
+        assert_eq!(early.bytes_consumed, terminated);
+
+        // Declared-size overshoot policy applies to matches and literal runs.
+        assert!(matches!(
+            decode(Some(10), 64, config),
+            Err(Error::Malformed(_))
+        ));
+        let clamp = FlagLzssConfig {
+            overshoot: OvershootPolicy::ClampToDecodedSize,
+            ..config
+        };
+        let clamped = decode(Some(10), 64, clamp).unwrap();
+        assert_eq!(clamped.output, b"hiabchiabc");
+        let clamped_run = decode(Some(4), 64, clamp).unwrap();
+        assert_eq!(clamped_run.output, b"hiab");
+        assert_eq!(clamped_run.bytes_consumed, 8);
+        assert!(matches!(
+            decode(Some(4), 64, config),
+            Err(Error::Malformed(_))
+        ));
+
+        // Output limits: before allocating with a declared size, per token without.
+        assert!(matches!(
+            decode(Some(usize::MAX), 64, config),
+            Err(Error::ResourceLimit { limit: 64, .. })
+        ));
+        for limit in [0, 1, 4, 11, 13] {
+            assert!(
+                matches!(
+                    decode(None, limit, config),
+                    Err(Error::ResourceLimit { limit: l, .. }) if l == limit as u64
+                ),
+                "limit {limit}"
+            );
+        }
+
+        // Clean EOF after a complete token terminates an open-sized stream.
+        let eof = decode_flag_lzss_actions(
+            &stream[..before_end],
+            b"XY",
+            None,
+            64,
+            config,
+            decode_synthetic_action,
+        )
+        .unwrap();
+        assert_eq!(eof.output, expected);
+        assert_eq!(eof.bytes_consumed, before_end);
+
+        // Ring actions are rejected by the linear executor.
+        for ring in [[0b0000_0000, 1, 0, 0, 3], [0b0000_0000, 2, 1, 0, 3]] {
+            let err =
+                decode_flag_lzss_actions(&ring, b"XY", None, 64, config, decode_synthetic_action)
+                    .unwrap_err();
+            assert!(matches!(err, Error::Malformed(_)));
+        }
     }
 }

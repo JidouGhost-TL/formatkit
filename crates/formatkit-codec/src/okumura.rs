@@ -16,6 +16,43 @@ pub enum BitOrder {
     MsbFirst,
 }
 
+/// Configuration for Okumura 4096-byte ring-buffer LZSS decoding.
+///
+/// Defaults to the classic initial ring cursor `0xFEE` (`4078`), matching
+/// Okumura's `LZSS.C`. Use [`OkumuraConfig::with_initial_cursor`] for variants
+/// that start writing at a different ring index (for example `0`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OkumuraConfig {
+    /// Flag-byte bit order: which bit of each flag byte is consumed first.
+    pub bit_order: BitOrder,
+    /// Initial fill byte used to pre-populate the 4096-byte ring buffer.
+    pub fill: u8,
+    /// Initial write cursor into the 4096-byte ring buffer (must be `< 4096`).
+    pub initial_cursor: usize,
+}
+
+impl OkumuraConfig {
+    /// Create a standard Okumura configuration with `initial_cursor = 0xFEE` (`4078`).
+    #[must_use]
+    pub const fn new(bit_order: BitOrder, fill: u8) -> Self {
+        Self {
+            bit_order,
+            fill,
+            initial_cursor: RING - MAX_MATCH,
+        }
+    }
+
+    /// Override the initial write cursor into the 4096-byte ring buffer.
+    ///
+    /// Decoders validate `initial_cursor < 4096` and return
+    /// [`OkumuraDecodeError::InvalidInitialCursor`] if out of range.
+    #[must_use]
+    pub const fn with_initial_cursor(mut self, initial_cursor: usize) -> Self {
+        self.initial_cursor = initial_cursor;
+        self
+    }
+}
+
 /// Why a strict Okumura stream could not be decoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OkumuraDecodeError {
@@ -39,6 +76,11 @@ pub enum OkumuraDecodeError {
         token_len: usize,
         /// Declared total output bytes.
         expected: usize,
+    },
+    /// The configured `initial_cursor` is outside the 4096-byte ring (`>= 4096`).
+    InvalidInitialCursor {
+        /// The rejected initial cursor value.
+        initial_cursor: usize,
     },
 }
 
@@ -79,8 +121,28 @@ pub fn okumura_lzss_with_limit(
     fill: u8,
     max_output_len: usize,
 ) -> Option<Vec<u8>> {
-    okumura_lzss_inner(src, out_len, bit_order, fill, max_output_len, false)
-        .ok()
+    okumura_lzss_with_config(
+        src,
+        out_len,
+        OkumuraConfig::new(bit_order, fill),
+        max_output_len,
+    )
+    .ok()
+}
+
+/// Bounded variant of [`okumura_lzss`] accepting an explicit [`OkumuraConfig`].
+///
+/// Like [`okumura_lzss_with_limit`], a final back-reference that crosses
+/// `out_len` is truncated at `out_len`. Returns
+/// [`OkumuraDecodeError::InvalidInitialCursor`] if
+/// `config.initial_cursor >= 4096`.
+pub fn okumura_lzss_with_config(
+    src: &[u8],
+    out_len: usize,
+    config: OkumuraConfig,
+    max_output_len: usize,
+) -> Result<Vec<u8>, OkumuraDecodeError> {
+    okumura_lzss_inner(src, out_len, config, max_output_len, false)
         .map(|result| result.outcome.bytes)
 }
 
@@ -97,8 +159,28 @@ pub fn okumura_lzss_consumed_with_limit(
     fill: u8,
     max_output_len: usize,
 ) -> Result<DecodeOutcome, OkumuraDecodeError> {
-    okumura_lzss_inner(src, out_len, bit_order, fill, max_output_len, true)
-        .map(|result| result.outcome)
+    okumura_lzss_consumed_with_config(
+        src,
+        out_len,
+        OkumuraConfig::new(bit_order, fill),
+        max_output_len,
+    )
+}
+
+/// Strictly decode one Okumura stream with an explicit [`OkumuraConfig`] and
+/// report its exact encoded extent.
+///
+/// Rejects back-references that overshoot `out_len` with
+/// [`OkumuraDecodeError::TokenOvershoot`] and rejects
+/// `config.initial_cursor >= 4096` with
+/// [`OkumuraDecodeError::InvalidInitialCursor`].
+pub fn okumura_lzss_consumed_with_config(
+    src: &[u8],
+    out_len: usize,
+    config: OkumuraConfig,
+    max_output_len: usize,
+) -> Result<DecodeOutcome, OkumuraDecodeError> {
+    okumura_lzss_inner(src, out_len, config, max_output_len, true).map(|result| result.outcome)
 }
 
 /// Strict decode with the final flag-group boundary retained for an owner.
@@ -109,7 +191,13 @@ pub fn okumura_lzss_consumed_with_boundary(
     fill: u8,
     max_output_len: usize,
 ) -> Result<OkumuraBoundaryOutcome, OkumuraDecodeError> {
-    okumura_lzss_inner(src, out_len, bit_order, fill, max_output_len, true)
+    okumura_lzss_inner(
+        src,
+        out_len,
+        OkumuraConfig::new(bit_order, fill),
+        max_output_len,
+        true,
+    )
 }
 
 /// Decode an Okumura stream whose encoded extent, rather than its decoded
@@ -127,11 +215,29 @@ pub fn okumura_lzss_to_end_with_limit(
     fill: u8,
     max_output_len: usize,
 ) -> Result<DecodeOutcome, OkumuraDecodeError> {
-    let mut ring = [fill; RING];
-    let mut r = RING - MAX_MATCH;
+    okumura_lzss_to_end_with_config(src, OkumuraConfig::new(bit_order, fill), max_output_len)
+}
+
+/// Decode an EOF-terminated Okumura stream with an explicit [`OkumuraConfig`].
+///
+/// Behaves identically to [`okumura_lzss_to_end_with_limit`] while honoring
+/// `config.initial_cursor`. Returns [`OkumuraDecodeError::InvalidInitialCursor`]
+/// if `config.initial_cursor >= 4096`.
+pub fn okumura_lzss_to_end_with_config(
+    src: &[u8],
+    config: OkumuraConfig,
+    max_output_len: usize,
+) -> Result<DecodeOutcome, OkumuraDecodeError> {
+    if config.initial_cursor >= RING {
+        return Err(OkumuraDecodeError::InvalidInitialCursor {
+            initial_cursor: config.initial_cursor,
+        });
+    }
+    let mut ring = [config.fill; RING];
+    let mut r = config.initial_cursor;
     let mut out = Vec::with_capacity(src.len().min(max_output_len));
     let mut p = 0usize;
-    let bit = |flags: u8, i: u32| match bit_order {
+    let bit = |flags: u8, i: u32| match config.bit_order {
         BitOrder::LsbFirst => flags & (1 << i),
         BitOrder::MsbFirst => flags & (0x80 >> i),
     };
@@ -201,19 +307,23 @@ pub fn okumura_lzss_to_end_with_limit(
 fn okumura_lzss_inner(
     src: &[u8],
     out_len: usize,
-    bit_order: BitOrder,
-    fill: u8,
+    config: OkumuraConfig,
     max_output_len: usize,
     reject_token_overshoot: bool,
 ) -> Result<OkumuraBoundaryOutcome, OkumuraDecodeError> {
+    if config.initial_cursor >= RING {
+        return Err(OkumuraDecodeError::InvalidInitialCursor {
+            initial_cursor: config.initial_cursor,
+        });
+    }
     if out_len > max_output_len {
         return Err(OkumuraDecodeError::OutputLimit {
             requested: out_len,
             limit: max_output_len,
         });
     }
-    let mut ring = [fill; RING];
-    let mut r = RING - MAX_MATCH; // 4078
+    let mut ring = [config.fill; RING];
+    let mut r = config.initial_cursor;
 
     // A declared length is not evidence that any compressed payload exists.
     // Reserve only an amount justified by the available stream; Vec can grow
@@ -223,7 +333,7 @@ fn okumura_lzss_inner(
     let mut p = 0usize;
     let mut completed_flag_group = false;
     let mut token_count = 0usize;
-    let bit = |flags: u8, i: u32| match bit_order {
+    let bit = |flags: u8, i: u32| match config.bit_order {
         BitOrder::LsbFirst => flags & (1 << i),
         BitOrder::MsbFirst => flags & (0x80 >> i),
     };
@@ -651,6 +761,96 @@ mod tests {
         assert_eq!(complete_result.outcome.consumed, complete.len());
         assert!(complete_result.completed_flag_group);
         assert_eq!(complete_result.outcome.bytes, b"abcdefgh");
+    }
+
+    #[test]
+    fn config_initial_cursor_zero_with_zero_fill() {
+        // Cursor 0: literals land at ring[0], ring[1]; a match at pos 0 of length 5
+        // overlaps the write cursor; a match at pos 4090 reads untouched fill.
+        let config = OkumuraConfig::new(BitOrder::LsbFirst, 0).with_initial_cursor(0);
+        let stream = [0b0000_0011, b'A', b'B', 0x00, 0x02, 0xfa, 0xf0];
+        let expected = b"ABABABA\0\0\0";
+        assert_eq!(
+            okumura_lzss_with_config(&stream, expected.len(), config, 64).unwrap(),
+            expected
+        );
+        let strict =
+            okumura_lzss_consumed_with_config(&stream, expected.len(), config, 64).unwrap();
+        assert_eq!(strict.bytes, expected);
+        assert_eq!(strict.consumed, stream.len());
+        let to_end = okumura_lzss_to_end_with_config(&stream, config, 64).unwrap();
+        assert_eq!(to_end.bytes, expected);
+        assert_eq!(to_end.consumed, stream.len());
+
+        // The classic cursor reads different ring cells for the same stream.
+        let classic = OkumuraConfig::new(BitOrder::LsbFirst, 0);
+        assert_eq!(
+            okumura_lzss_with_config(&stream, 10, classic, 64).unwrap(),
+            b"AB\0\0\0\0\0\0\0\0"
+        );
+    }
+
+    #[test]
+    fn config_default_cursor_matches_existing_apis() {
+        assert_eq!(
+            OkumuraConfig::new(BitOrder::MsbFirst, 0x20).initial_cursor,
+            0xFEE
+        );
+        for order in [BitOrder::LsbFirst, BitOrder::MsbFirst] {
+            for fill in [0, 0x20] {
+                for len in [0, 1, 9, 19, 4096, 5000] {
+                    let data = lcg_bytes(7, len, 5);
+                    let enc = okumura_lzss_compress(&data, order, fill);
+                    let config = OkumuraConfig::new(order, fill).with_initial_cursor(0xFEE);
+                    assert_eq!(
+                        okumura_lzss_with_config(&enc, len, config, usize::MAX).ok(),
+                        okumura_lzss_with_limit(&enc, len, order, fill, usize::MAX)
+                    );
+                    assert_eq!(
+                        okumura_lzss_consumed_with_config(&enc, len, config, len),
+                        okumura_lzss_consumed_with_limit(&enc, len, order, fill, len)
+                    );
+                    assert_eq!(
+                        okumura_lzss_to_end_with_config(&enc, config, usize::MAX),
+                        okumura_lzss_to_end_with_limit(&enc, order, fill, usize::MAX)
+                    );
+                    // Truncated-match compatibility path stays identical too.
+                    if len > 1 {
+                        assert_eq!(
+                            okumura_lzss_with_config(&enc, len - 1, config, usize::MAX).ok(),
+                            okumura_lzss_with_limit(&enc, len - 1, order, fill, usize::MAX)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn config_rejects_out_of_range_initial_cursor() {
+        let stream = all_literals(b"abc", BitOrder::LsbFirst);
+        for cursor in [4096, 4097, usize::MAX] {
+            let config = OkumuraConfig::new(BitOrder::LsbFirst, 0).with_initial_cursor(cursor);
+            let expected = Err(OkumuraDecodeError::InvalidInitialCursor {
+                initial_cursor: cursor,
+            });
+            assert_eq!(okumura_lzss_with_config(&stream, 3, config, 3), expected);
+            assert_eq!(
+                okumura_lzss_consumed_with_config(&stream, 3, config, 3),
+                expected
+                    .clone()
+                    .map(|bytes| DecodeOutcome { bytes, consumed: 0 })
+            );
+            assert_eq!(
+                okumura_lzss_to_end_with_config(&stream, config, 3),
+                expected.map(|bytes| DecodeOutcome { bytes, consumed: 0 })
+            );
+        }
+        let last = OkumuraConfig::new(BitOrder::LsbFirst, 0).with_initial_cursor(4095);
+        assert_eq!(
+            okumura_lzss_with_config(&stream, 3, last, 3).unwrap(),
+            b"abc"
+        );
     }
 
     #[test]

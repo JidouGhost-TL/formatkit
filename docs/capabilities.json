@@ -495,21 +495,21 @@
     {
       "crate": "formatkit-codec",
       "module": "okumura",
-      "path": "formatkit_codec::okumura::{okumura_lzss, okumura_lzss_with_limit, okumura_lzss_consumed_with_limit, okumura_lzss_consumed_with_boundary, okumura_lzss_to_end_with_limit, okumura_lzss_compress}",
-      "summary": "Classic 4 KiB space-filled ring-buffer Okumura LZSS decompression, consumed-extent scanning, and compression.",
+      "path": "formatkit_codec::okumura::{OkumuraConfig, okumura_lzss, okumura_lzss_with_limit, okumura_lzss_with_config, okumura_lzss_consumed_with_limit, okumura_lzss_consumed_with_config, okumura_lzss_consumed_with_boundary, okumura_lzss_to_end_with_limit, okumura_lzss_to_end_with_config, okumura_lzss_compress}",
+      "summary": "Classic 4 KiB ring-buffer Okumura LZSS decompression (with configurable bit order, fill byte, and initial ring cursor), consumed-extent scanning, and compression.",
       "domain_aliases": ["LZSS", "Okumura", "ring buffer", "4096 window"],
-      "use_when": "Decoding or encoding standard 4 KiB ring-buffer Okumura LZSS streams.",
+      "use_when": "Decoding or encoding 4 KiB ring-buffer Okumura LZSS streams with standard (0xFEE) or custom initial ring cursor.",
       "avoid_when": "Format uses linear distance history or non-Okumura flag/match layouts (use flag_lzss or sliding_window).",
       "feature_gate": "formatkit/codec"
     },
     {
       "crate": "formatkit-codec",
       "module": "flag_lzss",
-      "path": "formatkit_codec::flag_lzss::{decode_flag_lzss, FlagLzssConfig, FlagWidth, FlagBitOrder, FlagPolarity, OvershootPolicy, FlagLzssMatch, FlagLzssOutcome}",
-      "summary": "Parameterized bounded flag-byte/flag-word LZSS stream executor with caller-supplied match-token parser.",
-      "domain_aliases": ["LZSS", "flag LZSS", "LZ77", "sliding window", "flag word"],
-      "use_when": "Decoding flag-word LZSS streams with configurable flag width, bit order, polarity, and overshoot policy.",
-      "avoid_when": "Stream uses a pre-filled ring buffer (use okumura) or non-flag-word bit-packed tokens (use sliding_window).",
+      "path": "formatkit_codec::flag_lzss::{decode_flag_lzss, decode_flag_lzss_actions, decode_flag_lzss_ring_to_end, FlagAction, FlagLzssConfig, FlagWidth, FlagBitOrder, FlagPolarity, OvershootPolicy, FlagLzssMatch, FlagLzssOutcome}",
+      "summary": "Parameterized bounded flag-byte/flag-word LZSS stream executors for linear history and fixed-size ring buffers with caller-supplied match, literal-run, and end-of-stream actions.",
+      "domain_aliases": ["LZSS", "flag LZSS", "LZ77", "sliding window", "ring buffer", "flag word"],
+      "use_when": "Decoding flag-word LZSS streams with configurable flag width, bit order, polarity, overshoot policy, multi-action tokens (matches, literal runs, EOS), or fixed-size ring buffers.",
+      "avoid_when": "Stream uses non-flag-word bit-packed tokens without fixed-width flag words (use sliding_window).",
       "feature_gate": "formatkit/codec"
     },
     {

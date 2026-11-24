@@ -10,8 +10,8 @@
 //!   length `3..=18`.
 //! - **Extended** ([`TAG_LZ77_EXTENDED`], `0x11`): the high nibble of the
 //!   first match byte selects the token size: `2..=15` is a 2-byte match of
-//!   length `nibble + 1` (`3..=16`), `1` is a 3-byte match carrying an 8-bit
-//!   length biased by `0x11` (`17..=272`), and `0` is a 4-byte match carrying a
+//!   length `nibble + 1` (`3..=16`), `0` is a 3-byte match carrying an 8-bit
+//!   length biased by `0x11` (`17..=272`), and `1` is a 4-byte match carrying a
 //!   16-bit length biased by `0x111` (`273..=65808`). The header may use the
 //!   32-bit extended-size form.
 //!
@@ -178,17 +178,6 @@ pub fn decode_tagged_lz77_extended(input: &[u8], max_output: usize) -> Result<De
             })?);
             match b1 >> 4 {
                 0 => {
-                    let t = bytes_at(src, pos, 4)?;
-                    let (b2, b3, b4) = (usize::from(t[1]), usize::from(t[2]), usize::from(t[3]));
-                    Ok((
-                        FlagLzssMatch {
-                            distance: ((b3 & 0x0F) << 8 | b4) + 1,
-                            length: ((b1 & 0x0F) << 12 | b2 << 4 | b3 >> 4) + 0x111,
-                        },
-                        4,
-                    ))
-                }
-                1 => {
                     let t = bytes_at(src, pos, 3)?;
                     let (b2, b3) = (usize::from(t[1]), usize::from(t[2]));
                     Ok((
@@ -197,6 +186,17 @@ pub fn decode_tagged_lz77_extended(input: &[u8], max_output: usize) -> Result<De
                             length: ((b1 & 0x0F) << 4 | b2 >> 4) + 0x11,
                         },
                         3,
+                    ))
+                }
+                1 => {
+                    let t = bytes_at(src, pos, 4)?;
+                    let (b2, b3, b4) = (usize::from(t[1]), usize::from(t[2]), usize::from(t[3]));
+                    Ok((
+                        FlagLzssMatch {
+                            distance: ((b3 & 0x0F) << 8 | b4) + 1,
+                            length: ((b1 & 0x0F) << 12 | b2 << 4 | b3 >> 4) + 0x111,
+                        },
+                        4,
                     ))
                 }
                 mode => {
@@ -248,12 +248,12 @@ pub fn encode_tagged_lz77_extended(data: &[u8]) -> Result<Vec<u8>> {
             out.push((d & 0xFF) as u8);
         } else if len <= 0x110 {
             let extra = len - 0x11;
-            out.push((0x10 | extra >> 4) as u8);
+            out.push((extra >> 4) as u8);
             out.push(((extra & 0x0F) << 4 | d >> 8) as u8);
             out.push((d & 0xFF) as u8);
         } else {
             let extra = len - 0x111;
-            out.push((extra >> 12) as u8);
+            out.push((0x10 | extra >> 12) as u8);
             out.push((extra >> 4 & 0xFF) as u8);
             out.push(((extra & 0x0F) << 4 | d >> 8) as u8);
             out.push((d & 0xFF) as u8);
@@ -393,6 +393,26 @@ mod tests {
             assert_eq!(dec.bytes, data, "length {len}");
             assert_eq!(dec.consumed, stream.len());
         }
+    }
+
+    #[test]
+    fn extended_token_size_nibbles_match_shipped_streams() {
+        // Pins the token layout seen in shipped DS data: nibble 0 = 3-byte match
+        // (length + 0x11), nibble 1 = 4-byte match (length + 0x111). A matching
+        // encoder swap would still round-trip, so check fixed bytes both ways.
+        let three = [0x11, 18, 0, 0, 0x40, b'A', 0x00, 0x00, 0x00];
+        assert_eq!(
+            decode_tagged_lz77_extended(&three, 64).unwrap().bytes,
+            vec![b'A'; 18]
+        );
+        let four = [0x11, 0x12, 0x01, 0, 0x40, b'B', 0x10, 0x00, 0x00, 0x00];
+        assert_eq!(
+            decode_tagged_lz77_extended(&four, 1024).unwrap().bytes,
+            vec![b'B'; 0x112]
+        );
+        let mut data = vec![b'A'];
+        data.extend([b'A'; 17]);
+        assert_eq!(encode_tagged_lz77_extended(&data).unwrap(), three.to_vec());
     }
 
     #[test]

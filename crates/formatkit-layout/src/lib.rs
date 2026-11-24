@@ -20,6 +20,11 @@ pub mod edit;
 pub mod field;
 /// Generic IFF `FORM` and RIFF container chunk parsing.
 pub mod iff;
+/// Claimed-byte reading and conflict-checked placement for exact rewrites of offset-linked regions.
+#[doc(alias = "pointer graph")]
+#[doc(alias = "claimed bytes")]
+#[doc(alias = "exact write")]
+pub mod offset_graph;
 /// Extent tiling, ordered-run audits, and successor-range derivation.
 pub mod ranges;
 /// Fixed-stride record views with checked bounds.
@@ -40,6 +45,9 @@ pub use field::{
     U64Field, U8Field,
 };
 pub use iff::{parse_iff_form, parse_riff_form, IffChunk, IffForm, IFF_FORM_MAGIC, RIFF_MAGIC};
+pub use offset_graph::{
+    checked_element, checked_offset, ClaimedReader, OverlapPolicy, PlacementCanvas, UnclaimedGap,
+};
 pub use ranges::{
     audit_exact_tiling, audit_ordered_contiguous_run, audit_ordered_non_overlapping,
     checked_align_up_u64, child_run, nondecreasing_successor_ranges, strict_successor_ranges,

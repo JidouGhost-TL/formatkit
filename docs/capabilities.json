@@ -284,6 +284,16 @@
     },
     {
       "crate": "formatkit-layout",
+      "module": "offset_graph",
+      "path": "formatkit_layout::offset_graph::{ClaimedReader, PlacementCanvas, OverlapPolicy, UnclaimedGap, checked_offset, checked_element}",
+      "summary": "Claimed-byte tracking reader with a fan-out read limit for offset-linked regions, unclaimed-gap capture, and a fixed-length placement canvas with optional conflicting-overlap rejection for exact rewrites.",
+      "domain_aliases": ["pointer graph", "offset graph", "claimed bytes", "exact rewrite", "byte-exact round trip", "gap preservation", "shared records"],
+      "use_when": "A format's header and tables point at records (possibly shared) and a writer must reproduce the region byte for byte, including padding and unreferenced data.",
+      "avoid_when": "Records are sequential (use Reader/Writer) or a fixed record table describes everything (use records/tables); disc-scale sources should be read lazily through RangeSource first.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
       "module": "edit",
       "path": "formatkit_layout::edit::{patch_bytes, patched_bytes, same_size_splice, SameSizeSpliceError}",
       "summary": "Checked in-place byte patching and same-size splicing on resident buffers.",

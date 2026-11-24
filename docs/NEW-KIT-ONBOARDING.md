@@ -14,16 +14,17 @@ You can consume FormatKit either through **individual crates** (recommended for 
 
 ```toml
 [workspace.dependencies]
-formatkit-core = "0.1.9"
-formatkit-layout = "0.1.9"
-formatkit-catalog = "0.1.9"
-formatkit-runtime = "0.1.9"
-formatkit-archive = "0.1.9"
-formatkit-pixel = "0.1.9"
-formatkit-codec = "0.1.9"
-formatkit-patch = "0.1.9"
-formatkit-corpus = "0.1.9"
-formatkit-corpus-test = "0.1.9"
+formatkit-core = "0.1.10"
+formatkit-layout = "0.1.10"
+formatkit-catalog = "0.1.10"
+formatkit-runtime = "0.1.10"
+formatkit-archive = "0.1.10"
+formatkit-pixel = "0.1.10"
+formatkit-codec = "0.1.10"
+formatkit-patch = "0.1.10"
+formatkit-gltf = "0.1.10"
+formatkit-corpus = "0.1.10"
+formatkit-corpus-test = "0.1.10"
 ```
 
 Keep `formatkit-corpus` and `formatkit-corpus-test` in `[dev-dependencies]` so production builds do not pull in test harness dependencies.
@@ -31,17 +32,18 @@ Keep `formatkit-corpus` and `formatkit-corpus-test` in `[dev-dependencies]` so p
 Optional features on individual crates:
 - `formatkit-core`: `shift-jis` (enabled by default; disable with `default-features = false` if you do not need Shift-JIS/CP932 tables).
 - `formatkit-codec`: `dds` (enabled by default; pulls in `formatkit-pixel`).
+- `formatkit-gltf`: `png` (enabled by default; pulls in `formatkit-codec`).
 
 ### Option B: Umbrella `formatkit` Crate
 
-The umbrella crate re-exports `core`, `layout`, `catalog`, and `runtime` by default, and gates optional families behind features (`archive`, `pixel`, `codec`, `patch`, `corpus`):
+The umbrella crate re-exports `core`, `layout`, `catalog`, and `runtime` by default, and gates optional families behind features (`archive`, `pixel`, `codec`, `patch`, `gltf`, `corpus`):
 
 ```toml
 [dependencies]
-formatkit = { version = "0.1.9", features = ["archive", "pixel", "codec"] }
+formatkit = { version = "0.1.10", features = ["archive", "pixel", "codec"] }
 
 [dev-dependencies]
-formatkit = { version = "0.1.9", features = ["corpus"] }
+formatkit = { version = "0.1.10", features = ["corpus"] }
 ```
 
 ---

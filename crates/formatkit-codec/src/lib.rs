@@ -15,6 +15,7 @@
 //! - **Tagged-header stream family** (one tag byte + 24-bit size, see [`tagged_header`]):
 //!   [`tagged_lz77`] (compact and extended-length LZ77), [`tagged_huffman`] (packed-tree
 //!   4/8-bit Huffman), [`rle::decode_tagged_rle`], and [`delta::decode_tagged_delta`].
+//! - **Audio**: [`ima_adpcm`] (IMA ADPCM 4-bit codes).
 //! - **Bit-depth widening**: [`mod@bit_unpack`].
 //! - **Image containers**: [`png`], [`pcx`], [`tga`], and optional [`dds`] (feature `dds`).
 #![forbid(unsafe_code)]
@@ -78,6 +79,16 @@ pub use delta::{
     decode_tagged_delta, delta_decode_u16_be_into, delta_decode_u16_le_into, delta_decode_u8_into,
     delta_encode_u16_be_into, delta_encode_u16_le_into, delta_encode_u8_into, encode_tagged_delta,
     TaggedDeltaWidth,
+};
+/// IMA ADPCM 4-bit audio codes: reference tables, state, block headers, and exact re-encoding.
+#[doc(alias = "adpcm")]
+#[doc(alias = "ima")]
+#[doc(alias = "dvi adpcm")]
+pub mod ima_adpcm;
+pub use ima_adpcm::{
+    decode_ima_adpcm_block, decode_ima_adpcm_codes, encode_ima_adpcm_block, encode_ima_adpcm_codes,
+    encode_ima_adpcm_codes_exact, encode_ima_adpcm_codes_nearest, ImaAdpcmHeader, ImaAdpcmState,
+    ImaHeaderSample, ImaNibbleOrder, IMA_INDEX_TABLE, IMA_MAX_STEP_INDEX, IMA_STEP_TABLE,
 };
 /// Parameterized flag-byte / flag-word LZSS stream executor.
 #[doc(alias = "lzss")]

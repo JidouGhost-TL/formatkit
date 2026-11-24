@@ -654,6 +654,16 @@
     },
     {
       "crate": "formatkit-codec",
+      "module": "ima_adpcm",
+      "path": "formatkit_codec::ima_adpcm::{ImaAdpcmState, ImaAdpcmHeader, ImaNibbleOrder, ImaHeaderSample, decode_ima_adpcm_codes, decode_ima_adpcm_block, encode_ima_adpcm_codes, encode_ima_adpcm_codes_exact, encode_ima_adpcm_codes_nearest, encode_ima_adpcm_block, IMA_STEP_TABLE, IMA_INDEX_TABLE, IMA_MAX_STEP_INDEX}",
+      "summary": "IMA ADPCM reference step/index tables and 4-bit code decode/encode with explicit nibble order, a 4-byte LE predictor/step-index block header, header-sample policy, nearest-code encoding, and an exact re-encoder that reproduces decoded PCM.",
+      "domain_aliases": ["IMA ADPCM", "DVI ADPCM", "ADPCM", "4-bit audio", "step index", "audio codec"],
+      "use_when": "Decoding or writing 4-bit IMA ADPCM sample data whose container framing (headers, interleave, block sizes) stays with the format owner.",
+      "avoid_when": "The stream is a different ADPCM family (e.g. per-block coefficient ADPCM) or needs per-channel interleaved block layouts handled in one call.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
       "module": "png",
       "path": "formatkit_codec::png::{decode_png_rgba, encode_rgba_png, encode_rgba_png_with, PngEncodeOptions, PngCompression, PngFilter}",
       "summary": "Self-contained PNG RGBA8888 decoder and encoder; encode_rgba_png emits byte-stable stored blocks, encode_rgba_png_with adds DEFLATE compression and adaptive scanline filtering.",

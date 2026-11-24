@@ -58,6 +58,7 @@ Task-oriented reference for every reusable, platform-neutral binary-data mechani
 | Decode or encode tagged-header Huffman with a packed 6-bit-offset tree and 4-bit (`0x24`) or 8-bit (`0x28`) symbols | `formatkit_codec::tagged_huffman::{decode_tagged_huffman, encode_tagged_huffman, TaggedHuffmanWidth}` | `formatkit-codec` |
 | Decode or encode tagged-header byte RLE (`0x30`) or 8/16-bit delta-filtered (`0x81`/`0x82`) streams | `formatkit_codec::rle::{decode_tagged_rle, encode_tagged_rle}`, `formatkit_codec::delta::{decode_tagged_delta, encode_tagged_delta, TaggedDeltaWidth}` | `formatkit-codec` |
 | Widen packed 1/2/4/8-bit units to 1/2/4/8/16/32-bit units with a conditional additive offset | `formatkit_codec::bit_unpack::{bit_unpack, BitUnpackConfig}` | `formatkit-codec` |
+| Decode or encode IMA ADPCM 4-bit audio codes (low- or high-nibble-first, optional 4-byte `i16`/`u8` block header whose sample is state-only or the first output), or re-encode decoded PCM so it decodes back exactly | `formatkit_codec::ima_adpcm::{ImaAdpcmState, ImaAdpcmHeader, ImaNibbleOrder, ImaHeaderSample, decode_ima_adpcm_codes, decode_ima_adpcm_block, encode_ima_adpcm_codes, encode_ima_adpcm_codes_exact, encode_ima_adpcm_codes_nearest, encode_ima_adpcm_block, IMA_STEP_TABLE, IMA_INDEX_TABLE}` | `formatkit-codec` |
 
 ### 4. Pixels, Palettes, Tiles, Swizzling & Image/Audio Codecs
 

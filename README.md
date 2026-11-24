@@ -35,13 +35,13 @@ packages can also be consumed directly without the umbrella.
 | Package | Responsibility |
 | --- | --- |
 | `formatkit` | Umbrella re-export crate (`default = []`; optional `archive`, `pixel`, `codec`, `patch`, `corpus` features) |
-| `formatkit-core` | Checked bytes/bits, sources, budgets, errors, images, PCM, `checksum`, `bcd`, `math`, `topology`, `pointer_table`, `padding`, and optional Shift-JIS text |
-| `formatkit-layout` | Configured fields, records, `tables`, `chunks`, `iff`, `charmap`, ranges and resident edits |
+| `formatkit-core` | Checked bytes/bits, sources, budgets, errors, images, PCM/WAV (with `smpl` loops), `checksum`, `bcd`, `math`, `topology`, `pointer_table`, `padding`, and optional Shift-JIS text |
+| `formatkit-layout` | Configured fields, records, `tables`, `chunks`, `iff`, `charmap`, ranges, resident edits and `offset_graph` exact rewrites |
 | `formatkit-catalog` | Open typed identities, detection catalogs and executable operation contracts |
 | `formatkit-runtime` | Explicit owner-module composition (`Strict`/`Legacy`), resident writers and operation dispatch |
 | `formatkit-archive` | Mounted browsing, extraction to caller sinks, injected traversal and `paired_stored_mount` |
-| `formatkit-pixel` | Generic packed pixels, `palette`, `planar`, `glyph`, `morton`, `atlas`, channel masks and `dxt` (S3TC) |
-| `formatkit-codec` | Bounded compression (`okumura`, `flag_lzss`, `counted_lsb`, `sliding_window`, deflate/inflate/gzip/lzma/rnc), tagged-header LZ77/Huffman/RLE/delta streams, `bit_unpack`, delta, Huffman, RLE, PNG, PCX, TGA and optional DDS |
+| `formatkit-pixel` | Generic packed pixels, `palette`, `planar`, `glyph`, `morton`, `atlas`, `tilemap`, channel masks and `dxt` (S3TC) |
+| `formatkit-codec` | Bounded compression (`okumura`, `flag_lzss`, `counted_lsb`, `sliding_window`, deflate/inflate/gzip/lzma/rnc), tagged-header LZ77/Huffman/RLE/delta streams, `bit_unpack`, delta, Huffman, RLE, `ima_adpcm`, `smf` (MIDI writer), PNG (stored or compressed), PCX, TGA and optional DDS |
 | `formatkit-patch` | `ips`, `bps`, `ups`, and `vli` parsing, serialization, creation and policy-controlled application |
 | `formatkit-corpus` | Explicit-root discovery without a built-in sample set |
 | `formatkit-corpus-test` | JSON specs, golden digests, codec pairs and sealed packages |

@@ -1,3 +1,11 @@
+//! Shared PCM audio buffers, WAV header encoding and RIFF `smpl` loop chunks.
+//!
+//! The `smpl` (sampler) chunk layout follows the RIFF/WAVE sampler chunk
+//! definition: a 36-byte header (manufacturer, product, sample period, MIDI
+//! unity note and pitch fraction, SMPTE format and offset, loop count, sampler
+//! data size) followed by 24-byte loop records (identifier, type, start, end,
+//! fraction, play count), all little-endian `u32`.
+
 /// Build the canonical 44-byte RIFF/WAVE header for linear PCM (8-bit unsigned
 /// or 16-bit signed).
 ///
@@ -72,6 +80,254 @@ pub fn wav_header_pcm(
     header[36..40].copy_from_slice(b"data");
     header[40..44].copy_from_slice(&data_bytes_u32.to_le_bytes());
     Ok(header)
+}
+
+/// Playback direction of one [`WavLoop`] (`dwType` in a RIFF `smpl` loop record).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WavLoopKind {
+    /// Type `0`: play forward from start to end, then jump back to start.
+    Forward,
+    /// Type `1`: alternate forward and backward between start and end.
+    Alternating,
+    /// Type `2`: play backward.
+    Backward,
+}
+
+impl WavLoopKind {
+    /// The `dwType` value stored in the loop record.
+    pub const fn to_raw(self) -> u32 {
+        match self {
+            Self::Forward => 0,
+            Self::Alternating => 1,
+            Self::Backward => 2,
+        }
+    }
+
+    /// Decode a `dwType` value; types above `2` are manufacturer-defined and
+    /// return `None`.
+    pub const fn from_raw(raw: u32) -> Option<Self> {
+        match raw {
+            0 => Some(Self::Forward),
+            1 => Some(Self::Alternating),
+            2 => Some(Self::Backward),
+            _ => None,
+        }
+    }
+}
+
+/// One sample loop for the RIFF/WAVE `smpl` (sampler) chunk.
+///
+/// Positions are sample-frame indices into the `data` chunk using a half-open
+/// range: `start_frame` is the first looped frame and `end_frame` is one past
+/// the last. The serialized `dwEnd` field holds the *inclusive* last frame,
+/// `end_frame - 1`, as sampler software reads it.
+#[doc(alias = "smpl")]
+#[doc(alias = "loop point")]
+#[doc(alias = "sustain loop")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WavLoop {
+    /// First looped sample frame (inclusive).
+    pub start_frame: u32,
+    /// One past the last looped sample frame (exclusive).
+    pub end_frame: u32,
+    /// Playback direction.
+    pub kind: WavLoopKind,
+    /// Number of repetitions; `0` loops indefinitely.
+    pub play_count: u32,
+}
+
+impl WavLoop {
+    /// An indefinitely repeating forward loop over `start_frame..end_frame`.
+    pub const fn forward(start_frame: u32, end_frame: u32) -> Self {
+        Self {
+            start_frame,
+            end_frame,
+            kind: WavLoopKind::Forward,
+            play_count: 0,
+        }
+    }
+}
+
+/// Fixed part of a `smpl` chunk payload before the loop records.
+const SMPL_HEADER_LEN: usize = 36;
+/// Size of one `smpl` loop record.
+const SMPL_LOOP_LEN: usize = 24;
+/// MIDI unity note written to `dwMIDIUnityNote` (middle C: play at the recorded pitch).
+const SMPL_UNITY_NOTE: u32 = 60;
+
+/// Serialize a complete RIFF `smpl` chunk (`"smpl"`, size, payload) with the
+/// given loops.
+///
+/// Writes zero manufacturer/product/SMPTE fields, `dwSamplePeriod` =
+/// `1_000_000_000 / sample_rate` nanoseconds, `dwMIDIUnityNote` = 60, no pitch
+/// fraction and no sampler-specific data. Loop identifiers are their indices.
+/// Each loop must satisfy `start_frame < end_frame`; the caller checks the
+/// frames against its own `data` length (see [`wav_bytes_pcm_with_loops`]).
+pub fn wav_smpl_chunk(sample_rate: u32, loops: &[WavLoop]) -> crate::Result<Vec<u8>> {
+    if sample_rate == 0 {
+        return Err(crate::Error::InvalidField {
+            what: "WAV sample rate",
+            value: 0,
+        });
+    }
+    let count = u32::try_from(loops.len()).map_err(|_| crate::Error::InvalidField {
+        what: "WAV smpl loop count",
+        value: loops.len() as u64,
+    })?;
+    let payload_len = loops
+        .len()
+        .checked_mul(SMPL_LOOP_LEN)
+        .and_then(|n| n.checked_add(SMPL_HEADER_LEN))
+        .filter(|&n| n <= u32::MAX as usize)
+        .ok_or(crate::Error::InvalidField {
+            what: "WAV smpl loop count",
+            value: loops.len() as u64,
+        })?;
+    let mut out = Vec::with_capacity(8 + payload_len);
+    out.extend_from_slice(b"smpl");
+    out.extend_from_slice(&(payload_len as u32).to_le_bytes());
+    let period_ns = 1_000_000_000 / sample_rate;
+    for v in [0u32, 0, period_ns, SMPL_UNITY_NOTE, 0, 0, 0, count, 0] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for (id, lp) in loops.iter().enumerate() {
+        if lp.start_frame >= lp.end_frame {
+            return Err(crate::Error::InvalidField {
+                what: "WAV loop range",
+                value: (u64::from(lp.start_frame) << 32) | u64::from(lp.end_frame),
+            });
+        }
+        for v in [
+            id as u32,
+            lp.kind.to_raw(),
+            lp.start_frame,
+            lp.end_frame - 1,
+            0,
+            lp.play_count,
+        ] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    Ok(out)
+}
+
+/// Parse the loop records of a `smpl` chunk *payload* (the bytes after the
+/// chunk id and size), converting each inclusive `dwEnd` back to an exclusive
+/// [`WavLoop::end_frame`].
+///
+/// Rejects payloads shorter than the 36-byte header or than the declared
+/// `cSampleLoops` records, loops whose `dwEnd < dwStart` or `dwEnd ==
+/// u32::MAX`, and manufacturer-defined loop types (`dwType > 2`). The trailing
+/// `cbSamplerData` bytes are not interpreted.
+pub fn parse_wav_smpl_loops(payload: &[u8]) -> crate::Result<Vec<WavLoop>> {
+    let word = |at: usize| u32::from_le_bytes(payload[at..at + 4].try_into().unwrap());
+    if payload.len() < SMPL_HEADER_LEN {
+        return Err(crate::Error::Truncated {
+            offset: 0,
+            needed: SMPL_HEADER_LEN,
+            available: payload.len(),
+        });
+    }
+    let count = word(28) as usize;
+    let needed = count
+        .checked_mul(SMPL_LOOP_LEN)
+        .and_then(|n| n.checked_add(SMPL_HEADER_LEN))
+        .ok_or(crate::Error::InvalidField {
+            what: "WAV smpl loop count",
+            value: count as u64,
+        })?;
+    if payload.len() < needed {
+        return Err(crate::Error::Truncated {
+            offset: SMPL_HEADER_LEN,
+            needed: needed - SMPL_HEADER_LEN,
+            available: payload.len() - SMPL_HEADER_LEN,
+        });
+    }
+    let mut loops = Vec::with_capacity(count);
+    for i in 0..count {
+        let at = SMPL_HEADER_LEN + i * SMPL_LOOP_LEN;
+        let raw_kind = word(at + 4);
+        let kind = WavLoopKind::from_raw(raw_kind).ok_or(crate::Error::InvalidField {
+            what: "WAV loop type",
+            value: u64::from(raw_kind),
+        })?;
+        let start = word(at + 8);
+        let last = word(at + 12);
+        if last < start || last == u32::MAX {
+            return Err(crate::Error::InvalidField {
+                what: "WAV loop range",
+                value: (u64::from(start) << 32) | u64::from(last),
+            });
+        }
+        loops.push(WavLoop {
+            start_frame: start,
+            end_frame: last + 1,
+            kind,
+            play_count: word(at + 20),
+        });
+    }
+    Ok(loops)
+}
+
+/// Serialize a complete linear-PCM RIFF/WAVE file: the canonical 44-byte
+/// header from [`wav_header_pcm`], the `data` payload (plus one RIFF pad byte
+/// when its length is odd), and, when `loops` is non-empty, a trailing `smpl`
+/// chunk from [`wav_smpl_chunk`].
+///
+/// `data` is already-encoded sample bytes (8-bit unsigned or 16-bit signed
+/// little-endian). Every loop's `end_frame` must not exceed the frame count
+/// `data.len() / block_align`. With no loops the output equals the header
+/// followed by `data` (and the pad byte, if any).
+///
+/// ```
+/// use formatkit_core::audio::{parse_wav_smpl_loops, wav_bytes_pcm_with_loops, WavLoop};
+///
+/// let data = [0u8, 0, 1, 0, 2, 0, 3, 0]; // four 16-bit mono frames
+/// let wav = wav_bytes_pcm_with_loops(22_050, 1, 16, &data, &[WavLoop::forward(1, 4)]).unwrap();
+/// assert_eq!(&wav[52..56], b"smpl");
+/// let loops = parse_wav_smpl_loops(&wav[60..]).unwrap();
+/// assert_eq!(loops, [WavLoop::forward(1, 4)]);
+/// ```
+pub fn wav_bytes_pcm_with_loops(
+    sample_rate: u32,
+    channels: u16,
+    bits_per_sample: u16,
+    data: &[u8],
+    loops: &[WavLoop],
+) -> crate::Result<Vec<u8>> {
+    let header = wav_header_pcm(sample_rate, channels, bits_per_sample, data.len() as u64)?;
+    let block_align = usize::from(channels) * usize::from(bits_per_sample / 8);
+    let frames = (data.len() / block_align) as u64;
+    for lp in loops {
+        if u64::from(lp.end_frame) > frames {
+            return Err(crate::Error::InvalidField {
+                what: "WAV loop end frame",
+                value: u64::from(lp.end_frame),
+            });
+        }
+    }
+    let smpl = if loops.is_empty() {
+        Vec::new()
+    } else {
+        wav_smpl_chunk(sample_rate, loops)?
+    };
+    let pad = data.len() & 1;
+    let total = header.len() as u64 + data.len() as u64 + pad as u64 + smpl.len() as u64;
+    if total - 8 > u64::from(u32::MAX) {
+        return Err(crate::Error::InvalidField {
+            what: "WAV RIFF size",
+            value: total - 8,
+        });
+    }
+    let mut out = Vec::with_capacity(total as usize);
+    out.extend_from_slice(&header);
+    out.extend_from_slice(data);
+    if pad == 1 {
+        out.push(0);
+    }
+    out.extend_from_slice(&smpl);
+    out[4..8].copy_from_slice(&((total - 8) as u32).to_le_bytes());
+    Ok(out)
 }
 
 /// Interleaved, 16-bit signed PCM audio.
@@ -195,6 +451,21 @@ impl Pcm {
             out.extend_from_slice(&sample.to_le_bytes());
         }
         Ok(out)
+    }
+
+    /// Serialize this PCM stream into a RIFF/WAVE byte buffer with a trailing
+    /// `smpl` chunk holding one loop.
+    ///
+    /// Loop positions are sample frames (see [`WavLoop`]). The bytes before
+    /// the `smpl` chunk equal [`Self::to_wav_bytes`] except for the RIFF size
+    /// field. Use [`wav_bytes_pcm_with_loops`] for several loops or 8-bit data.
+    pub fn to_wav_bytes_with_loop(&self, lp: WavLoop) -> crate::Result<Vec<u8>> {
+        self.validate()?;
+        let mut data = Vec::with_capacity(self.samples.len().saturating_mul(2));
+        for &sample in &self.samples {
+            data.extend_from_slice(&sample.to_le_bytes());
+        }
+        wav_bytes_pcm_with_loops(self.sample_rate, self.channels, 16, &data, &[lp])
     }
 
     /// Parse a canonical 16-bit signed little-endian PCM RIFF/WAVE byte buffer.
@@ -616,6 +887,103 @@ mod tests {
             Pcm::from_wav_bytes(&valid[..valid.len() - 1]),
             Err(Error::Truncated { .. })
         ));
+    }
+
+    #[test]
+    fn smpl_chunk_layout_matches_riff_sampler_record() {
+        let pcm = Pcm::try_interleaved(32_000, 2, vec![1, -1, 2, -2, 3, -3, 4, -4]).unwrap();
+        let plain = pcm.to_wav_bytes().unwrap();
+        let wav = pcm.to_wav_bytes_with_loop(WavLoop::forward(1, 4)).unwrap();
+        assert_eq!(wav.len(), plain.len() + 8 + 36 + 24);
+        assert_eq!(&wav[8..44], &plain[8..44]);
+        assert_eq!(&wav[44..plain.len()], &plain[44..]);
+        assert_eq!(
+            u32::from_le_bytes(wav[4..8].try_into().unwrap()) as usize,
+            wav.len() - 8
+        );
+        let smpl = &wav[plain.len()..];
+        assert_eq!(&smpl[0..4], b"smpl");
+        assert_eq!(u32::from_le_bytes(smpl[4..8].try_into().unwrap()), 60);
+        let w = |at: usize| u32::from_le_bytes(smpl[8 + at..12 + at].try_into().unwrap());
+        assert_eq!(w(8), 1_000_000_000 / 32_000); // dwSamplePeriod
+        assert_eq!(w(12), 60); // dwMIDIUnityNote
+        assert_eq!(w(28), 1); // cSampleLoops
+        assert_eq!(w(32), 0); // cbSamplerData
+        assert_eq!(
+            [w(36), w(40), w(44), w(48), w(52), w(56)],
+            [0, 0, 1, 3, 0, 0]
+        );
+        assert_eq!(
+            parse_wav_smpl_loops(&smpl[8..]).unwrap(),
+            [WavLoop::forward(1, 4)]
+        );
+        // The PCM reader still accepts the file and ignores the extra chunk.
+        assert_eq!(Pcm::from_wav_bytes(&wav).unwrap(), pcm);
+    }
+
+    #[test]
+    fn eight_bit_odd_data_is_padded_before_smpl() {
+        let loops = [
+            WavLoop::forward(0, 3),
+            WavLoop {
+                start_frame: 1,
+                end_frame: 2,
+                kind: WavLoopKind::Alternating,
+                play_count: 5,
+            },
+        ];
+        let wav = wav_bytes_pcm_with_loops(8_000, 1, 8, &[0x80, 0x81, 0x82], &loops).unwrap();
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 3);
+        assert_eq!(wav[47], 0); // pad byte
+        assert_eq!(&wav[48..52], b"smpl");
+        assert_eq!(wav.len(), 48 + 8 + 36 + 48);
+        assert_eq!(parse_wav_smpl_loops(&wav[56..]).unwrap(), loops);
+        // No loops: header, data and pad only.
+        let bare = wav_bytes_pcm_with_loops(8_000, 1, 8, &[0x80, 0x81, 0x82], &[]).unwrap();
+        assert_eq!(bare.len(), 48);
+        assert_eq!(u32::from_le_bytes(bare[4..8].try_into().unwrap()), 40);
+    }
+
+    #[test]
+    fn loop_validation_rejects_bad_ranges_and_records() {
+        let pcm = Pcm::new(44_100, vec![0; 4]);
+        assert!(matches!(
+            pcm.to_wav_bytes_with_loop(WavLoop::forward(2, 2)),
+            Err(Error::InvalidField {
+                what: "WAV loop range",
+                ..
+            })
+        ));
+        assert!(matches!(
+            pcm.to_wav_bytes_with_loop(WavLoop::forward(0, 5)),
+            Err(Error::InvalidField {
+                what: "WAV loop end frame",
+                value: 5
+            })
+        ));
+        let chunk = wav_smpl_chunk(44_100, &[WavLoop::forward(0, 4)]).unwrap();
+        let payload = &chunk[8..];
+        assert!(matches!(
+            parse_wav_smpl_loops(&payload[..payload.len() - 1]),
+            Err(Error::Truncated { .. })
+        ));
+        assert!(matches!(
+            parse_wav_smpl_loops(&payload[..35]),
+            Err(Error::Truncated { .. })
+        ));
+        let mut bad_type = payload.to_vec();
+        bad_type[36 + 4] = 7;
+        assert!(matches!(
+            parse_wav_smpl_loops(&bad_type),
+            Err(Error::InvalidField {
+                what: "WAV loop type",
+                value: 7
+            })
+        ));
+        let mut reversed = payload.to_vec();
+        reversed[36 + 8..36 + 12].copy_from_slice(&9u32.to_le_bytes());
+        assert!(parse_wav_smpl_loops(&reversed).is_err());
+        assert!(wav_smpl_chunk(0, &[]).is_err());
     }
 
     #[test]

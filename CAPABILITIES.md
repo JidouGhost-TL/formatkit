@@ -76,6 +76,7 @@ Task-oriented reference for every reusable, platform-neutral binary-data mechani
 | Decode or encode PNG, PCX, TGA, or DDS images | `formatkit_codec::png`, `formatkit_codec::pcx`, `formatkit_codec::tga`, `formatkit_codec::dds` (default feature `dds`) | `formatkit-codec` |
 | Encode an RGBA8 PNG with real DEFLATE compression and adaptive scanline filters (or byte-stable stored blocks) | `formatkit_codec::png::{encode_rgba_png_with, PngEncodeOptions, PngCompression, PngFilter}` (`encode_rgba_png` stays stored/filter-`None`) | `formatkit-codec` |
 | Represent decoded RGBA images or 16-bit PCM audio / emit WAV headers | `formatkit_core::{Image, Pcm, wav_header_pcm}` | `formatkit-core` |
+| Write a WAV file with sampler loop points (RIFF `smpl` chunk), or read loops back from a `smpl` payload | `formatkit_core::audio::{Pcm::to_wav_bytes_with_loop, wav_bytes_pcm_with_loops, wav_smpl_chunk, parse_wav_smpl_loops, WavLoop, WavLoopKind}` | `formatkit-core` |
 
 ### 5. Resident Layouts, Chunks, Tables, Charmaps & Binary Patches
 

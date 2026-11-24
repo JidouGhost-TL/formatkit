@@ -6,7 +6,7 @@
 //! - **Sources & namespaces**: [`RangeSource`], [`SourceBindings`], [`IndexedNamespace`],
 //!   [`WorkBudget`], [`ResidentReservation`], and [`copy_source_range`].
 //! - **Modules**:
-//!   - [`audio`]: PCM buffers and WAV header helpers
+//!   - [`audio`]: PCM buffers, WAV header helpers, and `smpl` loop chunks
 //!   - [`bcd`]: binary-coded decimal conversion
 //!   - [`checksum`]: CRC-16, CRC-32, Adler-32, and configurable fold checksums
 //!   - [`math`]: fixed-point 3-D transform arithmetic
@@ -115,9 +115,12 @@ pub use bounded_cstr::{
     BoundedCstrReport,
 };
 
-/// Shared PCM audio buffers and WAV header encoding.
+/// Shared PCM audio buffers, WAV header encoding, and RIFF `smpl` loop chunks.
 pub mod audio;
-pub use audio::{wav_header_pcm, Pcm};
+pub use audio::{
+    parse_wav_smpl_loops, wav_bytes_pcm_with_loops, wav_header_pcm, wav_smpl_chunk, Pcm, WavLoop,
+    WavLoopKind,
+};
 
 mod bit_rows;
 pub use bit_rows::MsbFirst1bppRows;

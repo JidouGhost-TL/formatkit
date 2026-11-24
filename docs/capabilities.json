@@ -245,10 +245,10 @@
     {
       "crate": "formatkit-core",
       "module": "audio",
-      "path": "formatkit_core::audio::{Pcm, wav_header_pcm}",
-      "summary": "Canonical 16-bit signed PCM audio value and RIFF/WAV header serializer.",
-      "domain_aliases": ["PCM", "WAV", "audio samples", "PCM16"],
-      "use_when": "Returning decoded 16-bit PCM audio or writing standard WAV headers.",
+      "path": "formatkit_core::audio::{Pcm, wav_header_pcm, wav_bytes_pcm_with_loops, wav_smpl_chunk, parse_wav_smpl_loops, WavLoop, WavLoopKind}",
+      "summary": "Canonical 16-bit signed PCM audio value, RIFF/WAV header serializer, and RIFF smpl (sampler) chunk loop points with half-open frame ranges.",
+      "domain_aliases": ["PCM", "WAV", "audio samples", "PCM16", "smpl chunk", "loop points", "sample loop", "sustain loop"],
+      "use_when": "Returning decoded 16-bit PCM audio, writing standard WAV headers, or exporting looped instrument samples with Pcm::to_wav_bytes_with_loop / wav_bytes_pcm_with_loops.",
       "avoid_when": "Encoding compressed audio bitstreams.",
       "feature_gate": null
     },

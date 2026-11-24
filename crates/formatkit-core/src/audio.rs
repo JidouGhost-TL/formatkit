@@ -333,6 +333,296 @@ pub fn wav_bytes_pcm_with_loops(
     Ok(out)
 }
 
+/// RIFF/WAVE `fmt ` audio format tag (`wFormatTag`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WavFormatTag {
+    /// Linear PCM (`0x0001`).
+    Pcm,
+    /// Microsoft ADPCM (`0x0002`).
+    MsAdpcm,
+    /// IEEE floating-point PCM (`0x0003`).
+    IeeeFloat,
+    /// IMA / DVI ADPCM (`0x0011`).
+    ImaAdpcm,
+    /// Extensible format (`0xFFFE`).
+    Extensible,
+    /// Any other `wFormatTag` value.
+    Other(u16),
+}
+
+impl WavFormatTag {
+    /// Decode a raw 16-bit `wFormatTag` field.
+    #[must_use]
+    pub const fn from_raw(raw: u16) -> Self {
+        match raw {
+            0x0001 => Self::Pcm,
+            0x0002 => Self::MsAdpcm,
+            0x0003 => Self::IeeeFloat,
+            0x0011 => Self::ImaAdpcm,
+            0xFFFE => Self::Extensible,
+            other => Self::Other(other),
+        }
+    }
+
+    /// Encode this tag back to its raw 16-bit `wFormatTag` value.
+    #[must_use]
+    pub const fn to_raw(self) -> u16 {
+        match self {
+            Self::Pcm => 0x0001,
+            Self::MsAdpcm => 0x0002,
+            Self::IeeeFloat => 0x0003,
+            Self::ImaAdpcm => 0x0011,
+            Self::Extensible => 0xFFFE,
+            Self::Other(other) => other,
+        }
+    }
+}
+
+/// Parsed RIFF/WAVE `fmt ` chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WavFmt<'a> {
+    /// Audio format tag (`wFormatTag`).
+    pub format_tag: WavFormatTag,
+    /// Number of interleaved channels (`nChannels`).
+    pub channels: u16,
+    /// Sample frames per second (`nSamplesPerSec`).
+    pub sample_rate: u32,
+    /// Average bytes per second (`nAvgBytesPerSec`).
+    pub avg_bytes_per_sec: u32,
+    /// Block alignment in bytes (`nBlockAlign`).
+    pub block_align: u16,
+    /// Bits per sample (`wBitsPerSample`).
+    pub bits_per_sample: u16,
+    /// Extension bytes following the 16-byte base `fmt ` header (if any).
+    pub extra: &'a [u8],
+}
+
+/// Parsed RIFF/WAVE container (`fmt `, `data`, optional `fact`, and optional `smpl` loops).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedWav<'a> {
+    /// Format metadata from the `fmt ` chunk.
+    pub fmt: WavFmt<'a>,
+    /// Raw audio bytes from the `data` chunk.
+    pub data: &'a [u8],
+    /// Sample-frame count from a `fact` chunk (`dwSampleLength`), if present.
+    pub fact_samples: Option<u32>,
+    /// Sample loops decoded from a `smpl` chunk, if present.
+    pub loops: Vec<WavLoop>,
+}
+
+impl ParsedWav<'_> {
+    /// Decode linear PCM (`WavFormatTag::Pcm`) audio into interleaved signed
+    /// 16-bit [`Pcm`].
+    ///
+    /// Supports 8-bit unsigned PCM (expanded to 16-bit signed via
+    /// `(sample - 128) << 8`) and 16-bit signed little-endian PCM. Non-PCM
+    /// format tags and other bit depths return [`crate::Error::Unsupported`].
+    pub fn decode_pcm(&self) -> crate::Result<Pcm> {
+        if self.fmt.format_tag != WavFormatTag::Pcm {
+            return Err(crate::Error::Unsupported(format!(
+                "WAV audio format {:#06x} (only linear PCM is supported)",
+                self.fmt.format_tag.to_raw()
+            )));
+        }
+        if self.fmt.bits_per_sample != 8 && self.fmt.bits_per_sample != 16 {
+            return Err(crate::Error::Unsupported(format!(
+                "WAV bits_per_sample {} (only 8-bit and 16-bit PCM are supported)",
+                self.fmt.bits_per_sample
+            )));
+        }
+        let bytes_per_sample = self.fmt.bits_per_sample / 8;
+        let expected_block_align =
+            self.fmt
+                .channels
+                .checked_mul(bytes_per_sample)
+                .ok_or(crate::Error::InvalidField {
+                    what: "WAV block align",
+                    value: u64::from(self.fmt.channels) * u64::from(bytes_per_sample),
+                })?;
+        if self.fmt.block_align != expected_block_align {
+            return Err(crate::Error::InvalidField {
+                what: "WAV block align",
+                value: u64::from(self.fmt.block_align),
+            });
+        }
+        if !self
+            .data
+            .len()
+            .is_multiple_of(usize::from(self.fmt.block_align))
+        {
+            return Err(crate::Error::InvalidField {
+                what: "WAV data size",
+                value: self.data.len() as u64,
+            });
+        }
+
+        let samples = if self.fmt.bits_per_sample == 8 {
+            self.data
+                .iter()
+                .map(|&b| (i16::from(b) - 128) << 8)
+                .collect()
+        } else {
+            let mut out = Vec::with_capacity(self.data.len() / 2);
+            for chunk in self.data.chunks_exact(2) {
+                out.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+            }
+            out
+        };
+        Pcm::try_interleaved(self.fmt.sample_rate, self.fmt.channels, samples)
+    }
+}
+
+/// Parse a RIFF/WAVE container into its `fmt ` descriptor, `data` payload,
+/// optional `fact` sample count, and optional `smpl` loop list.
+///
+/// Validates `"RIFF"` / `"WAVE"` framing, checked chunk bounds, odd-length
+/// RIFF pad bytes, non-zero channel count and sample rate, and presence of
+/// both `fmt ` and `data` chunks. Unknown chunks are skipped cleanly.
+pub fn parse_wav(bytes: &[u8]) -> crate::Result<ParsedWav<'_>> {
+    if bytes.len() < 12 {
+        return Err(crate::Error::Truncated {
+            offset: 0,
+            needed: 12,
+            available: bytes.len(),
+        });
+    }
+    if &bytes[0..4] != b"RIFF" {
+        return Err(crate::Error::BadMagic {
+            offset: 0,
+            expected: u32::from_be_bytes(*b"RIFF"),
+            found: u32::from_be_bytes(bytes[0..4].try_into().unwrap()),
+        });
+    }
+    let riff_size = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+    if riff_size < 4 {
+        return Err(crate::Error::InvalidField {
+            what: "WAV RIFF size",
+            value: u64::from(riff_size),
+        });
+    }
+    let riff_end = 8usize
+        .checked_add(riff_size as usize)
+        .ok_or(crate::Error::InvalidField {
+            what: "WAV RIFF size",
+            value: u64::from(riff_size),
+        })?;
+    if riff_end > bytes.len() {
+        return Err(crate::Error::Truncated {
+            offset: 8,
+            needed: riff_size as usize,
+            available: bytes.len() - 8,
+        });
+    }
+    if &bytes[8..12] != b"WAVE" {
+        return Err(crate::Error::BadMagic {
+            offset: 8,
+            expected: u32::from_be_bytes(*b"WAVE"),
+            found: u32::from_be_bytes(bytes[8..12].try_into().unwrap()),
+        });
+    }
+
+    let mut fmt: Option<WavFmt<'_>> = None;
+    let mut data: Option<&[u8]> = None;
+    let mut fact_samples: Option<u32> = None;
+    let mut loops: Vec<WavLoop> = Vec::new();
+    let mut pos = 12usize;
+
+    while pos < riff_end {
+        if riff_end - pos < 8 {
+            return Err(crate::Error::Truncated {
+                offset: pos,
+                needed: 8,
+                available: riff_end - pos,
+            });
+        }
+        let chunk_id = &bytes[pos..pos + 4];
+        let chunk_len = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let payload_start = pos + 8;
+        let payload_end =
+            payload_start
+                .checked_add(chunk_len)
+                .ok_or(crate::Error::InvalidField {
+                    what: "WAV chunk length",
+                    value: chunk_len as u64,
+                })?;
+        if payload_end > riff_end {
+            return Err(crate::Error::Truncated {
+                offset: payload_start,
+                needed: chunk_len,
+                available: riff_end - payload_start,
+            });
+        }
+        let payload = &bytes[payload_start..payload_end];
+
+        if chunk_id == b"fmt " {
+            if payload.len() < 16 {
+                return Err(crate::Error::InvalidField {
+                    what: "WAV fmt chunk length",
+                    value: payload.len() as u64,
+                });
+            }
+            let format_tag = WavFormatTag::from_raw(u16::from_le_bytes([payload[0], payload[1]]));
+            let channels = u16::from_le_bytes([payload[2], payload[3]]);
+            if channels == 0 {
+                return Err(crate::Error::InvalidField {
+                    what: "WAV channel count",
+                    value: 0,
+                });
+            }
+            let sample_rate = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+            if sample_rate == 0 {
+                return Err(crate::Error::InvalidField {
+                    what: "WAV sample rate",
+                    value: 0,
+                });
+            }
+            let avg_bytes_per_sec =
+                u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
+            let block_align = u16::from_le_bytes([payload[12], payload[13]]);
+            let bits_per_sample = u16::from_le_bytes([payload[14], payload[15]]);
+            fmt = Some(WavFmt {
+                format_tag,
+                channels,
+                sample_rate,
+                avg_bytes_per_sec,
+                block_align,
+                bits_per_sample,
+                extra: &payload[16..],
+            });
+        } else if chunk_id == b"data" {
+            data = Some(payload);
+        } else if chunk_id == b"fact" {
+            if payload.len() < 4 {
+                return Err(crate::Error::Truncated {
+                    offset: payload_start,
+                    needed: 4,
+                    available: payload.len(),
+                });
+            }
+            fact_samples = Some(u32::from_le_bytes([
+                payload[0], payload[1], payload[2], payload[3],
+            ]));
+        } else if chunk_id == b"smpl" {
+            loops = parse_wav_smpl_loops(payload)?;
+        }
+
+        pos = if (chunk_len & 1) == 1 && payload_end < riff_end {
+            payload_end + 1
+        } else {
+            payload_end
+        };
+    }
+
+    let fmt = fmt.ok_or_else(|| crate::Error::Malformed("WAV missing fmt chunk".into()))?;
+    let data = data.ok_or_else(|| crate::Error::Malformed("WAV missing data chunk".into()))?;
+    Ok(ParsedWav {
+        fmt,
+        data,
+        fact_samples,
+        loops,
+    })
+}
+
 /// Interleaved, 16-bit signed PCM audio.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pcm {
@@ -1094,5 +1384,95 @@ mod tests {
         // Exact maximum data size succeeds when aligned.
         let max_aligned = u64::from(u32::MAX - 36);
         assert!(wav_header_pcm(44_100, 1, 8, max_aligned).is_ok());
+    }
+
+    #[test]
+    fn parse_wav_round_trips_pcm16_pcm8_and_smpl_loops() {
+        // 16-bit stereo PCM round-trip.
+        let pcm = Pcm::try_interleaved(44_100, 2, vec![0x0102, -1, i16::MIN, i16::MAX]).unwrap();
+        let wav = pcm.to_wav_bytes().unwrap();
+        let parsed = parse_wav(&wav).unwrap();
+        assert_eq!(parsed.fmt.format_tag, WavFormatTag::Pcm);
+        assert_eq!(parsed.fmt.channels, 2);
+        assert_eq!(parsed.fmt.sample_rate, 44_100);
+        assert_eq!(parsed.fmt.bits_per_sample, 16);
+        assert_eq!(parsed.fmt.block_align, 4);
+        assert_eq!(parsed.fmt.avg_bytes_per_sec, 44_100 * 4);
+        assert!(parsed.fmt.extra.is_empty());
+        assert_eq!(parsed.fact_samples, None);
+        assert!(parsed.loops.is_empty());
+        assert_eq!(parsed.decode_pcm().unwrap(), pcm);
+
+        // 16-bit mono with smpl loop round-trip.
+        let mono = Pcm::new(22_050, vec![100, 200, 300, 400, 500, 600]);
+        let lp = WavLoop::forward(2, 6);
+        let looped_wav = mono.to_wav_bytes_with_loop(lp).unwrap();
+        let parsed_looped = parse_wav(&looped_wav).unwrap();
+        assert_eq!(parsed_looped.loops, vec![lp]);
+        assert_eq!(parsed_looped.decode_pcm().unwrap(), mono);
+
+        // 8-bit unsigned mono PCM (odd length to test RIFF pad byte handling + smpl).
+        let data8 = [0u8, 128, 255];
+        let wav8 =
+            wav_bytes_pcm_with_loops(11_025, 1, 8, &data8, &[WavLoop::forward(1, 3)]).unwrap();
+        let parsed8 = parse_wav(&wav8).unwrap();
+        assert_eq!(parsed8.fmt.bits_per_sample, 8);
+        assert_eq!(parsed8.loops, vec![WavLoop::forward(1, 3)]);
+        let decoded8 = parsed8.decode_pcm().unwrap();
+        assert_eq!(decoded8.sample_rate(), 11_025);
+        assert_eq!(decoded8.channels(), 1);
+        assert_eq!(decoded8.samples(), &[-32768, 0, 127 << 8]);
+    }
+
+    #[test]
+    fn parse_wav_handles_fact_chunk_and_rejects_non_pcm_or_invalid_chunks() {
+        // Non-PCM WAV (IMA ADPCM = 0x0011) with extra fmt bytes and fact chunk.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&0u32.to_le_bytes()); // patched below
+        buf.extend_from_slice(b"WAVE");
+        // fmt chunk (20 bytes: 16 base + 4 extra)
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&20u32.to_le_bytes());
+        buf.extend_from_slice(&0x0011u16.to_le_bytes()); // IMA ADPCM
+        buf.extend_from_slice(&1u16.to_le_bytes());
+        buf.extend_from_slice(&22_050u32.to_le_bytes());
+        buf.extend_from_slice(&11_100u32.to_le_bytes());
+        buf.extend_from_slice(&256u16.to_le_bytes());
+        buf.extend_from_slice(&4u16.to_le_bytes());
+        buf.extend_from_slice(&2u16.to_le_bytes()); // cbSize
+        buf.extend_from_slice(&505u16.to_le_bytes()); // wSamplesPerBlock
+                                                      // fact chunk
+        buf.extend_from_slice(b"fact");
+        buf.extend_from_slice(&4u32.to_le_bytes());
+        buf.extend_from_slice(&1024u32.to_le_bytes());
+        // data chunk
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&4u32.to_le_bytes());
+        buf.extend_from_slice(&[1, 2, 3, 4]);
+        let riff_len = (buf.len() - 8) as u32;
+        buf[4..8].copy_from_slice(&riff_len.to_le_bytes());
+
+        let parsed = parse_wav(&buf).unwrap();
+        assert_eq!(parsed.fmt.format_tag, WavFormatTag::ImaAdpcm);
+        assert_eq!(parsed.fmt.extra, &[2, 0, 0xF9, 0x01]);
+        assert_eq!(parsed.fact_samples, Some(1024));
+        assert_eq!(parsed.data, &[1, 2, 3, 4]);
+        assert!(matches!(parsed.decode_pcm(), Err(Error::Unsupported(_))));
+
+        // Truncated header / bad magic / truncated chunk
+        assert!(matches!(parse_wav(&buf[..8]), Err(Error::Truncated { .. })));
+        assert!(matches!(
+            parse_wav(b"FORM\x04\0\0\0WAVE"),
+            Err(Error::BadMagic { .. })
+        ));
+        assert!(matches!(
+            parse_wav(b"RIFF\x04\0\0\0AVI "),
+            Err(Error::BadMagic { .. })
+        ));
+        assert!(matches!(
+            parse_wav(&buf[..buf.len() - 2]),
+            Err(Error::Truncated { .. })
+        ));
     }
 }

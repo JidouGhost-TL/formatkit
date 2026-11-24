@@ -17,6 +17,7 @@ pixel = ["dep:formatkit-pixel"]
 codec = ["dep:formatkit-codec"]
 corpus = ["dep:formatkit-corpus", "dep:formatkit-corpus-test"]
 archive = ["dep:formatkit-archive"]
+gltf = ["dep:formatkit-gltf"]
 
 [dependencies]
 formatkit-core.workspace = true
@@ -29,3 +30,4 @@ formatkit-codec = { workspace = true, optional = true }
 formatkit-corpus = { workspace = true, optional = true }
 formatkit-corpus-test = { workspace = true, optional = true }
 formatkit-patch = { workspace = true, optional = true }
+formatkit-gltf = { workspace = true, optional = true }

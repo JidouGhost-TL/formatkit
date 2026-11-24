@@ -245,11 +245,11 @@
     {
       "crate": "formatkit-core",
       "module": "audio",
-      "path": "formatkit_core::audio::{Pcm, wav_header_pcm, wav_bytes_pcm_with_loops, wav_smpl_chunk, parse_wav_smpl_loops, WavLoop, WavLoopKind}",
-      "summary": "Canonical 16-bit signed PCM audio value, RIFF/WAV header serializer, and RIFF smpl (sampler) chunk loop points with half-open frame ranges.",
-      "domain_aliases": ["PCM", "WAV", "audio samples", "PCM16", "smpl chunk", "loop points", "sample loop", "sustain loop"],
-      "use_when": "Returning decoded 16-bit PCM audio, writing standard WAV headers, or exporting looped instrument samples with Pcm::to_wav_bytes_with_loop / wav_bytes_pcm_with_loops.",
-      "avoid_when": "Encoding compressed audio bitstreams.",
+      "path": "formatkit_core::audio::{Pcm, parse_wav, ParsedWav, WavFmt, WavFormatTag, wav_header_pcm, wav_bytes_pcm_with_loops, wav_smpl_chunk, parse_wav_smpl_loops, WavLoop, WavLoopKind}",
+      "summary": "Canonical 16-bit signed PCM audio value, RIFF/WAVE container parser (fmt/data/fact/smpl + 8/16-bit PCM decode), WAV header serializer, and RIFF smpl loop points.",
+      "domain_aliases": ["PCM", "WAV", "RIFF WAVE", "audio samples", "PCM16", "smpl chunk", "fact chunk", "loop points", "sample loop", "sustain loop"],
+      "use_when": "Returning decoded 16-bit PCM audio, parsing or writing standard RIFF/WAVE files, or exporting looped instrument samples.",
+      "avoid_when": "Decoding or encoding compressed audio bitstreams (inspect fmt.format_tag and delegate to a codec).",
       "feature_gate": null
     },
     {
@@ -685,11 +685,21 @@
     {
       "crate": "formatkit-codec",
       "module": "smf",
-      "path": "formatkit_codec::smf::{write_smf, SmfTrack, SmfEvent, SmfTimedEvent, SmfFormat, SmfDivision, SmfTextKind, SmfWriteOptions, write_smf_vlq, read_smf_vlq, SMF_MAX_VLQ}",
-      "summary": "Standard MIDI File 1.0 writer: format 0/1, metrical or SMPTE division, absolute-tick tracks ordered by (tick, rank, insertion), channel/meta/SysEx events, automatic End of Track, optional running status, and VLQ encode/decode.",
-      "domain_aliases": ["MIDI", "SMF", "standard MIDI file", ".mid export", "sequence export", "variable-length quantity", "running status", "MThd", "MTrk"],
-      "use_when": "Exporting a decoded music sequence as a .mid file once the owner has translated its commands to MIDI events.",
-      "avoid_when": "Parsing existing MIDI files (no reader is provided) or encoding a proprietary sequence bytecode.",
+      "path": "formatkit_codec::smf::{read_smf, write_smf, SmfFile, SmfTrack, SmfEvent, SmfTimedEvent, SmfFormat, SmfDivision, SmfTextKind, SmfWriteOptions, write_smf_vlq, read_smf_vlq, SMF_MAX_VLQ}",
+      "summary": "Standard MIDI File 1.0 reader and writer: format 0/1/2, metrical or SMPTE division, absolute-tick tracks, channel/meta/SysEx events, running status, strict MTrk validation, and VLQ encode/decode.",
+      "domain_aliases": ["MIDI", "SMF", "standard MIDI file", ".mid export", ".mid parser", "sequence export", "variable-length quantity", "running status", "MThd", "MTrk"],
+      "use_when": "Reading or exporting Standard MIDI Files once the owner handles any format-specific sequence translation.",
+      "avoid_when": "Encoding or decoding a proprietary sequence bytecode.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
+      "module": "sf2",
+      "path": "formatkit_codec::sf2::{write_sf2, validate_sf2, Sf2Font, Sf2Info, Sf2Sample, Sf2SampleType, Sf2Instrument, Sf2Preset, Sf2Zone, Sf2Generator, Sf2Summary}",
+      "summary": "SoundFont 2.04 (.sf2) RIFF sfbk writer (INFO, sdta/smpl with 46-sample terminal padding, pdta tables and terminal records) and structural validator.",
+      "domain_aliases": ["SoundFont", "SF2", "sfbk", "soundbank", "wavetable bank", "instrument bank"],
+      "use_when": "Serializing or structurally validating standard SoundFont 2.04 (.sf2) soundbanks from neutral PCM samples, instruments, and presets.",
+      "avoid_when": "Parsing platform-specific instrument or voicegroup tables directly (translate them to Sf2Font in the format owner).",
       "feature_gate": "formatkit/codec"
     },
     {
@@ -941,6 +951,36 @@
       "use_when": "Enforcing cryptographic immutability of a frozen external corpus manifest before running validation.",
       "avoid_when": "Unsealed development corpora.",
       "feature_gate": "formatkit/corpus"
+    },
+    {
+      "crate": "formatkit-gltf",
+      "module": "gltf",
+      "path": "formatkit_gltf::gltf::{GltfBuilder, Prim, PrimExtras, MorphTarget, MaterialOptions, AlphaMode, GltfError, GltfSplitOutput, push_animation_channel}",
+      "summary": "Dependency-free glTF 2.0 document builder supporting meshes, PBR and KHR_materials_unlit materials, embedded PNG or external images, samplers, skins, morph targets, TRS/matrix nodes, animations, and .glb or split .gltf+.bin export.",
+      "domain_aliases": ["glTF", "GLB", "3D model export", "mesh export", "skeletal animation", "morph targets", "KHR_materials_unlit"],
+      "use_when": "Exporting decoded 3D geometry, materials, textures, skeletons, and animations to glTF 2.0 without external JSON dependencies.",
+      "avoid_when": "Parsing arbitrary third-party glTF JSON graphs (use glb::read_glb for container framing and a full JSON parser if needed).",
+      "feature_gate": "formatkit/gltf"
+    },
+    {
+      "crate": "formatkit-gltf",
+      "module": "glb",
+      "path": "formatkit_gltf::glb::{read_glb, write_glb, GLB_MAGIC, GLB_VERSION, GLB_CHUNK_JSON, GLB_CHUNK_BIN}",
+      "summary": "Strict GLB 2.0 container reader and writer with 4-byte alignment, header version checks, and exact chunk bounds validation.",
+      "domain_aliases": ["GLB", "glTF binary", "GLB container", "GLB chunks"],
+      "use_when": "Framing or inspecting GLB 2.0 JSON and BIN chunks cleanly with checked bounds.",
+      "avoid_when": "Reading or writing text-only .gltf files.",
+      "feature_gate": "formatkit/gltf"
+    },
+    {
+      "crate": "formatkit-gltf",
+      "module": "transform",
+      "path": "formatkit_gltf::transform::{normalize_basis_columns, shepperd_quaternion_unnormalized, DegenerateColumnScale}",
+      "summary": "Basis-column normalization with explicit degenerate-scale policy and Shepperd rotation-matrix-to-quaternion extraction.",
+      "domain_aliases": ["TRS decomposition", "basis normalization", "Shepperd quaternion", "matrix to quaternion"],
+      "use_when": "Decomposing 3x3 linear transforms into glTF rotation quaternions and scales with caller-controlled degeneracy handling.",
+      "avoid_when": "Basic fixed-point Q12 math or quaternion multiplication (use formatkit_core::math).",
+      "feature_gate": "formatkit/gltf"
     }
   ]
 }

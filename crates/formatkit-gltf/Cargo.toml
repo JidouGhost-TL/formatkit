@@ -1,0 +1,19 @@
+[package]
+name = "formatkit-gltf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Dependency-free glTF 2.0 (.glb / .gltf) builder, GLB reader/writer, and transform helpers"
+keywords = ["gltf", "glb", "3d", "mesh", "interchange"]
+categories = ["encoding", "graphics", "parsing"]
+
+[features]
+default = ["png"]
+png = ["dep:formatkit-codec"]
+
+[dependencies]
+formatkit-core.workspace = true
+formatkit-codec = { workspace = true, optional = true }

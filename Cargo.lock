@@ -132,6 +132,7 @@ dependencies = [
  "formatkit-core",
  "formatkit-corpus",
  "formatkit-corpus-test",
+ "formatkit-gltf",
  "formatkit-layout",
  "formatkit-patch",
  "formatkit-pixel",
@@ -192,6 +193,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "formatkit-gltf"
+version = "0.1.9"
+dependencies = [
+ "formatkit-codec",
+ "formatkit-core",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
-//! Standard MIDI File (SMF) 1.0 writer: format 0/1, timed tracks, channel,
-//! meta and system-exclusive events, and optional running status.
+//! Standard MIDI File (SMF) 1.0 reader and writer: format 0/1/2, timed tracks,
+//! channel, meta and system-exclusive events, and optional running status.
 //!
 //! Layout follows the MIDI Manufacturers Association *Standard MIDI Files 1.0*
 //! specification: an `MThd` chunk (length 6, format, track count, division)
@@ -100,6 +100,8 @@ pub enum SmfFormat {
     /// Format 1: one or more simultaneous tracks (track 0 usually carries
     /// tempo and other conductor meta events).
     MultiTrack,
+    /// Format 2: one or more sequentially independent single-track patterns.
+    Sequential,
 }
 
 /// `MThd` division word.
@@ -146,6 +148,36 @@ impl SmfDivision {
             }
         }
     }
+
+    fn from_word(raw: u16) -> Result<Self> {
+        if raw & 0x8000 != 0 {
+            let fps = (256u16 - (raw >> 8)) as u8;
+            let ticks_per_frame = (raw & 0xff) as u8;
+            if !matches!(fps, 24 | 25 | 29 | 30) {
+                return Err(Error::InvalidField {
+                    what: "SMF SMPTE frames per second",
+                    value: u64::from(fps),
+                });
+            }
+            if ticks_per_frame == 0 {
+                return Err(Error::InvalidField {
+                    what: "SMF SMPTE ticks per frame",
+                    value: 0,
+                });
+            }
+            Ok(Self::Smpte {
+                frames_per_second: fps,
+                ticks_per_frame,
+            })
+        } else if raw == 0 {
+            Err(Error::InvalidField {
+                what: "SMF ticks per quarter note",
+                value: 0,
+            })
+        } else {
+            Ok(Self::TicksPerQuarter(raw))
+        }
+    }
 }
 
 /// Text meta-event types `0x01..=0x07`.
@@ -178,6 +210,21 @@ impl SmfTextKind {
             Self::Lyric => 0x05,
             Self::Marker => 0x06,
             Self::CuePoint => 0x07,
+        }
+    }
+
+    /// Map a meta-event type byte `0x01..=0x07` back to [`SmfTextKind`].
+    #[must_use]
+    pub const fn from_meta_type(kind: u8) -> Option<Self> {
+        match kind {
+            0x01 => Some(Self::Text),
+            0x02 => Some(Self::Copyright),
+            0x03 => Some(Self::TrackName),
+            0x04 => Some(Self::InstrumentName),
+            0x05 => Some(Self::Lyric),
+            0x06 => Some(Self::Marker),
+            0x07 => Some(Self::CuePoint),
+            _ => None,
         }
     }
 }
@@ -284,6 +331,11 @@ pub enum SmfEvent {
     /// `F0 len data`: `data` is the bytes after `F0`, normally ending in `F7`.
     SysEx {
         /// Payload after the `F0` status byte.
+        data: Vec<u8>,
+    },
+    /// `F7 len data`: escaped / continuation system-exclusive packet.
+    SysExEscape {
+        /// Raw payload after the `F7` status byte.
         data: Vec<u8>,
     },
 }
@@ -459,6 +511,12 @@ impl SmfEvent {
                 out.extend_from_slice(data);
                 return Ok(None);
             }
+            Self::SysExEscape { ref data } => {
+                out.push(0xf7);
+                write_smf_vlq(out, u32::try_from(data.len()).unwrap_or(u32::MAX))?;
+                out.extend_from_slice(data);
+                return Ok(None);
+            }
         };
         out.push(status);
         out.push(a);
@@ -579,6 +637,7 @@ pub fn write_smf(
             0u16
         }
         SmfFormat::MultiTrack => 1u16,
+        SmfFormat::Sequential => 2u16,
     };
     let count = u16::try_from(tracks.len()).map_err(|_| Error::InvalidField {
         what: "SMF track count",
@@ -594,6 +653,414 @@ pub fn write_smf(
         out.extend_from_slice(&track.to_chunk(options)?);
     }
     Ok(out)
+}
+
+/// A parsed Standard MIDI File (`MThd` header plus decoded `MTrk` tracks).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmfFile {
+    /// File format (`SingleTrack` = 0, `MultiTrack` = 1, `Sequential` = 2).
+    pub format: SmfFormat,
+    /// Time division from `MThd`.
+    pub division: SmfDivision,
+    /// Decoded `MTrk` tracks with accumulated absolute event ticks.
+    pub tracks: Vec<SmfTrack>,
+}
+
+/// Parse a complete Standard MIDI File into its header and decoded tracks.
+///
+/// Enforces strict SMF 1.0 framing:
+/// - `MThd` chunk with length `>= 6`, valid format (`0..=2`), valid division,
+///   and non-zero track count (`1` for format 0).
+/// - Exact chunk lengths matching the file end (unknown non-`MTrk` chunks are
+///   skipped by declared length per the specification).
+/// - Exact `MTrk` event walks: 1–4 byte VLQs, channel running status cleared by
+///   meta and SysEx events, 7-bit channel data bytes, fixed lengths for
+///   standard meta events, and an End of Track (`FF 2F 00`) terminating every
+///   track with no trailing bytes.
+pub fn read_smf(bytes: &[u8]) -> Result<SmfFile> {
+    if bytes.len() < 14 {
+        return Err(Error::Truncated {
+            offset: 0,
+            needed: 14,
+            available: bytes.len(),
+        });
+    }
+    if &bytes[0..4] != b"MThd" {
+        return Err(Error::BadMagic {
+            offset: 0,
+            expected: u32::from_be_bytes(*b"MThd"),
+            found: u32::from_be_bytes(bytes[0..4].try_into().unwrap()),
+        });
+    }
+    let header_len = u32::from_be_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    if header_len < 6 {
+        return Err(Error::InvalidField {
+            what: "SMF MThd length",
+            value: header_len as u64,
+        });
+    }
+    let chunks_start = 8usize.checked_add(header_len).ok_or(Error::InvalidField {
+        what: "SMF MThd length",
+        value: header_len as u64,
+    })?;
+    if chunks_start > bytes.len() {
+        return Err(Error::Truncated {
+            offset: 8,
+            needed: header_len,
+            available: bytes.len() - 8,
+        });
+    }
+
+    let raw_format = u16::from_be_bytes([bytes[8], bytes[9]]);
+    let format = match raw_format {
+        0 => SmfFormat::SingleTrack,
+        1 => SmfFormat::MultiTrack,
+        2 => SmfFormat::Sequential,
+        other => {
+            return Err(Error::InvalidField {
+                what: "SMF MThd format",
+                value: u64::from(other),
+            });
+        }
+    };
+    let declared_tracks = u16::from_be_bytes([bytes[10], bytes[11]]);
+    if declared_tracks == 0 {
+        return Err(Error::InvalidField {
+            what: "SMF MThd track count",
+            value: 0,
+        });
+    }
+    if format == SmfFormat::SingleTrack && declared_tracks != 1 {
+        return Err(Error::InvalidField {
+            what: "SMF format 0 track count",
+            value: u64::from(declared_tracks),
+        });
+    }
+    let raw_division = u16::from_be_bytes([bytes[12], bytes[13]]);
+    let division = SmfDivision::from_word(raw_division)?;
+
+    let mut tracks = Vec::with_capacity(usize::from(declared_tracks));
+    let mut pos = chunks_start;
+    while pos < bytes.len() {
+        if bytes.len() - pos < 8 {
+            return Err(Error::Trailing(bytes.len() - pos));
+        }
+        let tag = &bytes[pos..pos + 4];
+        let chunk_len = u32::from_be_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let payload_start = pos + 8;
+        let payload_end = payload_start
+            .checked_add(chunk_len)
+            .ok_or(Error::InvalidField {
+                what: "SMF chunk length",
+                value: chunk_len as u64,
+            })?;
+        if payload_end > bytes.len() {
+            return Err(Error::Truncated {
+                offset: payload_start,
+                needed: chunk_len,
+                available: bytes.len() - payload_start,
+            });
+        }
+        if tag == b"MTrk" {
+            tracks.push(parse_track(
+                &bytes[payload_start..payload_end],
+                payload_start,
+            )?);
+        }
+        pos = payload_end;
+    }
+
+    if tracks.len() != usize::from(declared_tracks) {
+        return Err(Error::Malformed(format!(
+            "SMF MThd declares {declared_tracks} tracks, found {}",
+            tracks.len()
+        )));
+    }
+    Ok(SmfFile {
+        format,
+        division,
+        tracks,
+    })
+}
+
+fn fixed_meta_len(kind: u8) -> Option<usize> {
+    match kind {
+        0x00 => Some(2),
+        0x20 | 0x21 => Some(1),
+        0x2f => Some(0),
+        0x51 => Some(3),
+        0x54 => Some(5),
+        0x58 => Some(4),
+        0x59 => Some(2),
+        _ => None,
+    }
+}
+
+fn check_data_bytes(slice: &[u8], offset: usize) -> Result<()> {
+    if slice.iter().any(|&b| b & 0x80 != 0) {
+        return Err(Error::Malformed(format!(
+            "SMF data byte with high bit set at offset {offset}"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_track(body: &[u8], base_offset: usize) -> Result<SmfTrack> {
+    let mut track = SmfTrack::new();
+    let mut pos = 0usize;
+    let mut tick = 0u64;
+    let mut running: Option<u8> = None;
+    let mut ended = false;
+
+    while pos < body.len() {
+        if ended {
+            return Err(Error::Trailing(body.len() - pos));
+        }
+        let (delta, used) = read_smf_vlq(&body[pos..]).map_err(|err| match err {
+            Error::Truncated {
+                needed, available, ..
+            } => Error::Truncated {
+                offset: base_offset + pos,
+                needed,
+                available,
+            },
+            other => other,
+        })?;
+        pos += used;
+        tick = tick
+            .checked_add(u64::from(delta))
+            .ok_or_else(|| Error::Malformed("SMF accumulated tick overflow".into()))?;
+
+        let first = *body.get(pos).ok_or(Error::Truncated {
+            offset: base_offset + pos,
+            needed: 1,
+            available: 0,
+        })?;
+        let status = if first & 0x80 != 0 {
+            pos += 1;
+            running = if first < 0xf0 { Some(first) } else { None };
+            first
+        } else {
+            running.ok_or_else(|| {
+                Error::Malformed(format!(
+                    "SMF running-status byte {first:#04x} at offset {} with no status in force",
+                    base_offset + pos
+                ))
+            })?
+        };
+
+        let event = match status {
+            0xff => {
+                let kind = *body.get(pos).ok_or(Error::Truncated {
+                    offset: base_offset + pos,
+                    needed: 1,
+                    available: 0,
+                })?;
+                if kind > 0x7f {
+                    return Err(Error::InvalidField {
+                        what: "SMF meta event type",
+                        value: u64::from(kind),
+                    });
+                }
+                pos += 1;
+                let (len_u32, used) = read_smf_vlq(&body[pos..]).map_err(|err| match err {
+                    Error::Truncated {
+                        needed, available, ..
+                    } => Error::Truncated {
+                        offset: base_offset + pos,
+                        needed,
+                        available,
+                    },
+                    other => other,
+                })?;
+                pos += used;
+                let len = len_u32 as usize;
+                let data_end = pos
+                    .checked_add(len)
+                    .ok_or_else(|| Error::Malformed("SMF meta event length overflow".into()))?;
+                if data_end > body.len() {
+                    return Err(Error::Truncated {
+                        offset: base_offset + pos,
+                        needed: len,
+                        available: body.len() - pos,
+                    });
+                }
+                if let Some(expected) = fixed_meta_len(kind) {
+                    if len != expected {
+                        return Err(Error::InvalidField {
+                            what: "SMF meta event length",
+                            value: len as u64,
+                        });
+                    }
+                }
+                let data = &body[pos..data_end];
+                pos = data_end;
+                if kind == 0x2f {
+                    ended = true;
+                    continue;
+                }
+                match kind {
+                    0x51 => {
+                        let micros = u32::from_be_bytes([0, data[0], data[1], data[2]]);
+                        if micros == 0 {
+                            return Err(Error::InvalidField {
+                                what: "SMF tempo",
+                                value: 0,
+                            });
+                        }
+                        SmfEvent::Tempo {
+                            micros_per_quarter: micros,
+                        }
+                    }
+                    0x58 => SmfEvent::TimeSignature {
+                        numerator: data[0],
+                        denominator_log2: data[1],
+                        clocks_per_click: data[2],
+                        thirty_seconds_per_quarter: data[3],
+                    },
+                    0x59 => {
+                        let sharps_flats = data[0] as i8;
+                        if !(-7..=7).contains(&sharps_flats) {
+                            return Err(Error::InvalidField {
+                                what: "SMF key signature",
+                                value: u64::from(data[0]),
+                            });
+                        }
+                        if data[1] > 1 {
+                            return Err(Error::InvalidField {
+                                what: "SMF key signature mode",
+                                value: u64::from(data[1]),
+                            });
+                        }
+                        SmfEvent::KeySignature {
+                            sharps_flats,
+                            minor: data[1] != 0,
+                        }
+                    }
+                    other => {
+                        if let Some(text_kind) = SmfTextKind::from_meta_type(other) {
+                            SmfEvent::Text {
+                                kind: text_kind,
+                                text: data.to_vec(),
+                            }
+                        } else {
+                            SmfEvent::Meta {
+                                kind: other,
+                                data: data.to_vec(),
+                            }
+                        }
+                    }
+                }
+            }
+            0xf0 | 0xf7 => {
+                let (len_u32, used) = read_smf_vlq(&body[pos..]).map_err(|err| match err {
+                    Error::Truncated {
+                        needed, available, ..
+                    } => Error::Truncated {
+                        offset: base_offset + pos,
+                        needed,
+                        available,
+                    },
+                    other => other,
+                })?;
+                pos += used;
+                let len = len_u32 as usize;
+                let data_end = pos
+                    .checked_add(len)
+                    .ok_or_else(|| Error::Malformed("SMF SysEx length overflow".into()))?;
+                if data_end > body.len() {
+                    return Err(Error::Truncated {
+                        offset: base_offset + pos,
+                        needed: len,
+                        available: body.len() - pos,
+                    });
+                }
+                let data = body[pos..data_end].to_vec();
+                pos = data_end;
+                if status == 0xf0 {
+                    SmfEvent::SysEx { data }
+                } else {
+                    SmfEvent::SysExEscape { data }
+                }
+            }
+            s if matches!(s & 0xf0, 0x80 | 0x90 | 0xa0 | 0xb0 | 0xe0) => {
+                if pos + 2 > body.len() {
+                    return Err(Error::Truncated {
+                        offset: base_offset + pos,
+                        needed: 2,
+                        available: body.len() - pos,
+                    });
+                }
+                let d = &body[pos..pos + 2];
+                check_data_bytes(d, base_offset + pos)?;
+                pos += 2;
+                let channel = s & 0x0f;
+                match s & 0xf0 {
+                    0x80 => SmfEvent::NoteOff {
+                        channel,
+                        key: d[0],
+                        velocity: d[1],
+                    },
+                    0x90 => SmfEvent::NoteOn {
+                        channel,
+                        key: d[0],
+                        velocity: d[1],
+                    },
+                    0xa0 => SmfEvent::PolyPressure {
+                        channel,
+                        key: d[0],
+                        pressure: d[1],
+                    },
+                    0xb0 => SmfEvent::ControlChange {
+                        channel,
+                        controller: d[0],
+                        value: d[1],
+                    },
+                    0xe0 => SmfEvent::PitchBend {
+                        channel,
+                        value: u16::from(d[0]) | (u16::from(d[1]) << 7),
+                    },
+                    _ => unreachable!(),
+                }
+            }
+            s if matches!(s & 0xf0, 0xc0 | 0xd0) => {
+                if pos + 1 > body.len() {
+                    return Err(Error::Truncated {
+                        offset: base_offset + pos,
+                        needed: 1,
+                        available: body.len() - pos,
+                    });
+                }
+                let d = &body[pos..pos + 1];
+                check_data_bytes(d, base_offset + pos)?;
+                pos += 1;
+                let channel = s & 0x0f;
+                if s & 0xf0 == 0xc0 {
+                    SmfEvent::ProgramChange {
+                        channel,
+                        program: d[0],
+                    }
+                } else {
+                    SmfEvent::ChannelPressure {
+                        channel,
+                        pressure: d[0],
+                    }
+                }
+            }
+            other => {
+                return Err(Error::Unsupported(format!(
+                    "SMF system message {other:#04x} inside track"
+                )));
+            }
+        };
+
+        track.push(tick, event);
+    }
+
+    if !ended {
+        return Err(Error::Malformed("SMF track missing End of Track".into()));
+    }
+    Ok(track)
 }
 
 #[cfg(test)]
@@ -892,5 +1359,210 @@ mod tests {
                 0x00, 0xff, 0x2f, 0x00,
             ]
         );
+    }
+
+    #[test]
+    fn read_smf_round_trips_format0_format1_running_status_and_all_events() {
+        let mut conductor = SmfTrack::new();
+        conductor.push(0, SmfEvent::track_name("Conductor"));
+        conductor.push(0, SmfEvent::tempo_bpm(120).unwrap());
+        conductor.push(
+            0,
+            SmfEvent::TimeSignature {
+                numerator: 4,
+                denominator_log2: 2,
+                clocks_per_click: 24,
+                thirty_seconds_per_quarter: 8,
+            },
+        );
+        conductor.push(
+            0,
+            SmfEvent::KeySignature {
+                sharps_flats: -2,
+                minor: true,
+            },
+        );
+        conductor.push(48, SmfEvent::marker("verse"));
+        conductor.push(
+            96,
+            SmfEvent::Meta {
+                kind: 0x7f,
+                data: vec![0x01, 0x02, 0x03],
+            },
+        );
+
+        let mut channel = SmfTrack::new();
+        channel.push(
+            0,
+            SmfEvent::ProgramChange {
+                channel: 1,
+                program: 42,
+            },
+        );
+        channel.push(
+            0,
+            SmfEvent::NoteOn {
+                channel: 1,
+                key: 60,
+                velocity: 100,
+            },
+        );
+        channel.push(
+            12,
+            SmfEvent::NoteOn {
+                channel: 1,
+                key: 64,
+                velocity: 95,
+            },
+        );
+        channel.push(
+            24,
+            SmfEvent::PolyPressure {
+                channel: 1,
+                key: 60,
+                pressure: 40,
+            },
+        );
+        channel.push(
+            36,
+            SmfEvent::ControlChange {
+                channel: 1,
+                controller: 7,
+                value: 110,
+            },
+        );
+        channel.push(
+            48,
+            SmfEvent::ChannelPressure {
+                channel: 1,
+                pressure: 50,
+            },
+        );
+        channel.push(
+            60,
+            SmfEvent::PitchBend {
+                channel: 1,
+                value: 0x2345,
+            },
+        );
+        channel.push(
+            72,
+            SmfEvent::SysEx {
+                data: vec![0x7e, 0x7f, 0x09, 0x01, 0xf7],
+            },
+        );
+        channel.push(
+            84,
+            SmfEvent::SysExEscape {
+                data: vec![0x01, 0x02, 0xf7],
+            },
+        );
+        channel.push(
+            96,
+            SmfEvent::NoteOff {
+                channel: 1,
+                key: 60,
+                velocity: 0,
+            },
+        );
+
+        // Format 1 with running status enabled.
+        let bytes = write_smf(
+            SmfFormat::MultiTrack,
+            SmfDivision::TicksPerQuarter(480),
+            &[conductor.clone(), channel.clone()],
+            &SmfWriteOptions {
+                running_status: true,
+            },
+        )
+        .unwrap();
+        let parsed = read_smf(&bytes).unwrap();
+        assert_eq!(parsed.format, SmfFormat::MultiTrack);
+        assert_eq!(parsed.division, SmfDivision::TicksPerQuarter(480));
+        assert_eq!(parsed.tracks, vec![conductor, channel.clone()]);
+
+        // Format 0 with SMPTE division.
+        let div = SmfDivision::Smpte {
+            frames_per_second: 25,
+            ticks_per_frame: 40,
+        };
+        let bytes0 = write_smf(
+            SmfFormat::SingleTrack,
+            div,
+            std::slice::from_ref(&channel),
+            &SmfWriteOptions::default(),
+        )
+        .unwrap();
+        let parsed0 = read_smf(&bytes0).unwrap();
+        assert_eq!(parsed0.format, SmfFormat::SingleTrack);
+        assert_eq!(parsed0.division, div);
+        assert_eq!(parsed0.tracks, vec![channel]);
+    }
+
+    #[test]
+    fn read_smf_rejects_malformed_and_truncated_tracks() {
+        let mut t = SmfTrack::new();
+        t.push(0, SmfEvent::tempo_bpm(120).unwrap());
+        t.push(
+            0,
+            SmfEvent::NoteOn {
+                channel: 0,
+                key: 60,
+                velocity: 100,
+            },
+        );
+        let valid = write_smf(
+            SmfFormat::SingleTrack,
+            SmfDivision::TicksPerQuarter(480),
+            &[t],
+            &SmfWriteOptions::default(),
+        )
+        .unwrap();
+
+        // Truncated header / bad magic.
+        assert!(matches!(
+            read_smf(&valid[..10]),
+            Err(Error::Truncated { .. })
+        ));
+        assert!(matches!(
+            read_smf(b"NOPE\0\0\0\x06\0\0\0\x01\0\x30"),
+            Err(Error::BadMagic { .. })
+        ));
+
+        // Truncated track.
+        assert!(matches!(
+            read_smf(&valid[..valid.len() - 2]),
+            Err(Error::Truncated { .. })
+        ));
+
+        // Missing End of Track.
+        let mut no_eot = valid[..valid.len() - 4].to_vec();
+        let new_len = (no_eot.len() - 22) as u32;
+        no_eot[18..22].copy_from_slice(&new_len.to_be_bytes());
+        assert!(read_smf(&no_eot).is_err());
+
+        // Running status after meta event (no active channel status).
+        let mut bad_rs = valid.clone();
+        let note_pos = bad_rs.iter().position(|&b| b == 0x90).unwrap();
+        bad_rs.remove(note_pos);
+        let rs_len = (bad_rs.len() - 22) as u32;
+        bad_rs[18..22].copy_from_slice(&rs_len.to_be_bytes());
+        assert!(read_smf(&bad_rs).is_err());
+
+        // High bit set in channel data byte.
+        let mut bad_data = valid.clone();
+        let note_pos = bad_data.iter().position(|&b| b == 0x90).unwrap();
+        bad_data[note_pos + 1] = 0x80;
+        assert!(read_smf(&bad_data).is_err());
+
+        // Trailing bytes after End of Track inside declared track length.
+        let mut trailing_in_track = valid.clone();
+        trailing_in_track.extend_from_slice(&[0x00, 0x90, 60, 0]);
+        let tr_len = (trailing_in_track.len() - 22) as u32;
+        trailing_in_track[18..22].copy_from_slice(&tr_len.to_be_bytes());
+        assert!(matches!(
+            read_smf(&trailing_in_track),
+            Err(Error::Trailing(_))
+        ));
     }
 }

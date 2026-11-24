@@ -11,6 +11,7 @@
 //! - `pixel` → `pixel` (`formatkit-pixel`)
 //! - `codec` → `codec` (`formatkit-codec`)
 //! - `patch` → `patch` (`formatkit-patch`)
+//! - `gltf` → `gltf` (`formatkit-gltf`)
 //! - `corpus` → `corpus` (`formatkit-corpus`) and `corpus_test` (`formatkit-corpus-test`)
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -24,6 +25,8 @@ pub use formatkit_core as core;
 pub use formatkit_corpus as corpus;
 #[cfg(feature = "corpus")]
 pub use formatkit_corpus_test as corpus_test;
+#[cfg(feature = "gltf")]
+pub use formatkit_gltf as gltf;
 pub use formatkit_layout as layout;
 #[cfg(feature = "pixel")]
 pub use formatkit_pixel as pixel;

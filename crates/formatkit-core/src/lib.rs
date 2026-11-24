@@ -115,11 +115,11 @@ pub use bounded_cstr::{
     BoundedCstrReport,
 };
 
-/// Shared PCM audio buffers, WAV header encoding, and RIFF `smpl` loop chunks.
+/// Shared PCM audio buffers, WAV header/container encoding and parsing, and RIFF `smpl` loop chunks.
 pub mod audio;
 pub use audio::{
-    parse_wav_smpl_loops, wav_bytes_pcm_with_loops, wav_header_pcm, wav_smpl_chunk, Pcm, WavLoop,
-    WavLoopKind,
+    parse_wav, parse_wav_smpl_loops, wav_bytes_pcm_with_loops, wav_header_pcm, wav_smpl_chunk,
+    ParsedWav, Pcm, WavFmt, WavFormatTag, WavLoop, WavLoopKind,
 };
 
 mod bit_rows;

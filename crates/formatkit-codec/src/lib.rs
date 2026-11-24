@@ -15,7 +15,7 @@
 //! - **Tagged-header stream family** (one tag byte + 24-bit size, see [`tagged_header`]):
 //!   [`tagged_lz77`] (compact and extended-length LZ77), [`tagged_huffman`] (packed-tree
 //!   4/8-bit Huffman), [`rle::decode_tagged_rle`], and [`delta::decode_tagged_delta`].
-//! - **Audio**: [`ima_adpcm`] (IMA ADPCM 4-bit codes).
+//! - **Audio**: [`ima_adpcm`] (IMA ADPCM 4-bit codes) and [`smf`] (Standard MIDI File writer).
 //! - **Bit-depth widening**: [`mod@bit_unpack`].
 //! - **Image containers**: [`png`], [`pcx`], [`tga`], and optional [`dds`] (feature `dds`).
 #![forbid(unsafe_code)]
@@ -117,6 +117,15 @@ pub use rle::{
 /// Bounded sliding-window match copying, longest-match search, and ring buffer.
 pub mod sliding_window;
 pub use sliding_window::{append_match, find_longest_match, MatchError, RingBuffer};
+/// Standard MIDI File (SMF) format 0/1 writer with meta events and running status.
+#[doc(alias = "midi")]
+#[doc(alias = "mid")]
+#[doc(alias = "standard midi file")]
+pub mod smf;
+pub use smf::{
+    read_smf_vlq, write_smf, write_smf_vlq, SmfDivision, SmfEvent, SmfFormat, SmfTextKind,
+    SmfTimedEvent, SmfTrack, SmfWriteOptions, SMF_MAX_VLQ,
+};
 /// Tag byte + 24-bit little-endian size stream headers (with 32-bit extended form).
 pub mod tagged_header;
 pub use tagged_header::{

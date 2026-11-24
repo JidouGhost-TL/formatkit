@@ -78,6 +78,7 @@ Task-oriented reference for every reusable, platform-neutral binary-data mechani
 | Encode an RGBA8 PNG with real DEFLATE compression and adaptive scanline filters (or byte-stable stored blocks) | `formatkit_codec::png::{encode_rgba_png_with, PngEncodeOptions, PngCompression, PngFilter}` (`encode_rgba_png` stays stored/filter-`None`) | `formatkit-codec` |
 | Represent decoded RGBA images or 16-bit PCM audio / emit WAV headers | `formatkit_core::{Image, Pcm, wav_header_pcm}` | `formatkit-core` |
 | Write a WAV file with sampler loop points (RIFF `smpl` chunk), or read loops back from a `smpl` payload | `formatkit_core::audio::{Pcm::to_wav_bytes_with_loop, wav_bytes_pcm_with_loops, wav_smpl_chunk, parse_wav_smpl_loops, WavLoop, WavLoopKind}` | `formatkit-core` |
+| Write a Standard MIDI File (format 0/1, metrical or SMPTE division) from absolute-tick tracks with channel, tempo, time/key signature, text (track name, marker, …), other meta and SysEx events, optional running status, or encode/decode variable-length quantities | `formatkit_codec::smf::{write_smf, SmfTrack, SmfEvent, SmfTimedEvent, SmfFormat, SmfDivision, SmfTextKind, SmfWriteOptions, write_smf_vlq, read_smf_vlq}` | `formatkit-codec` |
 
 ### 5. Resident Layouts, Chunks, Tables, Charmaps & Binary Patches
 

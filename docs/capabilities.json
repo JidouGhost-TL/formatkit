@@ -664,6 +664,16 @@
     },
     {
       "crate": "formatkit-codec",
+      "module": "smf",
+      "path": "formatkit_codec::smf::{write_smf, SmfTrack, SmfEvent, SmfTimedEvent, SmfFormat, SmfDivision, SmfTextKind, SmfWriteOptions, write_smf_vlq, read_smf_vlq, SMF_MAX_VLQ}",
+      "summary": "Standard MIDI File 1.0 writer: format 0/1, metrical or SMPTE division, absolute-tick tracks ordered by (tick, rank, insertion), channel/meta/SysEx events, automatic End of Track, optional running status, and VLQ encode/decode.",
+      "domain_aliases": ["MIDI", "SMF", "standard MIDI file", ".mid export", "sequence export", "variable-length quantity", "running status", "MThd", "MTrk"],
+      "use_when": "Exporting a decoded music sequence as a .mid file once the owner has translated its commands to MIDI events.",
+      "avoid_when": "Parsing existing MIDI files (no reader is provided) or encoding a proprietary sequence bytecode.",
+      "feature_gate": "formatkit/codec"
+    },
+    {
+      "crate": "formatkit-codec",
       "module": "png",
       "path": "formatkit_codec::png::{decode_png_rgba, encode_rgba_png, encode_rgba_png_with, PngEncodeOptions, PngCompression, PngFilter}",
       "summary": "Self-contained PNG RGBA8888 decoder and encoder; encode_rgba_png emits byte-stable stored blocks, encode_rgba_png_with adds DEFLATE compression and adaptive scanline filtering.",

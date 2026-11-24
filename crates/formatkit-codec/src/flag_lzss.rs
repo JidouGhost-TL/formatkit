@@ -128,7 +128,7 @@ pub enum FlagAction<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlagLzssOutcome {
     /// Decoded output bytes (length equals `decoded_size` when a declared size
-    /// is given and no early [`FlagAction::EndOfStream`] occurs).
+    /// is given).
     pub output: Vec<u8>,
     /// Exact number of source bytes consumed from `src`.
     pub bytes_consumed: usize,
@@ -558,8 +558,8 @@ where
 /// fails with [`Error::ResourceLimit`] before allocating when
 /// `size > max_output`, stops once `size` bytes exist (leaving later bytes
 /// unconsumed), and applies `config.overshoot` to matches and literal runs that
-/// would cross `size`. An `EndOfStream` token may end the stream early with
-/// fewer than `size` bytes; callers requiring exact output compare lengths.
+/// would cross `size`. An [`FlagAction::EndOfStream`] token before `size`
+/// output bytes have been produced fails with [`Error::Malformed`].
 ///
 /// With `decoded_size = None` decoding stops after an `EndOfStream` token or
 /// when the input ends exactly after a complete token (the first token of a
@@ -679,7 +679,17 @@ where
                 ensure_output_room(output.len(), effective_len, max_output)?;
                 output.extend_from_slice(&bytes[..effective_len]);
             }
-            FlagAction::EndOfStream => break,
+            FlagAction::EndOfStream => {
+                if let Some(expected) = decoded_size {
+                    if output.len() < expected {
+                        return Err(Error::Malformed(format!(
+                            "flag_lzss end of stream before declared size: produced {}, decoded size {expected}",
+                            output.len()
+                        )));
+                    }
+                }
+                break;
+            }
             FlagAction::RingMatch { .. } | FlagAction::RingRelativeMatch { .. } => {
                 return Err(Error::Malformed(format!(
                     "flag_lzss linear executor received a ring match at output offset {}",
@@ -1327,10 +1337,25 @@ mod tests {
         assert_eq!(exact.bytes_consumed, before_end);
         assert_eq!(exact.remaining_flag_bits, 3);
 
-        // End of stream before the declared size ends decoding early.
-        let early = decode(Some(20), 64, config).unwrap();
-        assert_eq!(early.output, expected);
-        assert_eq!(early.bytes_consumed, terminated);
+        // End of stream before the declared size is rejected as malformed.
+        assert!(matches!(
+            decode(Some(20), 64, config),
+            Err(Error::Malformed(_))
+        ));
+
+        // Zero declared size consumes nothing and succeeds even when the stream
+        // begins with an EndOfStream token.
+        let empty = decode_flag_lzss_actions(
+            &[0b0000_0000, 0],
+            &[],
+            Some(0),
+            64,
+            config,
+            decode_synthetic_action,
+        )
+        .unwrap();
+        assert!(empty.output.is_empty());
+        assert_eq!(empty.bytes_consumed, 0);
 
         // Declared-size overshoot policy applies to matches and literal runs.
         assert!(matches!(

@@ -133,13 +133,22 @@ impl GltfBuilder {
         Json::Obj(root).to_json_string()
     }
 
+    /// Fallible version of [`GltfBuilder::finish_glb`].
+    ///
+    /// Returns an error instead of panicking if the serialized GLB exceeds the
+    /// 4 GiB `u32` container length limit.
+    pub fn try_finish_glb(mut self, scene_roots: Vec<usize>) -> formatkit_core::Result<Vec<u8>> {
+        let images = std::mem::take(&mut self.images);
+        let json = self.build_document_json(scene_roots, images, None);
+        write_glb(json.as_bytes(), Some(&self.buffer))
+    }
+
     /// Serialize to a `.glb` byte vector with `scene_roots` as the default
     /// scene's root nodes.
     #[must_use]
-    pub fn finish_glb(mut self, scene_roots: Vec<usize>) -> Vec<u8> {
-        let images = std::mem::take(&mut self.images);
-        let json = self.build_document_json(scene_roots, images, None);
-        write_glb(json.as_bytes(), Some(&self.buffer)).expect("GLB size fits in u32")
+    pub fn finish_glb(self, scene_roots: Vec<usize>) -> Vec<u8> {
+        self.try_finish_glb(scene_roots)
+            .expect("GLB size fits in u32")
     }
 
     /// Serialize to a split `.gltf` JSON string, external `.bin` buffer, and

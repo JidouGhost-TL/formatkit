@@ -739,7 +739,8 @@ pub fn read_smf(bytes: &[u8]) -> Result<SmfFile> {
     let raw_division = u16::from_be_bytes([bytes[12], bytes[13]]);
     let division = SmfDivision::from_word(raw_division)?;
 
-    let mut tracks = Vec::with_capacity(usize::from(declared_tracks));
+    let mut tracks =
+        Vec::with_capacity(usize::from(declared_tracks).min((bytes.len() - chunks_start) / 8));
     let mut pos = chunks_start;
     while pos < bytes.len() {
         if bytes.len() - pos < 8 {

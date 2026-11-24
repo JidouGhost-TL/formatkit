@@ -167,7 +167,7 @@ pub fn rnc2_decompress_with_key_and_limit(
         (true, None) => return None,
         (false, _) => 0,
     };
-    let mut output = Vec::with_capacity(target);
+    let mut output = Vec::with_capacity(target.min(payload.len().saturating_mul(16)));
     let mut chunks = 0usize;
 
     while output.len() < target {
@@ -271,5 +271,23 @@ mod tests {
         assert!(rnc2_decompress_with_limit(&bytes, 0).is_none());
         bytes[17] = 1;
         assert!(rnc2_decompress(&bytes).is_none());
+    }
+
+    #[test]
+    fn crafted_huge_unpacked_size_rejects_without_oom() {
+        let payload = [0x00u8];
+        let packed_crc = rnc_crc16(&payload);
+        let mut bytes = Vec::with_capacity(19);
+        bytes.extend_from_slice(b"RNC\x02");
+        bytes.extend_from_slice(&0xFFFF_FFFFu32.to_be_bytes()); // unpacked_size
+        bytes.extend_from_slice(&1u32.to_be_bytes()); // packed_size
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // unpacked_crc16
+        bytes.extend_from_slice(&packed_crc.to_be_bytes()); // packed_crc16
+        bytes.push(0); // leeway
+        bytes.push(1); // chunks
+        bytes.extend_from_slice(&payload);
+        assert_eq!(bytes.len(), 19);
+        assert!(rnc2_decompress(&bytes).is_none());
+        assert!(!rnc2_identifies(&bytes));
     }
 }

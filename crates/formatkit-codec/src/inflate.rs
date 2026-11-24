@@ -192,7 +192,13 @@ fn inflate_block(
                     return None;
                 }
                 let d = DIST_BASE[dsym] as usize + b.read(u32::from(DIST_EXTRA[dsym]))? as usize;
-                if d == 0 || d > out.len() || out.len() + len > max_output_len {
+                if d == 0
+                    || d > out.len()
+                    || out
+                        .len()
+                        .checked_add(len)
+                        .is_none_or(|end| end > max_output_len)
+                {
                     return None;
                 }
                 let start = out.len() - d;
@@ -228,7 +234,11 @@ pub fn inflate_one_with_limit(src: &[u8], max_output_len: usize) -> Option<Decod
                     return None;
                 }
                 let chunk = b.read_aligned_bytes(len)?;
-                if out.len() + len > max_output_len {
+                if out
+                    .len()
+                    .checked_add(len)
+                    .is_none_or(|end| end > max_output_len)
+                {
                     return None;
                 }
                 out.extend_from_slice(chunk);

@@ -297,12 +297,13 @@ impl<'a> Dds<'a> {
             );
         }
         let len = self.format.level_len(width, height);
-        let end = offset + len;
+        let end = offset.saturating_add(len);
         if end > self.surface.len() as u64 {
+            let offset_usize = usize::try_from(offset).unwrap_or(usize::MAX);
             return Err(Error::Truncated {
-                offset: HEADER_LEN + offset as usize,
-                needed: len as usize,
-                available: self.surface.len().saturating_sub(offset as usize),
+                offset: HEADER_LEN.saturating_add(offset_usize),
+                needed: usize::try_from(len).unwrap_or(usize::MAX),
+                available: self.surface.len().saturating_sub(offset_usize),
             });
         }
         Ok(&self.surface[offset as usize..end as usize])

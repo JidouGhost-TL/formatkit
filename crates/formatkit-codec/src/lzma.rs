@@ -34,7 +34,9 @@ pub fn lzma_alone_decompress_with_limit(bytes: &[u8], max_output_len: usize) -> 
     let reserve = if declared == UNKNOWN_SIZE {
         0
     } else {
-        usize::try_from(declared).ok()?
+        usize::try_from(declared)
+            .ok()?
+            .min(bytes.len().saturating_mul(16))
     };
     let mut output = LimitedOutput::new(max_output_len, reserve)?;
     let options = lzma_rs::decompress::Options {

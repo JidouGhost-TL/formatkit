@@ -131,7 +131,7 @@ pub use sf2::{
 };
 /// Bounded sliding-window match copying, longest-match search, and ring buffer.
 pub mod sliding_window;
-pub use sliding_window::{append_match, find_longest_match, MatchError, RingBuffer};
+pub use sliding_window::{append_match, find_longest_match, HashMatcher, MatchError, RingBuffer};
 /// Standard MIDI File (SMF) format 0/1/2 reader and writer with meta events and running status.
 #[doc(alias = "midi")]
 #[doc(alias = "mid")]

@@ -6,6 +6,8 @@
 //! `count` is an integer, a bounding-box coordinate is a float), and strings are
 //! escaped for all JSON control characters and quotes.
 
+use core::fmt::Write as _;
+
 /// A JSON value. `Int`/`UInt` serialize without a decimal point; `Num`
 /// serializes as a float. A non-finite `Num` is written as `0` so a crafted or
 /// degenerate input can never produce invalid JSON (`NaN`/`Infinity`).
@@ -39,8 +41,12 @@ impl Json {
     fn write(&self, out: &mut String) {
         match self {
             Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            Json::Int(i) => out.push_str(&i.to_string()),
-            Json::UInt(u) => out.push_str(&u.to_string()),
+            Json::Int(i) => {
+                let _ = write!(out, "{i}");
+            }
+            Json::UInt(u) => {
+                let _ = write!(out, "{u}");
+            }
             Json::Num(f) => write_num(*f, out),
             Json::Str(s) => write_str(s, out),
             Json::Arr(items) => {
@@ -74,7 +80,7 @@ fn write_num(f: f64, out: &mut String) {
         out.push('0');
         return;
     }
-    out.push_str(&f.to_string());
+    let _ = write!(out, "{f}");
 }
 
 fn write_str(s: &str, out: &mut String) {
@@ -87,7 +93,7 @@ fn write_str(s: &str, out: &mut String) {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
+                let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),
         }

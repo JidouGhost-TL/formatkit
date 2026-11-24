@@ -11,15 +11,102 @@
 //! cannot force an allocation.
 
 use formatkit_core::checksum::adler32;
-use formatkit_core::LsbBitCursor;
 
+use crate::sliding_window::append_match;
 use crate::DecodeOutcome;
 
-type Bits<'a> = LsbBitCursor<'a>;
+const FAST_BITS: u32 = 9;
+const FAST_SIZE: usize = 1 << FAST_BITS;
+const FAST_MASK: u64 = (FAST_SIZE as u64) - 1;
 
-/// A canonical Huffman table: symbol counts per code length, and symbols in
-/// canonical order.
+/// Buffered LSB-first bit reader for DEFLATE with fast peek/consume and exact
+/// `byte_extent()` tracking.
+struct Bits<'a> {
+    bytes: &'a [u8],
+    next_byte: usize,
+    acc: u64,
+    buffered: u32,
+    consumed_bits: u64,
+}
+
+impl<'a> Bits<'a> {
+    #[inline]
+    fn new(bytes: &'a [u8]) -> Self {
+        Self {
+            bytes,
+            next_byte: 0,
+            acc: 0,
+            buffered: 0,
+            consumed_bits: 0,
+        }
+    }
+
+    #[inline]
+    fn refill(&mut self) {
+        while self.buffered <= 56 && self.next_byte < self.bytes.len() {
+            self.acc |= u64::from(self.bytes[self.next_byte]) << self.buffered;
+            self.next_byte += 1;
+            self.buffered += 8;
+        }
+    }
+
+    #[inline]
+    fn read(&mut self, width: u32) -> Option<u32> {
+        if self.buffered < width {
+            self.refill();
+            if self.buffered < width {
+                return None;
+            }
+        }
+        let mask = if width == 32 {
+            u64::from(u32::MAX)
+        } else {
+            (1u64 << width) - 1
+        };
+        let value = (self.acc & mask) as u32;
+        self.acc >>= width;
+        self.buffered -= width;
+        self.consumed_bits += u64::from(width);
+        Some(value)
+    }
+
+    #[inline]
+    fn align_to_byte(&mut self) {
+        let rem = (self.consumed_bits & 7) as u32;
+        if rem != 0 {
+            let skip = 8 - rem;
+            let actual = skip.min(self.buffered);
+            self.acc >>= actual;
+            self.buffered -= actual;
+            self.consumed_bits += u64::from(actual);
+        }
+    }
+
+    fn read_aligned_bytes(&mut self, length: usize) -> Option<&'a [u8]> {
+        if (self.consumed_bits & 7) != 0 {
+            return None;
+        }
+        let byte_pos = usize::try_from(self.consumed_bits / 8).ok()?;
+        let end = byte_pos.checked_add(length)?;
+        let slice = self.bytes.get(byte_pos..end)?;
+        let added_bits = u64::try_from(length).ok()?.checked_mul(8)?;
+        self.next_byte = end;
+        self.acc = 0;
+        self.buffered = 0;
+        self.consumed_bits = self.consumed_bits.checked_add(added_bits)?;
+        Some(slice)
+    }
+
+    #[inline]
+    fn byte_extent(&self) -> usize {
+        self.consumed_bits.div_ceil(8) as usize
+    }
+}
+
+/// A canonical Huffman table with a 9-bit primary lookup table and canonical
+/// fallback for 10..=15-bit codes.
 struct Huffman {
+    fast: [u16; FAST_SIZE],
     counts: [u16; 16],
     symbols: Vec<u16>,
 }
@@ -55,11 +142,59 @@ impl Huffman {
                 offs[l as usize] += 1;
             }
         }
-        Some(Huffman { counts, symbols })
+
+        // Populate the 9-bit primary LUT: entry = (len << 12) | sym.
+        let mut fast = [0u16; FAST_SIZE];
+        let mut code = 0u16;
+        let mut sym_idx = 0usize;
+        for len in 1..=FAST_BITS {
+            let count = usize::from(counts[len as usize]);
+            let entry_len = (len as u16) << 12;
+            let step = 1usize << len;
+            for _ in 0..count {
+                let sym = symbols[sym_idx];
+                sym_idx += 1;
+                let rev = (code.reverse_bits() >> (16 - len)) as usize;
+                let packed = entry_len | sym;
+                let mut slot = rev;
+                while slot < FAST_SIZE {
+                    fast[slot] = packed;
+                    slot += step;
+                }
+                code = code.wrapping_add(1);
+            }
+            code <<= 1;
+        }
+
+        Some(Huffman {
+            fast,
+            counts,
+            symbols,
+        })
     }
 
     /// Decode one symbol.
+    #[inline]
     fn decode(&self, b: &mut Bits<'_>) -> Option<u16> {
+        if b.buffered < FAST_BITS {
+            b.refill();
+        }
+        let entry = self.fast[(b.acc & FAST_MASK) as usize];
+        if entry != 0 {
+            let len = u32::from(entry >> 12);
+            if len <= b.buffered {
+                b.acc >>= len;
+                b.buffered -= len;
+                b.consumed_bits += u64::from(len);
+                return Some(entry & 0x0FFF);
+            }
+            return None;
+        }
+        self.decode_slow(b)
+    }
+
+    #[cold]
+    fn decode_slow(&self, b: &mut Bits<'_>) -> Option<u16> {
         let mut code = 0i32;
         let mut first = 0i32;
         let mut index = 0i32;
@@ -192,22 +327,7 @@ fn inflate_block(
                     return None;
                 }
                 let d = DIST_BASE[dsym] as usize + b.read(u32::from(DIST_EXTRA[dsym]))? as usize;
-                if d == 0
-                    || d > out.len()
-                    || out
-                        .len()
-                        .checked_add(len)
-                        .is_none_or(|end| end > max_output_len)
-                {
-                    return None;
-                }
-                let start = out.len() - d;
-                // Byte-at-a-time: DEFLATE back-references may overlap the
-                // output being produced (run-length encoding).
-                for k in 0..len {
-                    let byte = out[start + k];
-                    out.push(byte);
-                }
+                append_match(out, &[], d, len, max_output_len).ok()?;
             }
             _ => return None,
         }

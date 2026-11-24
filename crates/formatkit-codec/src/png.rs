@@ -196,28 +196,69 @@ fn png_limit(max_bytes: usize) -> Error {
     }
 }
 
-fn filter_scanline_into(filter_type: u8, row: &[u8], prev: &[u8], bpp: usize, out: &mut Vec<u8>) {
+fn filter_scanline_into(
+    filter_type: u8,
+    row: &[u8],
+    prev: &[u8],
+    bpp: usize,
+    out: &mut Vec<u8>,
+) -> u64 {
     out.push(filter_type);
-    for i in 0..row.len() {
-        let left = if i >= bpp { row[i - bpp] } else { 0 };
-        let up = prev[i];
-        let up_left = if i >= bpp { prev[i - bpp] } else { 0 };
-        let pred = match filter_type {
-            0 => 0,
-            1 => left,
-            2 => up,
-            3 => ((u16::from(left) + u16::from(up)) / 2) as u8,
-            _ => paeth_predictor(left, up, up_left),
-        };
-        out.push(row[i].wrapping_sub(pred));
+    let mut sum = 0u64;
+    let prefix = bpp.min(row.len());
+    match filter_type {
+        0 => {
+            out.extend_from_slice(row);
+            for &b in row {
+                sum += u64::from((b as i8).unsigned_abs());
+            }
+        }
+        1 => {
+            for &b in &row[..prefix] {
+                out.push(b);
+                sum += u64::from((b as i8).unsigned_abs());
+            }
+            for i in prefix..row.len() {
+                let v = row[i].wrapping_sub(row[i - bpp]);
+                out.push(v);
+                sum += u64::from((v as i8).unsigned_abs());
+            }
+        }
+        2 => {
+            for (&r, &u) in row.iter().zip(prev.iter()) {
+                let v = r.wrapping_sub(u);
+                out.push(v);
+                sum += u64::from((v as i8).unsigned_abs());
+            }
+        }
+        3 => {
+            for i in 0..prefix {
+                let v = row[i].wrapping_sub(prev[i] >> 1);
+                out.push(v);
+                sum += u64::from((v as i8).unsigned_abs());
+            }
+            for i in prefix..row.len() {
+                let pred = ((u16::from(row[i - bpp]) + u16::from(prev[i])) >> 1) as u8;
+                let v = row[i].wrapping_sub(pred);
+                out.push(v);
+                sum += u64::from((v as i8).unsigned_abs());
+            }
+        }
+        _ => {
+            for i in 0..prefix {
+                let v = row[i].wrapping_sub(paeth_predictor(0, prev[i], 0));
+                out.push(v);
+                sum += u64::from((v as i8).unsigned_abs());
+            }
+            for i in prefix..row.len() {
+                let pred = paeth_predictor(row[i - bpp], prev[i], prev[i - bpp]);
+                let v = row[i].wrapping_sub(pred);
+                out.push(v);
+                sum += u64::from((v as i8).unsigned_abs());
+            }
+        }
     }
-}
-
-fn signed_abs_sum(filtered: &[u8]) -> u64 {
-    filtered
-        .iter()
-        .map(|&b| u64::from((b as i8).unsigned_abs()))
-        .sum()
+    sum
 }
 
 /// Encode an RGBA8 [`Image`] into a deterministic PNG byte stream using
@@ -315,13 +356,15 @@ pub fn encode_rgba_png_with(
     let mut prev: &[u8] = &zero_row;
     for row in image.rgba.chunks_exact(row_bytes) {
         match options.filter {
-            PngFilter::None => filter_scanline_into(0, row, prev, 4, &mut raw),
+            PngFilter::None => {
+                raw.push(0);
+                raw.extend_from_slice(row);
+            }
             PngFilter::Adaptive => {
                 let mut best_sum = u64::MAX;
                 for filter_type in 0..=4u8 {
                     candidate.clear();
-                    filter_scanline_into(filter_type, row, prev, 4, &mut candidate);
-                    let sum = signed_abs_sum(&candidate[1..]);
+                    let sum = filter_scanline_into(filter_type, row, prev, 4, &mut candidate);
                     if sum < best_sum {
                         best_sum = sum;
                         std::mem::swap(&mut best, &mut candidate);
@@ -396,34 +439,37 @@ fn unfilter_scanline(
     cur: &mut [u8],
     bpp: usize,
 ) -> Result<()> {
+    let prefix = bpp.min(src.len());
     match filter_type {
         0 => {
             cur.copy_from_slice(src);
         }
         1 => {
-            for i in 0..src.len() {
-                let left = if i >= bpp { cur[i - bpp] } else { 0 };
-                cur[i] = src[i].wrapping_add(left);
+            cur[..prefix].copy_from_slice(&src[..prefix]);
+            for i in prefix..src.len() {
+                cur[i] = src[i].wrapping_add(cur[i - bpp]);
             }
         }
         2 => {
-            for i in 0..src.len() {
-                cur[i] = src[i].wrapping_add(prev[i]);
+            for ((dst, &s), &p) in cur.iter_mut().zip(src.iter()).zip(prev.iter()) {
+                *dst = s.wrapping_add(p);
             }
         }
         3 => {
-            for i in 0..src.len() {
-                let left = if i >= bpp { u16::from(cur[i - bpp]) } else { 0 };
-                let up = u16::from(prev[i]);
-                cur[i] = src[i].wrapping_add(((left + up) / 2) as u8);
+            for i in 0..prefix {
+                cur[i] = src[i].wrapping_add(prev[i] >> 1);
+            }
+            for i in prefix..src.len() {
+                let avg = ((u16::from(cur[i - bpp]) + u16::from(prev[i])) >> 1) as u8;
+                cur[i] = src[i].wrapping_add(avg);
             }
         }
         4 => {
-            for i in 0..src.len() {
-                let left = if i >= bpp { cur[i - bpp] } else { 0 };
-                let up = prev[i];
-                let up_left = if i >= bpp { prev[i - bpp] } else { 0 };
-                cur[i] = src[i].wrapping_add(paeth_predictor(left, up, up_left));
+            for i in 0..prefix {
+                cur[i] = src[i].wrapping_add(paeth_predictor(0, prev[i], 0));
+            }
+            for i in prefix..src.len() {
+                cur[i] = src[i].wrapping_add(paeth_predictor(cur[i - bpp], prev[i], prev[i - bpp]));
             }
         }
         _ => {
@@ -466,7 +512,7 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
     let mut seen_iend = false;
     let mut plte: Option<&[u8]> = None;
     let mut trns: Option<&[u8]> = None;
-    let mut idat_data = Vec::new();
+    let mut idat_data: Option<std::borrow::Cow<'_, [u8]>> = None;
 
     while pos < bytes.len() {
         if bytes.len() - pos < 12 {
@@ -646,7 +692,10 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
                     return Err(Error::Malformed("non-consecutive PNG IDAT chunks".into()));
                 }
                 seen_idat = true;
-                idat_data.extend_from_slice(data);
+                match &mut idat_data {
+                    None => idat_data = Some(std::borrow::Cow::Borrowed(data)),
+                    Some(existing) => existing.to_mut().extend_from_slice(data),
+                }
             }
             b"IEND" => {
                 if !data.is_empty() {
@@ -716,7 +765,8 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
                 value: u64::from(width) * u64::from(height),
             })?;
 
-    let inflated = crate::zlib_inflate_with_limit(&idat_data, expected_raw_len)
+    let idat_slice = idat_data.as_deref().unwrap_or(&[]);
+    let inflated = crate::zlib_inflate_with_limit(idat_slice, expected_raw_len)
         .ok_or_else(|| Error::Malformed("invalid PNG IDAT zlib stream".into()))?;
     if inflated.len() != expected_raw_len {
         return Err(Error::Malformed(format!(

@@ -755,40 +755,64 @@ fn encode_dxt(image: &Image, format: DxtFormat) -> Result<Vec<u8>> {
 
 fn encode_color_block(pixels: &[[u8; 4]; 16], punchthrough: bool) -> [u8; 8] {
     let transparent = punchthrough && pixels.iter().any(|pixel| pixel[3] < 128);
-    let mut colors = pixels
-        .iter()
-        .filter(|pixel| !transparent || pixel[3] >= 128)
-        .map(|pixel| rgb_to_565(pixel[0], pixel[1], pixel[2]))
-        .collect::<Vec<_>>();
-    colors.sort_unstable();
-    colors.dedup();
-    let (c0, c1) = if colors.is_empty() {
+    let mut colors = [0u16; 16];
+    let mut opaque = [[0u8; 4]; 16];
+    let mut color_count = 0usize;
+    for &pixel in pixels {
+        if !transparent || pixel[3] >= 128 {
+            colors[color_count] = rgb_to_565(pixel[0], pixel[1], pixel[2]);
+            opaque[color_count] = pixel;
+            color_count += 1;
+        }
+    }
+    let opaque_pixels = &opaque[..color_count];
+    colors[..color_count].sort_unstable();
+    let mut unique_len = 0usize;
+    for i in 0..color_count {
+        if unique_len == 0 || colors[i] != colors[unique_len - 1] {
+            colors[unique_len] = colors[i];
+            unique_len += 1;
+        }
+    }
+    let unique = &colors[..unique_len];
+    let usable = if transparent { 3 } else { 4 };
+    let (c0, c1) = if unique.is_empty() {
         (0, 0)
     } else {
-        let mut best = None;
-        for &a in &colors {
-            for &b in &colors {
+        let mut best_err = u32::MAX;
+        let mut best_c0 = u16::MAX;
+        let mut best_c1 = u16::MAX;
+        'outer: for i in 0..unique_len {
+            let a = unique[i];
+            for &b in &unique[i..unique_len] {
                 let (c0, c1) = order_color_endpoints(a, b, transparent);
                 let palette = color_palette(c0, c1, transparent);
-                let error = pixels
-                    .iter()
-                    .filter(|pixel| !transparent || pixel[3] >= 128)
-                    .map(|pixel| {
-                        let usable = if transparent { 3 } else { 4 };
-                        (0..usable)
-                            .map(|candidate| rgb_error(pixel, &palette[candidate]))
-                            .min()
-                            .unwrap_or(0)
-                    })
-                    .sum::<u32>();
-                let candidate = (error, c0, c1);
-                if best.is_none_or(|current| candidate < current) {
-                    best = Some(candidate);
+                let mut error = 0u32;
+                let tie_worse = (c0, c1) >= (best_c0, best_c1);
+                for pixel in opaque_pixels {
+                    let mut min_err = rgb_error(pixel, &palette[0]);
+                    for candidate in &palette[1..usable] {
+                        let e = rgb_error(pixel, candidate);
+                        if e < min_err {
+                            min_err = e;
+                        }
+                    }
+                    error += min_err;
+                    if error > best_err || (error == best_err && tie_worse) {
+                        break;
+                    }
+                }
+                if (error, c0, c1) < (best_err, best_c0, best_c1) {
+                    best_err = error;
+                    best_c0 = c0;
+                    best_c1 = c1;
+                    if best_err == 0 && transparent {
+                        break 'outer;
+                    }
                 }
             }
         }
-        let (_, c0, c1) = best.expect("nonempty DDS block endpoint set");
-        (c0, c1)
+        (best_c0, best_c1)
     };
     let mut block = [0u8; 8];
     block[..2].copy_from_slice(&c0.to_le_bytes());
@@ -799,10 +823,16 @@ fn encode_color_block(pixels: &[[u8; 4]; 16], punchthrough: bool) -> [u8; 8] {
         let choice = if transparent && pixel[3] < 128 {
             3
         } else {
-            let usable = if transparent { 3 } else { 4 };
-            (0..usable)
-                .min_by_key(|&candidate| rgb_error(pixel, &palette[candidate]))
-                .unwrap_or(0)
+            let mut best_choice = 0usize;
+            let mut best_e = rgb_error(pixel, &palette[0]);
+            for (candidate, entry) in palette.iter().enumerate().take(usable).skip(1) {
+                let e = rgb_error(pixel, entry);
+                if e < best_e {
+                    best_e = e;
+                    best_choice = candidate;
+                }
+            }
+            best_choice
         };
         indices |= (choice as u32) << (index * 2);
     }

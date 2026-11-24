@@ -86,18 +86,25 @@ pub fn morton_index(
     usize::try_from(index).ok()
 }
 
+#[inline]
+const fn spread_u32(v: u32) -> u64 {
+    let lo = spread_bits_u16(v & 0xFFFF) as u64;
+    let hi = spread_bits_u16(v >> 16) as u64;
+    lo | (hi << 32)
+}
+
 fn validate_buffer_len(
     src_len: usize,
     width: u32,
     height: u32,
     bytes_per_pixel: usize,
-) -> Result<(usize, usize), PackError> {
+) -> Result<(u32, usize, usize), PackError> {
     if bytes_per_pixel == 0 {
         return Err(PackError::InvalidLayout {
             reason: "bytes_per_pixel must be non-zero",
         });
     }
-    validate_morton_geometry(width, height)?;
+    let tile_size = validate_morton_geometry(width, height)?;
     let pixels = (width as usize)
         .checked_mul(height as usize)
         .ok_or(PackError::InvalidLayout {
@@ -114,7 +121,22 @@ fn validate_buffer_len(
             actual: src_len,
         });
     }
-    Ok((pixels, expected))
+    Ok((tile_size, pixels, expected))
+}
+
+fn build_spread_tables(tile_size: usize, order: MortonAxisOrder) -> (Vec<usize>, Vec<usize>) {
+    let (x_shift, y_shift) = match order {
+        MortonAxisOrder::XFirst => (0u32, 1u32),
+        MortonAxisOrder::YFirst => (1u32, 0u32),
+    };
+    let mut sx = Vec::with_capacity(tile_size);
+    let mut sy = Vec::with_capacity(tile_size);
+    for i in 0..tile_size {
+        let s = spread_u32(i as u32) as usize;
+        sx.push(s << x_shift);
+        sy.push(s << y_shift);
+    }
+    (sx, sy)
 }
 
 /// Convert a Morton-swizzled surface into row-major linear pixel order.
@@ -125,18 +147,71 @@ pub fn unswizzle_morton(
     bytes_per_pixel: usize,
     order: MortonAxisOrder,
 ) -> Result<Vec<u8>, PackError> {
-    let (_, expected) = validate_buffer_len(src.len(), width, height, bytes_per_pixel)?;
+    let (tile_size_u32, _, expected) =
+        validate_buffer_len(src.len(), width, height, bytes_per_pixel)?;
+    let tile_size = tile_size_u32 as usize;
+    let tile_mask = tile_size - 1;
+    let tile_shift = tile_size.trailing_zeros();
+    let tile_area = tile_size * tile_size;
+    let tiles_per_row = (width as usize) >> tile_shift;
+    let (sx, sy) = build_spread_tables(tile_size, order);
+
     let mut dst = vec![0u8; expected];
     let w = width as usize;
-    for y in 0..height {
-        for x in 0..width {
-            let m = morton_index(x, y, width, height, order).ok_or(PackError::InvalidLayout {
-                reason: "Morton index overflow",
-            })?;
-            let src_off = m * bytes_per_pixel;
-            let dst_off = ((y as usize) * w + (x as usize)) * bytes_per_pixel;
-            dst[dst_off..dst_off + bytes_per_pixel]
-                .copy_from_slice(&src[src_off..src_off + bytes_per_pixel]);
+    let h = height as usize;
+
+    match bytes_per_pixel {
+        1 => {
+            for y in 0..h {
+                let tile_row_base = (y >> tile_shift) * tiles_per_row;
+                let y_morton = sy[y & tile_mask];
+                let dst_row = &mut dst[y * w..(y + 1) * w];
+                for (x, out) in dst_row.iter_mut().enumerate() {
+                    let tile_idx = tile_row_base + (x >> tile_shift);
+                    let m = tile_idx * tile_area + (y_morton | sx[x & tile_mask]);
+                    *out = src[m];
+                }
+            }
+        }
+        2 => {
+            for y in 0..h {
+                let tile_row_base = (y >> tile_shift) * tiles_per_row;
+                let y_morton = sy[y & tile_mask];
+                let row_off = y * w * 2;
+                for x in 0..w {
+                    let tile_idx = tile_row_base + (x >> tile_shift);
+                    let m = (tile_idx * tile_area + (y_morton | sx[x & tile_mask])) * 2;
+                    let d = row_off + x * 2;
+                    dst[d] = src[m];
+                    dst[d + 1] = src[m + 1];
+                }
+            }
+        }
+        4 => {
+            for y in 0..h {
+                let tile_row_base = (y >> tile_shift) * tiles_per_row;
+                let y_morton = sy[y & tile_mask];
+                let row_off = y * w * 4;
+                for x in 0..w {
+                    let tile_idx = tile_row_base + (x >> tile_shift);
+                    let m = (tile_idx * tile_area + (y_morton | sx[x & tile_mask])) * 4;
+                    let d = row_off + x * 4;
+                    dst[d..d + 4].copy_from_slice(&src[m..m + 4]);
+                }
+            }
+        }
+        bpp => {
+            for y in 0..h {
+                let tile_row_base = (y >> tile_shift) * tiles_per_row;
+                let y_morton = sy[y & tile_mask];
+                let row_off = y * w * bpp;
+                for x in 0..w {
+                    let tile_idx = tile_row_base + (x >> tile_shift);
+                    let m = (tile_idx * tile_area + (y_morton | sx[x & tile_mask])) * bpp;
+                    let d = row_off + x * bpp;
+                    dst[d..d + bpp].copy_from_slice(&src[m..m + bpp]);
+                }
+            }
         }
     }
     Ok(dst)
@@ -150,18 +225,71 @@ pub fn swizzle_morton(
     bytes_per_pixel: usize,
     order: MortonAxisOrder,
 ) -> Result<Vec<u8>, PackError> {
-    let (_, expected) = validate_buffer_len(src.len(), width, height, bytes_per_pixel)?;
+    let (tile_size_u32, _, expected) =
+        validate_buffer_len(src.len(), width, height, bytes_per_pixel)?;
+    let tile_size = tile_size_u32 as usize;
+    let tile_mask = tile_size - 1;
+    let tile_shift = tile_size.trailing_zeros();
+    let tile_area = tile_size * tile_size;
+    let tiles_per_row = (width as usize) >> tile_shift;
+    let (sx, sy) = build_spread_tables(tile_size, order);
+
     let mut dst = vec![0u8; expected];
     let w = width as usize;
-    for y in 0..height {
-        for x in 0..width {
-            let m = morton_index(x, y, width, height, order).ok_or(PackError::InvalidLayout {
-                reason: "Morton index overflow",
-            })?;
-            let src_off = ((y as usize) * w + (x as usize)) * bytes_per_pixel;
-            let dst_off = m * bytes_per_pixel;
-            dst[dst_off..dst_off + bytes_per_pixel]
-                .copy_from_slice(&src[src_off..src_off + bytes_per_pixel]);
+    let h = height as usize;
+
+    match bytes_per_pixel {
+        1 => {
+            for y in 0..h {
+                let tile_row_base = (y >> tile_shift) * tiles_per_row;
+                let y_morton = sy[y & tile_mask];
+                let src_row = &src[y * w..(y + 1) * w];
+                for (x, &px) in src_row.iter().enumerate() {
+                    let tile_idx = tile_row_base + (x >> tile_shift);
+                    let m = tile_idx * tile_area + (y_morton | sx[x & tile_mask]);
+                    dst[m] = px;
+                }
+            }
+        }
+        2 => {
+            for y in 0..h {
+                let tile_row_base = (y >> tile_shift) * tiles_per_row;
+                let y_morton = sy[y & tile_mask];
+                let row_off = y * w * 2;
+                for x in 0..w {
+                    let tile_idx = tile_row_base + (x >> tile_shift);
+                    let m = (tile_idx * tile_area + (y_morton | sx[x & tile_mask])) * 2;
+                    let s = row_off + x * 2;
+                    dst[m] = src[s];
+                    dst[m + 1] = src[s + 1];
+                }
+            }
+        }
+        4 => {
+            for y in 0..h {
+                let tile_row_base = (y >> tile_shift) * tiles_per_row;
+                let y_morton = sy[y & tile_mask];
+                let row_off = y * w * 4;
+                for x in 0..w {
+                    let tile_idx = tile_row_base + (x >> tile_shift);
+                    let m = (tile_idx * tile_area + (y_morton | sx[x & tile_mask])) * 4;
+                    let s = row_off + x * 4;
+                    dst[m..m + 4].copy_from_slice(&src[s..s + 4]);
+                }
+            }
+        }
+        bpp => {
+            for y in 0..h {
+                let tile_row_base = (y >> tile_shift) * tiles_per_row;
+                let y_morton = sy[y & tile_mask];
+                let row_off = y * w * bpp;
+                for x in 0..w {
+                    let tile_idx = tile_row_base + (x >> tile_shift);
+                    let m = (tile_idx * tile_area + (y_morton | sx[x & tile_mask])) * bpp;
+                    let s = row_off + x * bpp;
+                    dst[m..m + bpp].copy_from_slice(&src[s..s + bpp]);
+                }
+            }
         }
     }
     Ok(dst)

@@ -61,6 +61,55 @@ pub const IMA_INDEX_TABLE: [i8; 16] = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -
 /// Largest valid step index.
 pub const IMA_MAX_STEP_INDEX: u8 = 88;
 
+const fn make_ima_delta_table() -> [[i32; 16]; 89] {
+    let mut table = [[0i32; 16]; 89];
+    let mut idx = 0usize;
+    while idx < 89 {
+        let step = IMA_STEP_TABLE[idx] as i32;
+        let mut code = 0usize;
+        while code < 16 {
+            let mut diff = step >> 3;
+            if code & 1 != 0 {
+                diff += step >> 2;
+            }
+            if code & 2 != 0 {
+                diff += step >> 1;
+            }
+            if code & 4 != 0 {
+                diff += step;
+            }
+            table[idx][code] = if code & 8 != 0 { -diff } else { diff };
+            code += 1;
+        }
+        idx += 1;
+    }
+    table
+}
+
+const fn make_ima_next_index_table() -> [[u8; 16]; 89] {
+    let mut table = [[0u8; 16]; 89];
+    let mut idx = 0usize;
+    while idx < 89 {
+        let mut code = 0usize;
+        while code < 16 {
+            let next = idx as i32 + IMA_INDEX_TABLE[code] as i32;
+            table[idx][code] = if next < 0 {
+                0
+            } else if next > IMA_MAX_STEP_INDEX as i32 {
+                IMA_MAX_STEP_INDEX
+            } else {
+                next as u8
+            };
+            code += 1;
+        }
+        idx += 1;
+    }
+    table
+}
+
+const IMA_DELTA_TABLE: [[i32; 16]; 89] = make_ima_delta_table();
+const IMA_NEXT_INDEX_TABLE: [[u8; 16]; 89] = make_ima_next_index_table();
+
 /// Which half of each code byte holds the earlier of its two 4-bit codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImaNibbleOrder {
@@ -117,25 +166,13 @@ impl ImaAdpcmState {
     ///
     /// A state built with an out-of-range public `step_index` is clamped to
     /// `88` before use.
+    #[inline]
     pub fn decode_code(&mut self, code: u8) -> i16 {
-        let code = code & 0x0f;
-        let step = i32::from(IMA_STEP_TABLE[usize::from(self.step_index.min(IMA_MAX_STEP_INDEX))]);
-        let mut diff = step >> 3;
-        if code & 1 != 0 {
-            diff += step >> 2;
-        }
-        if code & 2 != 0 {
-            diff += step >> 1;
-        }
-        if code & 4 != 0 {
-            diff += step;
-        }
-        let p = i32::from(self.predictor);
-        let p = if code & 8 != 0 { p - diff } else { p + diff };
+        let code = usize::from(code & 0x0f);
+        let idx = usize::from(self.step_index.min(IMA_MAX_STEP_INDEX));
+        let p = i32::from(self.predictor) + IMA_DELTA_TABLE[idx][code];
         self.predictor = p.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
-        let index = i32::from(self.step_index.min(IMA_MAX_STEP_INDEX))
-            + i32::from(IMA_INDEX_TABLE[usize::from(code)]);
-        self.step_index = index.clamp(0, i32::from(IMA_MAX_STEP_INDEX)) as u8;
+        self.step_index = IMA_NEXT_INDEX_TABLE[idx][code];
         self.predictor
     }
 }

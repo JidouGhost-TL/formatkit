@@ -1,6 +1,7 @@
 //! Deterministic palette lookup, ramp generation, and median-cut quantization.
 
-use std::collections::BTreeMap;
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BinaryHeap, HashMap};
 
 use crate::PackError;
 
@@ -80,13 +81,19 @@ pub fn grayscale_palette(count: usize) -> Vec<[u8; 4]> {
 #[derive(Debug, Clone)]
 struct ColorBox {
     entries: Vec<([u8; 4], usize)>,
+    split_ch: usize,
+    range: u8,
+    total_count: usize,
+    seq: usize,
 }
 
 impl ColorBox {
-    fn channel_span(&self, channel_count: usize) -> (usize, u8) {
+    fn new(entries: Vec<([u8; 4], usize)>, channel_count: usize, seq: usize) -> Self {
         let mut min_c = [255u8; 4];
         let mut max_c = [0u8; 4];
-        for &(c, _) in &self.entries {
+        let mut total_count = 0usize;
+        for &(c, count) in &entries {
+            total_count += count;
             for ch in 0..channel_count {
                 if c[ch] < min_c[ch] {
                     min_c[ch] = c[ch];
@@ -96,20 +103,22 @@ impl ColorBox {
                 }
             }
         }
-        let mut best_ch = 0usize;
-        let mut best_range = 0u8;
+        let mut split_ch = 0usize;
+        let mut range = 0u8;
         for ch in 0..channel_count {
-            let range = max_c[ch] - min_c[ch];
-            if range > best_range {
-                best_range = range;
-                best_ch = ch;
+            let r = max_c[ch].saturating_sub(min_c[ch]);
+            if r > range {
+                range = r;
+                split_ch = ch;
             }
         }
-        (best_ch, best_range)
-    }
-
-    fn total_count(&self) -> usize {
-        self.entries.iter().map(|&(_, n)| n).sum()
+        Self {
+            entries,
+            split_ch,
+            range,
+            total_count,
+            seq,
+        }
     }
 
     fn average_color(&self) -> [u8; 4] {
@@ -132,6 +141,31 @@ impl ColorBox {
             ((sums[2] + half) / total) as u8,
             ((sums[3] + half) / total) as u8,
         ]
+    }
+}
+
+impl PartialEq for ColorBox {
+    fn eq(&self, other: &Self) -> bool {
+        (self.range, self.total_count, Reverse(self.seq))
+            == (other.range, other.total_count, Reverse(other.seq))
+    }
+}
+
+impl Eq for ColorBox {}
+
+impl PartialOrd for ColorBox {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ColorBox {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.range, self.total_count, Reverse(self.seq)).cmp(&(
+            other.range,
+            other.total_count,
+            Reverse(other.seq),
+        ))
     }
 }
 
@@ -164,74 +198,109 @@ pub fn quantize_rgba(
         return Ok((Vec::new(), Vec::new()));
     }
 
-    let mut histogram: BTreeMap<[u8; 4], usize> = BTreeMap::new();
+    let mut histogram: HashMap<[u8; 4], usize> = HashMap::new();
     for px in rgba.chunks_exact(4) {
         let color = [px[0], px[1], px[2], px[3]];
         *histogram.entry(color).or_insert(0) += 1;
     }
 
-    let palette: Vec<[u8; 4]> = if histogram.len() <= max_colors {
-        histogram.keys().copied().collect()
-    } else {
-        let channel_count = match metric {
-            PaletteDistanceMetric::Rgb => 3,
-            PaletteDistanceMetric::Rgba => 4,
-        };
-        let mut boxes = vec![ColorBox {
-            entries: histogram.into_iter().collect(),
-        }];
-        while boxes.len() < max_colors {
-            let mut pick: Option<(usize, u8, usize, usize)> = None;
-            for (idx, b) in boxes.iter().enumerate() {
-                if b.entries.len() <= 1 {
-                    continue;
+    let pixel_count = rgba.len() / 4;
+    if histogram.len() <= max_colors {
+        let mut palette: Vec<[u8; 4]> = histogram.keys().copied().collect();
+        palette.sort_unstable();
+        let mut indices = Vec::with_capacity(pixel_count);
+        match metric {
+            PaletteDistanceMetric::Rgba => {
+                let mut color_to_idx: HashMap<[u8; 4], u8> = HashMap::with_capacity(palette.len());
+                for (idx, &c) in palette.iter().enumerate() {
+                    color_to_idx.insert(c, idx as u8);
                 }
-                let (ch, range) = b.channel_span(channel_count);
-                let count = b.total_count();
-                let better = match pick {
-                    None => true,
-                    Some((_, best_range, best_count, _)) => {
-                        range > best_range || (range == best_range && count > best_count)
-                    }
-                };
-                if better {
-                    pick = Some((idx, range, count, ch));
+                for px in rgba.chunks_exact(4) {
+                    indices.push(color_to_idx[&[px[0], px[1], px[2], px[3]]]);
                 }
             }
-            let Some((box_idx, _, total_count, split_ch)) = pick else {
-                break;
-            };
-            let mut chosen = boxes.swap_remove(box_idx);
-            chosen
-                .entries
-                .sort_by(|(a, _), (b, _)| a[split_ch].cmp(&b[split_ch]).then_with(|| a.cmp(b)));
-
-            let half = total_count / 2;
-            let mut acc = 0usize;
-            let mut split_at = 1usize;
-            for (i, &(_, count)) in chosen.entries.iter().enumerate() {
-                acc += count;
-                if acc >= half {
-                    split_at = (i + 1).clamp(1, chosen.entries.len() - 1);
-                    break;
+            PaletteDistanceMetric::Rgb => {
+                let mut rgb_to_idx: HashMap<[u8; 3], u8> = HashMap::with_capacity(palette.len());
+                for (idx, &c) in palette.iter().enumerate() {
+                    rgb_to_idx.entry([c[0], c[1], c[2]]).or_insert(idx as u8);
+                }
+                for px in rgba.chunks_exact(4) {
+                    indices.push(rgb_to_idx[&[px[0], px[1], px[2]]]);
                 }
             }
-            let right = chosen.entries.split_off(split_at);
-            boxes.push(chosen);
-            boxes.push(ColorBox { entries: right });
         }
+        return Ok((palette, indices));
+    }
 
-        let mut pal: Vec<[u8; 4]> = boxes.iter().map(ColorBox::average_color).collect();
-        pal.sort();
-        pal.dedup();
-        pal
+    let unique_count = histogram.len();
+    let channel_count = match metric {
+        PaletteDistanceMetric::Rgb => 3,
+        PaletteDistanceMetric::Rgba => 4,
     };
+    let mut next_seq = 0usize;
+    let initial = ColorBox::new(histogram.into_iter().collect(), channel_count, next_seq);
+    next_seq += 1;
 
-    let mut indices = Vec::with_capacity(rgba.len() / 4);
+    let mut heap = BinaryHeap::new();
+    let mut done = Vec::new();
+    if initial.entries.len() > 1 {
+        heap.push(initial);
+    } else {
+        done.push(initial);
+    }
+
+    while heap.len() + done.len() < max_colors {
+        let Some(mut chosen) = heap.pop() else {
+            break;
+        };
+        let split_ch = chosen.split_ch;
+        let total_count = chosen.total_count;
+        chosen.entries.sort_unstable_by(|(a, _), (b, _)| {
+            a[split_ch].cmp(&b[split_ch]).then_with(|| a.cmp(b))
+        });
+
+        let half = total_count / 2;
+        let mut acc = 0usize;
+        let mut split_at = 1usize;
+        for (i, &(_, count)) in chosen.entries.iter().enumerate() {
+            acc += count;
+            if acc >= half {
+                split_at = (i + 1).clamp(1, chosen.entries.len() - 1);
+                break;
+            }
+        }
+        let right_entries = chosen.entries.split_off(split_at);
+        let left_box = ColorBox::new(chosen.entries, channel_count, next_seq);
+        next_seq += 1;
+        let right_box = ColorBox::new(right_entries, channel_count, next_seq);
+        next_seq += 1;
+
+        for b in [left_box, right_box] {
+            if b.entries.len() > 1 {
+                heap.push(b);
+            } else {
+                done.push(b);
+            }
+        }
+    }
+
+    done.extend(heap);
+    let mut palette: Vec<[u8; 4]> = done.iter().map(ColorBox::average_color).collect();
+    palette.sort_unstable();
+    palette.dedup();
+
+    let mut color_to_idx: HashMap<[u8; 4], u8> = HashMap::with_capacity(unique_count);
+    for b in done {
+        for (color, _) in b.entries {
+            let idx = nearest_palette_index(color, &palette, metric).unwrap_or(0) as u8;
+            color_to_idx.insert(color, idx);
+        }
+    }
+
+    let mut indices = Vec::with_capacity(pixel_count);
     for px in rgba.chunks_exact(4) {
         let color = [px[0], px[1], px[2], px[3]];
-        let idx = nearest_palette_index(color, &palette, metric).unwrap_or(0);
-        indices.push(idx as u8);
+        indices.push(color_to_idx[&color]);
     }
     Ok((palette, indices))
 }

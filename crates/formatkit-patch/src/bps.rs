@@ -353,13 +353,27 @@ impl BpsPatch {
                         )));
                     }
 
-                    // Byte-by-byte copy preserves overlapping self-copy (RLE) semantics.
-                    for _ in 0..*length {
+                    let distance = output_offset - t_pos;
+                    let len = *length;
+                    if distance == 1 {
                         let byte = target[t_pos];
-                        target[output_offset] = byte;
-                        output_offset += 1;
-                        t_pos += 1;
+                        target[output_offset..out_end].fill(byte);
+                    } else if distance >= len {
+                        target.copy_within(t_pos..t_pos + len, output_offset);
+                    } else {
+                        let mut copied = distance;
+                        target.copy_within(t_pos..t_pos + distance, output_offset);
+                        while copied < len {
+                            let chunk = copied.min(len - copied);
+                            target.copy_within(
+                                output_offset..output_offset + chunk,
+                                output_offset + copied,
+                            );
+                            copied += chunk;
+                        }
                     }
+                    output_offset = out_end;
+                    t_pos += len;
                     target_relative_offset = i64::try_from(t_pos)
                         .map_err(|_| Error::Malformed("BPS target cursor overflow".into()))?;
                 }

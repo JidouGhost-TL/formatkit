@@ -525,8 +525,8 @@
     {
       "crate": "formatkit-codec",
       "module": "sliding_window",
-      "path": "formatkit_codec::sliding_window::{append_match, find_longest_match, RingBuffer, MatchError}",
-      "summary": "Checked overlapping back-reference copy, longest-match search, and explicit ring-buffer primitives.",
+      "path": "formatkit_codec::sliding_window::{append_match, find_longest_match, HashMatcher, RingBuffer, MatchError}",
+      "summary": "Checked overlapping back-reference copy, longest-match search, hash-chain match finder, and explicit ring-buffer primitives.",
       "domain_aliases": ["sliding window", "ring buffer", "LZ77", "LZSS", "back-reference copy", "overlapping copy"],
       "use_when": "Building a custom LZ codec that needs checked overlapping copies, match search, or a ring buffer.",
       "avoid_when": "okumura, flag_lzss, or counted_lsb already matches the stream's control loop.",

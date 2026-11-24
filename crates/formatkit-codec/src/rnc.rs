@@ -78,13 +78,7 @@ fn match_offset(input: &mut MsbInterleavedBitReader<'_>) -> Option<usize> {
 }
 
 fn append_match(output: &mut Vec<u8>, distance: usize, count: usize, target: usize) -> Option<()> {
-    if distance == 0 || distance > output.len() || count > target.checked_sub(output.len())? {
-        return None;
-    }
-    for _ in 0..count {
-        output.push(output[output.len() - distance]);
-    }
-    Some(())
+    crate::sliding_window::append_match(output, &[], distance, count, target).ok()
 }
 
 /// Decode a complete RNC ProPack method-2 envelope.

@@ -5,26 +5,37 @@ use super::{
 use crate::json::Json;
 
 impl GltfBuilder {
-    /// Append `data` at the next 4-byte-aligned offset and record a buffer
-    /// view over it. `target` is set for vertex/index data (`ARRAY_BUFFER` /
-    /// `ELEMENT_ARRAY_BUFFER`) and omitted for image and animation data.
-    /// Returns the view index.
-    pub(super) fn add_view(&mut self, data: &[u8], target: Option<u64>) -> usize {
+    fn add_view_with(
+        &mut self,
+        byte_len: usize,
+        target: Option<u64>,
+        write_fn: impl FnOnce(&mut Vec<u8>),
+    ) -> usize {
         while !self.buffer.len().is_multiple_of(4) {
             self.buffer.push(0);
         }
         let offset = self.buffer.len();
-        self.buffer.extend_from_slice(data);
+        self.buffer.reserve(byte_len);
+        write_fn(&mut self.buffer);
+        debug_assert_eq!(self.buffer.len() - offset, byte_len);
         let mut fields = vec![
             ("buffer", Json::UInt(0)),
             ("byteOffset", Json::UInt(offset as u64)),
-            ("byteLength", Json::UInt(data.len() as u64)),
+            ("byteLength", Json::UInt(byte_len as u64)),
         ];
         if let Some(t) = target {
             fields.push(("target", Json::UInt(t)));
         }
         self.buffer_views.push(Json::Obj(fields));
         self.buffer_views.len() - 1
+    }
+
+    /// Append `data` at the next 4-byte-aligned offset and record a buffer
+    /// view over it. `target` is set for vertex/index data (`ARRAY_BUFFER` /
+    /// `ELEMENT_ARRAY_BUFFER`) and omitted for image and animation data.
+    /// Returns the view index.
+    pub(super) fn add_view(&mut self, data: &[u8], target: Option<u64>) -> usize {
+        self.add_view_with(data.len(), target, |buf| buf.extend_from_slice(data))
     }
 
     fn add_accessor(
@@ -52,44 +63,56 @@ impl GltfBuilder {
 
     /// A `VEC3` float POSITION accessor, with the glTF-required `min`/`max`.
     pub(super) fn add_positions(&mut self, data: &[[f32; 3]]) -> usize {
-        let view = self.add_view(&flatten3(data), Some(ARRAY_BUFFER));
+        let view = self.add_view_with(data.len() * 12, Some(ARRAY_BUFFER), |buf| {
+            for v in data {
+                for c in v {
+                    buf.extend_from_slice(&c.to_le_bytes());
+                }
+            }
+        });
         let (min, max) = bounds3(data);
         self.add_accessor(view, FLOAT, data.len(), "VEC3", Some((min, max)))
     }
 
     pub(super) fn add_vec3(&mut self, data: &[[f32; 3]], target: Option<u64>) -> usize {
-        let view = self.add_view(&flatten3(data), target);
+        let view = self.add_view_with(data.len() * 12, target, |buf| {
+            for v in data {
+                for c in v {
+                    buf.extend_from_slice(&c.to_le_bytes());
+                }
+            }
+        });
         self.add_accessor(view, FLOAT, data.len(), "VEC3", None)
     }
 
     pub(super) fn add_vec2(&mut self, data: &[[f32; 2]], target: Option<u64>) -> usize {
-        let mut bytes = Vec::with_capacity(data.len() * 8);
-        for v in data {
-            for c in v {
-                bytes.extend_from_slice(&c.to_le_bytes());
+        let view = self.add_view_with(data.len() * 8, target, |buf| {
+            for v in data {
+                for c in v {
+                    buf.extend_from_slice(&c.to_le_bytes());
+                }
             }
-        }
-        let view = self.add_view(&bytes, target);
+        });
         self.add_accessor(view, FLOAT, data.len(), "VEC2", None)
     }
 
     pub(super) fn add_vec4(&mut self, data: &[[f32; 4]], target: Option<u64>) -> usize {
-        let mut bytes = Vec::with_capacity(data.len() * 16);
-        for v in data {
-            for c in v {
-                bytes.extend_from_slice(&c.to_le_bytes());
+        let view = self.add_view_with(data.len() * 16, target, |buf| {
+            for v in data {
+                for c in v {
+                    buf.extend_from_slice(&c.to_le_bytes());
+                }
             }
-        }
-        let view = self.add_view(&bytes, target);
+        });
         self.add_accessor(view, FLOAT, data.len(), "VEC4", None)
     }
 
     pub(super) fn add_indices(&mut self, data: &[u32]) -> usize {
-        let mut bytes = Vec::with_capacity(data.len() * 4);
-        for &i in data {
-            bytes.extend_from_slice(&i.to_le_bytes());
-        }
-        let view = self.add_view(&bytes, Some(ELEMENT_ARRAY_BUFFER));
+        let view = self.add_view_with(data.len() * 4, Some(ELEMENT_ARRAY_BUFFER), |buf| {
+            for &i in data {
+                buf.extend_from_slice(&i.to_le_bytes());
+            }
+        });
         self.add_accessor(view, UNSIGNED_INT, data.len(), "SCALAR", None)
     }
 
@@ -105,11 +128,11 @@ impl GltfBuilder {
     /// rounding is applied.
     pub fn try_add_scalar_times(&mut self, times: &[f32]) -> Result<usize, GltfError> {
         super::animation::validate_times(times)?;
-        let mut bytes = Vec::with_capacity(times.len() * 4);
-        for &t in times {
-            bytes.extend_from_slice(&t.to_le_bytes());
-        }
-        let view = self.add_view(&bytes, None);
+        let view = self.add_view_with(times.len() * 4, None, |buf| {
+            for &t in times {
+                buf.extend_from_slice(&t.to_le_bytes());
+            }
+        });
         let min = times.iter().cloned().fold(f32::INFINITY, f32::min);
         let max = times.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         Ok(self.add_accessor(
@@ -133,37 +156,27 @@ impl GltfBuilder {
 
     /// An unsigned-short `VEC4` accessor (`JOINTS_0` skin joint indices).
     pub(super) fn add_u16x4(&mut self, data: &[[u16; 4]]) -> usize {
-        let mut bytes = Vec::with_capacity(data.len() * 8);
-        for v in data {
-            for c in v {
-                bytes.extend_from_slice(&c.to_le_bytes());
+        let view = self.add_view_with(data.len() * 8, Some(ARRAY_BUFFER), |buf| {
+            for v in data {
+                for c in v {
+                    buf.extend_from_slice(&c.to_le_bytes());
+                }
             }
-        }
-        let view = self.add_view(&bytes, Some(ARRAY_BUFFER));
+        });
         self.add_accessor(view, UNSIGNED_SHORT, data.len(), "VEC4", None)
     }
 
     /// A float `MAT4` accessor (skin inverse-bind matrices), column-major.
     pub(super) fn add_mat4(&mut self, data: &[[f32; 16]]) -> usize {
-        let mut bytes = Vec::with_capacity(data.len() * 64);
-        for m in data {
-            for c in m {
-                bytes.extend_from_slice(&c.to_le_bytes());
+        let view = self.add_view_with(data.len() * 64, None, |buf| {
+            for m in data {
+                for c in m {
+                    buf.extend_from_slice(&c.to_le_bytes());
+                }
             }
-        }
-        let view = self.add_view(&bytes, None);
+        });
         self.add_accessor(view, FLOAT, data.len(), "MAT4", None)
     }
-}
-
-fn flatten3(data: &[[f32; 3]]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(data.len() * 12);
-    for v in data {
-        for c in v {
-            bytes.extend_from_slice(&c.to_le_bytes());
-        }
-    }
-    bytes
 }
 
 fn bounds3(data: &[[f32; 3]]) -> (Vec<f32>, Vec<f32>) {

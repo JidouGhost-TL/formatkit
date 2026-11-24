@@ -785,6 +785,95 @@ impl Charmap {
         })
     }
 
+    /// Decode bytes into UTF-8 text using default limits without building a
+    /// per-token vector.
+    pub fn decode_text(&self, bytes: &[u8]) -> Result<String> {
+        self.decode_text_with_limits(bytes, CharmapLimits::default())
+    }
+
+    /// Decode bytes into UTF-8 text with explicit resource limits without
+    /// allocating per-token buffers.
+    pub fn decode_text_with_limits(&self, bytes: &[u8], limits: CharmapLimits) -> Result<String> {
+        check_limit(
+            "charmap decode input bytes",
+            bytes.len(),
+            limits.max_input_bytes,
+        )?;
+        let mut pos = 0usize;
+        let mut page = self.initial_page;
+        let mut text = String::new();
+        let mut token_count = 0usize;
+
+        while pos < bytes.len() {
+            token_count = token_count.saturating_add(1);
+            check_limit("charmap decode tokens", token_count, limits.max_tokens)?;
+            let matched = self
+                .byte_trie
+                .longest_match(&bytes[pos..], page, &self.entries)
+                .ok_or_else(|| {
+                    Error::Malformed(format!(
+                        "unmapped charmap byte {:#04x} at offset {pos:#x}, page {page}",
+                        bytes[pos]
+                    ))
+                })?;
+
+            match matched {
+                ByteMatch::Entry { index, len } => {
+                    let entry = &self.entries[index];
+                    check_limit(
+                        "charmap decoded text bytes",
+                        text.len().saturating_add(entry.text.len()),
+                        limits.max_output_bytes,
+                    )?;
+                    text.push_str(&entry.text);
+                    pos += len;
+                }
+                ByteMatch::Control { index, len } => {
+                    let ctrl = &self.controls[index];
+                    let total_len = len
+                        .checked_add(ctrl.arg_bytes)
+                        .ok_or_else(|| Error::Malformed("control length overflow".into()))?;
+                    let end = pos
+                        .checked_add(total_len)
+                        .ok_or_else(|| Error::Malformed("control end offset overflow".into()))?;
+                    if end > bytes.len() {
+                        return Err(Error::Truncated {
+                            offset: pos + len,
+                            needed: ctrl.arg_bytes,
+                            available: bytes.len().saturating_sub(pos + len),
+                        });
+                    }
+                    let args = &bytes[pos + len..end];
+                    if ctrl.arg_bytes == 0 {
+                        check_limit(
+                            "charmap decoded text bytes",
+                            text.len().saturating_add(ctrl.text.len()),
+                            limits.max_output_bytes,
+                        )?;
+                        text.push_str(&ctrl.text);
+                    } else {
+                        let rendered = ctrl.render(args);
+                        check_limit(
+                            "charmap decoded text bytes",
+                            text.len().saturating_add(rendered.len()),
+                            limits.max_output_bytes,
+                        )?;
+                        text.push_str(&rendered);
+                    }
+                    pos = end;
+                    if let Some(next_page) = ctrl.set_page {
+                        page = next_page;
+                    }
+                    if ctrl.ends {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(text)
+    }
+
     /// Encode UTF-8 text using default limits.
     pub fn encode(&self, text: &str) -> Result<Vec<u8>> {
         self.encode_with_limits(text, CharmapLimits::default())
@@ -797,6 +886,19 @@ impl Charmap {
     /// and appends a silent terminating control (`ends == true`, empty `text`,
     /// `arg_bytes == 0`) if the encoded stream is not already terminated.
     pub fn encode_with_limits(&self, text: &str, limits: CharmapLimits) -> Result<Vec<u8>> {
+        enum EncodeMatch<'a> {
+            Entry {
+                switch: Option<&'a [u8]>,
+                bytes: &'a [u8],
+            },
+            Control(&'a [u8]),
+            ParamControl {
+                opcode: &'a [u8],
+                hex_slice: &'a str,
+                arg_bytes: usize,
+            },
+        }
+
         check_limit(
             "charmap encode input bytes",
             text.len(),
@@ -813,7 +915,7 @@ impl Charmap {
             check_limit("charmap encode tokens", token_count, limits.max_tokens)?;
 
             let mut best_len = 0usize;
-            let mut best_bytes: Option<Vec<u8>> = None;
+            let mut best_match: Option<EncodeMatch<'_>> = None;
             let mut best_page: Option<u8> = None;
             let mut best_ends = false;
 
@@ -821,9 +923,8 @@ impl Charmap {
                 match matched {
                     TextMatch::Entry { index, len } => {
                         let entry = &self.entries[index];
-                        let mut chunk = Vec::new();
-                        if let Some(target_page) = entry.page.filter(|&p| p != page) {
-                            let switch = self
+                        let switch = if let Some(target_page) = entry.page.filter(|&p| p != page) {
+                            let ctrl = self
                                 .controls
                                 .iter()
                                 .find(|c| {
@@ -836,17 +937,21 @@ impl Charmap {
                                         "charmap page {target_page} has no silent switch control"
                                     ))
                                 })?;
-                            chunk.extend_from_slice(&switch.bytes);
-                        }
-                        chunk.extend_from_slice(&entry.bytes);
+                            Some(ctrl.bytes.as_slice())
+                        } else {
+                            None
+                        };
                         best_len = len;
-                        best_bytes = Some(chunk);
+                        best_match = Some(EncodeMatch::Entry {
+                            switch,
+                            bytes: entry.bytes.as_slice(),
+                        });
                         best_page = entry.page;
                     }
                     TextMatch::Control { index, len } => {
                         let ctrl = &self.controls[index];
                         best_len = len;
-                        best_bytes = Some(ctrl.bytes.clone());
+                        best_match = Some(EncodeMatch::Control(ctrl.bytes.as_slice()));
                         best_page = ctrl.set_page;
                         best_ends = ctrl.ends;
                     }
@@ -866,34 +971,70 @@ impl Charmap {
                 if !after_hex.starts_with(&param.suffix) {
                     continue;
                 }
-                let Ok(arg_bytes) = parse_hex_bytes(hex_slice) else {
+                if hex_slice.is_empty()
+                    || hex_slice.len() > 32
+                    || !hex_slice.len().is_multiple_of(2)
+                    || !hex_slice.bytes().all(|b| b.is_ascii_hexdigit())
+                {
                     continue;
-                };
+                }
                 let used = param.prefix.len() + hex_len + param.suffix.len();
                 if used > best_len {
-                    let mut chunk = Vec::with_capacity(ctrl.bytes.len() + arg_bytes.len());
-                    chunk.extend_from_slice(&ctrl.bytes);
-                    chunk.extend_from_slice(&arg_bytes);
                     best_len = used;
-                    best_bytes = Some(chunk);
+                    best_match = Some(EncodeMatch::ParamControl {
+                        opcode: ctrl.bytes.as_slice(),
+                        hex_slice,
+                        arg_bytes: ctrl.arg_bytes,
+                    });
                     best_page = ctrl.set_page;
                     best_ends = ctrl.ends;
                 }
             }
 
-            let Some(chunk) = best_bytes else {
+            let Some(chosen) = best_match else {
                 let offset = text.len() - remaining.len();
                 return Err(Error::Malformed(format!(
                     "unencodable charmap text at UTF-8 offset {offset}"
                 )));
             };
 
+            let added = match chosen {
+                EncodeMatch::Entry { switch, bytes } => {
+                    switch.map_or(0, <[u8]>::len).saturating_add(bytes.len())
+                }
+                EncodeMatch::Control(bytes) => bytes.len(),
+                EncodeMatch::ParamControl {
+                    opcode, arg_bytes, ..
+                } => opcode.len().saturating_add(arg_bytes),
+            };
             check_limit(
                 "charmap encoded output bytes",
-                out.len().saturating_add(chunk.len()),
+                out.len().saturating_add(added),
                 limits.max_output_bytes,
             )?;
-            out.extend_from_slice(&chunk);
+
+            match chosen {
+                EncodeMatch::Entry { switch, bytes } => {
+                    if let Some(sw) = switch {
+                        out.extend_from_slice(sw);
+                    }
+                    out.extend_from_slice(bytes);
+                }
+                EncodeMatch::Control(bytes) => {
+                    out.extend_from_slice(bytes);
+                }
+                EncodeMatch::ParamControl {
+                    opcode, hex_slice, ..
+                } => {
+                    out.extend_from_slice(opcode);
+                    for pair in hex_slice.as_bytes().chunks_exact(2) {
+                        let hi = char::from(pair[0]).to_digit(16).unwrap();
+                        let lo = char::from(pair[1]).to_digit(16).unwrap();
+                        out.push(((hi << 4) | lo) as u8);
+                    }
+                }
+            }
+
             if let Some(next_page) = best_page {
                 page = next_page;
             }
@@ -968,6 +1109,7 @@ $F0,1=[COLOR:{args}]
         let raw = [0x01, 0x02, 0x00, 0x01, 0xFE, 0xF0, 0x2A, 0xFF, 0x99];
         let decoded = map.decode(&raw).unwrap();
         assert_eq!(decoded.text, "AB_WORD A\n[COLOR:2a][END]");
+        assert_eq!(map.decode_text(&raw).unwrap(), decoded.text);
         assert_eq!(decoded.consumed, 8);
         assert!(decoded.terminated);
         assert_eq!(decoded.tokens.len(), 6);

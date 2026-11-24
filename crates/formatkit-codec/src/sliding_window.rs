@@ -37,13 +37,39 @@ pub fn append_match(
     if distance == 0 || distance.saturating_sub(out.len()) > history.len() {
         return Err(MatchError::Distance);
     }
-    for _ in 0..count {
-        let byte = if let Some(index) = out.len().checked_sub(distance) {
-            out[index]
-        } else {
-            history[history.len() - (distance - out.len())]
-        };
-        out.push(byte);
+    if count == 0 {
+        return Ok(());
+    }
+
+    out.reserve(count);
+    let mut remaining = count;
+
+    if distance > out.len() {
+        let deficit = distance - out.len();
+        let from_hist = deficit.min(remaining);
+        let hist_start = history.len() - deficit;
+        out.extend_from_slice(&history[hist_start..hist_start + from_hist]);
+        remaining -= from_hist;
+        if remaining == 0 {
+            return Ok(());
+        }
+    }
+
+    if distance == 1 {
+        let byte = out[out.len() - 1];
+        out.resize(out.len() + remaining, byte);
+    } else if distance >= remaining {
+        let start = out.len() - distance;
+        out.extend_from_within(start..start + remaining);
+    } else {
+        let start = out.len() - distance;
+        let mut copied = distance;
+        out.extend_from_within(start..start + distance);
+        while copied < remaining {
+            let chunk = copied.min(remaining - copied);
+            out.extend_from_within(start..start + chunk);
+            copied += chunk;
+        }
     }
     Ok(())
 }
@@ -107,6 +133,170 @@ pub fn find_longest_match(
         Some((best_dist, best_len))
     } else {
         None
+    }
+}
+
+const HASH_BITS: usize = 14;
+const HASH_SIZE: usize = 1 << HASH_BITS;
+const HASH_MASK: usize = HASH_SIZE - 1;
+const HASH_NONE: u32 = u32::MAX;
+
+#[inline]
+fn hash3(b0: u8, b1: u8, b2: u8) -> usize {
+    let v = (u32::from(b0) << 16) | (u32::from(b1) << 8) | u32::from(b2);
+    ((v.wrapping_mul(0x1E35_A7BD)) >> (32 - HASH_BITS)) as usize & HASH_MASK
+}
+
+/// Hash-chain sliding-window match finder for LZ77/LZSS encoders.
+///
+/// Indexes 3-byte sequences in a caller-supplied input slice using a fixed-size
+/// hash table and circular `prev` chain, accelerating longest-match queries
+/// while preserving exact nearest-distance tie-breaking semantics identical to
+/// [`find_longest_match`].
+#[derive(Debug, Clone)]
+pub struct HashMatcher {
+    head: Vec<u32>,
+    prev: Vec<u32>,
+    window_mask: usize,
+    max_dist: usize,
+    inserted_up_to: usize,
+}
+
+impl HashMatcher {
+    /// Create a match finder supporting back-reference distances up to `max_dist`.
+    #[must_use]
+    pub fn new(max_dist: usize) -> Self {
+        let window_size = max_dist.max(1).next_power_of_two();
+        Self {
+            head: vec![HASH_NONE; HASH_SIZE],
+            prev: vec![HASH_NONE; window_size],
+            window_mask: window_size - 1,
+            max_dist,
+            inserted_up_to: 0,
+        }
+    }
+
+    /// Reset all hash chains so the matcher can be reused on a new input buffer.
+    pub fn reset(&mut self) {
+        self.head.fill(HASH_NONE);
+        self.prev.fill(HASH_NONE);
+        self.inserted_up_to = 0;
+    }
+
+    /// Index a single position `pos` into the 3-byte hash chain.
+    #[inline]
+    pub fn insert(&mut self, data: &[u8], pos: usize) {
+        if pos + 3 <= data.len() && pos < HASH_NONE as usize {
+            let h = hash3(data[pos], data[pos + 1], data[pos + 2]);
+            let slot = pos & self.window_mask;
+            self.prev[slot] = self.head[h];
+            self.head[h] = pos as u32;
+        }
+    }
+
+    /// Index all positions in `self.inserted_up_to..pos` so queries at `pos`
+    /// see every preceding 3-byte sequence in the window.
+    #[inline]
+    pub fn advance_to(&mut self, data: &[u8], pos: usize) {
+        let target = pos.min(data.len().saturating_sub(2));
+        while self.inserted_up_to < target {
+            let p = self.inserted_up_to;
+            self.insert(data, p);
+            self.inserted_up_to += 1;
+        }
+        if self.inserted_up_to < pos {
+            self.inserted_up_to = pos;
+        }
+    }
+
+    /// Find the longest match ending before `pos` for `data[pos..]`, returning
+    /// `Some((distance, length))` with exact nearest-distance tie-breaking.
+    ///
+    /// Automatically advances the internal hash index up to `pos`. For
+    /// `min_len < 3` or inputs exceeding `u32::MAX - 1` bytes, falls back to
+    /// [`find_longest_match`].
+    pub fn find_longest_match(
+        &mut self,
+        data: &[u8],
+        pos: usize,
+        min_dist: usize,
+        min_len: usize,
+        max_len: usize,
+    ) -> Option<(usize, usize)> {
+        if pos >= data.len()
+            || min_dist == 0
+            || min_dist > self.max_dist
+            || min_len == 0
+            || min_len > max_len
+        {
+            return None;
+        }
+        if min_len < 3 || data.len() >= HASH_NONE as usize {
+            return find_longest_match(data, pos, min_dist, self.max_dist, min_len, max_len);
+        }
+        let avail = data.len() - pos;
+        let limit = max_len.min(avail);
+        if limit < min_len {
+            return None;
+        }
+        let upper_dist = self.max_dist.min(pos);
+        if upper_dist < min_dist {
+            return None;
+        }
+
+        self.advance_to(data, pos);
+
+        let min_cand = pos - upper_dist;
+        let b0 = data[pos];
+        let b1 = data[pos + 1];
+        let b2 = data[pos + 2];
+        let h = hash3(b0, b1, b2);
+
+        let mut best_dist = 0usize;
+        let mut best_len = 0usize;
+        let mut cur = self.head[h];
+
+        while cur != HASH_NONE {
+            let cand = cur as usize;
+            if cand < min_cand {
+                break;
+            }
+            let dist = pos - cand;
+            if dist >= min_dist
+                && (best_len < min_len || data[cand + best_len] == data[pos + best_len])
+                && data[cand] == b0
+                && data[cand + 1] == b1
+                && data[cand + 2] == b2
+            {
+                let mut len = 3usize;
+                while len + 8 <= limit
+                    && data[cand + len..cand + len + 8] == data[pos + len..pos + len + 8]
+                {
+                    len += 8;
+                }
+                while len < limit && data[cand + len] == data[pos + len] {
+                    len += 1;
+                }
+                if len >= min_len && len > best_len {
+                    best_dist = dist;
+                    best_len = len;
+                    if best_len == limit {
+                        break;
+                    }
+                }
+            }
+            let next = self.prev[cand & self.window_mask];
+            if next >= cur {
+                break;
+            }
+            cur = next;
+        }
+
+        if best_len >= min_len {
+            Some((best_dist, best_len))
+        } else {
+            None
+        }
     }
 }
 
@@ -316,5 +506,49 @@ mod tests {
     #[should_panic(expected = "ring buffer capacity must be nonzero")]
     fn ring_buffer_zero_capacity_panics() {
         let _ = RingBuffer::<0>::new(0, 0);
+    }
+
+    #[test]
+    fn hash_matcher_matches_brute_force_exactly() {
+        let mut data = b"abcXabcYabcZ_PATTERN_1234_".repeat(8);
+        data.extend(std::iter::repeat_n(0xAA, 40));
+        data.extend_from_slice(b"abababababababab");
+        let mut state = 0x1234_5678u32;
+        for _ in 0..512 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            data.push(((state >> 24) as u8) % 6);
+        }
+
+        for min_dist in [1, 2, 3, 16] {
+            let mut matcher = HashMatcher::new(256);
+            for pos in 0..data.len() {
+                let expected = find_longest_match(&data, pos, min_dist, 256, 3, 18);
+                let got = matcher.find_longest_match(&data, pos, min_dist, 3, 18);
+                assert_eq!(got, expected, "mismatch at pos={pos}, min_dist={min_dist}");
+            }
+            matcher.reset();
+            assert_eq!(
+                matcher.find_longest_match(&data, 10, min_dist, 3, 18),
+                find_longest_match(&data, 10, min_dist, 256, 3, 18)
+            );
+        }
+    }
+
+    #[test]
+    fn append_match_fast_paths_match_byte_by_byte() {
+        // Non-overlapping copy (distance >= count)
+        let mut out = b"ABCDEFGH".to_vec();
+        append_match(&mut out, b"", 6, 4, 16).unwrap();
+        assert_eq!(out, b"ABCDEFGHCDEF");
+
+        // Overlapping periodic copy (1 < distance < count)
+        let mut out = b"XY".to_vec();
+        append_match(&mut out, b"", 2, 7, 16).unwrap();
+        assert_eq!(out, b"XYXYXYXYX");
+
+        // Zero-length match is a no-op
+        let mut out = b"A".to_vec();
+        append_match(&mut out, b"", 1, 0, 1).unwrap();
+        assert_eq!(out, b"A");
     }
 }

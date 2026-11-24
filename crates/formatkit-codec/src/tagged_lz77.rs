@@ -42,7 +42,7 @@ use crate::flag_lzss::{
     decode_flag_lzss, FlagBitOrder, FlagLzssConfig, FlagLzssMatch, FlagPolarity, FlagWidth,
     OvershootPolicy,
 };
-use crate::sliding_window::find_longest_match;
+use crate::sliding_window::HashMatcher;
 use crate::tagged_header::{
     check_decoded_size, check_encode_len, expect_tag, expect_tagged_header, read_tagged_header,
     read_tagged_header_extended, shift_truncated, write_tagged_header,
@@ -130,12 +130,12 @@ pub fn encode_tagged_lz77_with_min_distance(data: &[u8], min_distance: usize) ->
     }
     let mut out = Vec::with_capacity(data.len() + data.len() / 8 + TAGGED_HEADER_LEN + 1);
     write_tagged_header(&mut out, TAG_LZ77, data.len())?;
+    let mut matcher = HashMatcher::new(TAGGED_LZ77_MAX_DISTANCE);
     encode_flag_groups(data, &mut out, |data, idx, out| {
-        let (distance, len) = find_longest_match(
+        let (distance, len) = matcher.find_longest_match(
             data,
             idx,
             min_distance,
-            TAGGED_LZ77_MAX_DISTANCE,
             TAGGED_LZ77_MIN_LEN,
             TAGGED_LZ77_MAX_LEN,
         )?;
@@ -233,12 +233,12 @@ pub fn encode_tagged_lz77_extended(data: &[u8]) -> Result<Vec<u8>> {
     }
     let mut out = Vec::with_capacity(data.len() + data.len() / 8 + 9);
     write_tagged_header_extended(&mut out, TAG_LZ77_EXTENDED, data.len())?;
+    let mut matcher = HashMatcher::new(TAGGED_LZ77_MAX_DISTANCE);
     encode_flag_groups(data, &mut out, |data, idx, out| {
-        let (distance, len) = find_longest_match(
+        let (distance, len) = matcher.find_longest_match(
             data,
             idx,
             1,
-            TAGGED_LZ77_MAX_DISTANCE,
             TAGGED_LZ77_MIN_LEN,
             TAGGED_LZ77_EXTENDED_MAX_LEN,
         )?;

@@ -110,6 +110,45 @@ impl Crc16Params {
     }
 }
 
+const fn make_crc16_table_reflected(poly: u16) -> [u16; 256] {
+    let mut table = [0u16; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut c = i as u16;
+        let mut bit = 0;
+        while bit < 8 {
+            let mask = (c & 1).wrapping_neg();
+            c = (c >> 1) ^ (poly & mask);
+            bit += 1;
+        }
+        table[i] = c;
+        i += 1;
+    }
+    table
+}
+
+const fn make_crc16_table_normal(poly: u16) -> [u16; 256] {
+    let mut table = [0u16; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut c = (i as u16) << 8;
+        let mut bit = 0;
+        while bit < 8 {
+            let mask = (c >> 15).wrapping_neg();
+            c = (c << 1) ^ (poly & mask);
+            bit += 1;
+        }
+        table[i] = c;
+        i += 1;
+    }
+    table
+}
+
+const CRC16_TABLE_REF_A001: [u16; 256] = make_crc16_table_reflected(0xa001);
+const CRC16_TABLE_REF_8408: [u16; 256] = make_crc16_table_reflected(0x8408);
+const CRC16_TABLE_NORM_8005: [u16; 256] = make_crc16_table_normal(0x8005);
+const CRC16_TABLE_NORM_1021: [u16; 256] = make_crc16_table_normal(0x1021);
+
 /// Incremental CRC-16 arithmetic. Coverage and stored-byte order are owner policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Crc16 {
@@ -125,21 +164,66 @@ impl Crc16 {
         }
     }
     pub fn update(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            if self.params.reflected {
-                self.state ^= u16::from(byte);
-                for _ in 0..8 {
-                    let mask = (self.state & 1).wrapping_neg();
-                    self.state = (self.state >> 1) ^ (self.params.polynomial & mask);
+        if bytes.is_empty() {
+            return;
+        }
+        let mut state = self.state;
+        if self.params.reflected {
+            let table = match self.params.polynomial {
+                0xa001 => Some(&CRC16_TABLE_REF_A001),
+                0x8408 => Some(&CRC16_TABLE_REF_8408),
+                _ => None,
+            };
+            if let Some(table) = table {
+                for &byte in bytes {
+                    state = (state >> 8) ^ table[((state as u8) ^ byte) as usize];
                 }
             } else {
-                self.state ^= u16::from(byte) << 8;
-                for _ in 0..8 {
-                    let mask = (self.state >> 15).wrapping_neg();
-                    self.state = (self.state << 1) ^ (self.params.polynomial & mask);
+                let poly = self.params.polynomial;
+                let mut nibble = [0u16; 16];
+                for (i, slot) in nibble.iter_mut().enumerate() {
+                    let mut c = i as u16;
+                    for _ in 0..4 {
+                        let mask = (c & 1).wrapping_neg();
+                        c = (c >> 1) ^ (poly & mask);
+                    }
+                    *slot = c;
+                }
+                for &byte in bytes {
+                    state ^= u16::from(byte);
+                    state = (state >> 4) ^ nibble[(state & 0x0f) as usize];
+                    state = (state >> 4) ^ nibble[(state & 0x0f) as usize];
+                }
+            }
+        } else {
+            let table = match self.params.polynomial {
+                0x8005 => Some(&CRC16_TABLE_NORM_8005),
+                0x1021 => Some(&CRC16_TABLE_NORM_1021),
+                _ => None,
+            };
+            if let Some(table) = table {
+                for &byte in bytes {
+                    state = (state << 8) ^ table[(((state >> 8) as u8) ^ byte) as usize];
+                }
+            } else {
+                let poly = self.params.polynomial;
+                let mut nibble = [0u16; 16];
+                for (i, slot) in nibble.iter_mut().enumerate() {
+                    let mut c = (i as u16) << 12;
+                    for _ in 0..4 {
+                        let mask = (c >> 15).wrapping_neg();
+                        c = (c << 1) ^ (poly & mask);
+                    }
+                    *slot = c;
+                }
+                for &byte in bytes {
+                    state ^= u16::from(byte) << 8;
+                    state = (state << 4) ^ nibble[(state >> 12) as usize];
+                    state = (state << 4) ^ nibble[(state >> 12) as usize];
                 }
             }
         }
+        self.state = state;
     }
     /// Unfinalized shift-register state, useful for explicit chained records.
     pub const fn raw_state(self) -> u16 {
@@ -268,6 +352,65 @@ impl Crc32Params {
     }
 }
 
+const fn make_crc32_slicing8_reflected(poly: u32) -> [[u32; 256]; 8] {
+    let mut table = [[0u32; 256]; 8];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut c = i as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            let mask = (c & 1).wrapping_neg();
+            c = (c >> 1) ^ (poly & mask);
+            bit += 1;
+        }
+        table[0][i] = c;
+        i += 1;
+    }
+    let mut k = 1usize;
+    while k < 8 {
+        let mut j = 0usize;
+        while j < 256 {
+            let prev = table[k - 1][j];
+            table[k][j] = (prev >> 8) ^ table[0][(prev & 0xFF) as usize];
+            j += 1;
+        }
+        k += 1;
+    }
+    table
+}
+
+const fn make_crc32_slicing8_normal(poly: u32) -> [[u32; 256]; 8] {
+    let mut table = [[0u32; 256]; 8];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut c = (i as u32) << 24;
+        let mut bit = 0;
+        while bit < 8 {
+            let mask = (c >> 31).wrapping_neg();
+            c = (c << 1) ^ (poly & mask);
+            bit += 1;
+        }
+        table[0][i] = c;
+        i += 1;
+    }
+    let mut k = 1usize;
+    while k < 8 {
+        let mut j = 0usize;
+        while j < 256 {
+            let prev = table[k - 1][j];
+            table[k][j] = (prev << 8) ^ table[0][(prev >> 24) as usize];
+            j += 1;
+        }
+        k += 1;
+    }
+    table
+}
+
+const CRC32_SLICING8_ISO_HDLC: [[u32; 256]; 8] =
+    make_crc32_slicing8_reflected(CRC32_ISO_HDLC_POLYNOMIAL);
+const CRC32_SLICING8_CRC32C: [[u32; 256]; 8] = make_crc32_slicing8_reflected(CRC32C_POLYNOMIAL);
+const CRC32_SLICING8_MPEG2: [[u32; 256]; 8] = make_crc32_slicing8_normal(CRC32_MPEG2_POLYNOMIAL);
+
 /// Incremental CRC-32 arithmetic. Coverage and stored-byte order are owner policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Crc32 {
@@ -286,21 +429,86 @@ impl Crc32 {
 
     /// Incorporate another byte sequence into the running CRC-32 state.
     pub fn update(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            if self.params.reflected {
-                self.state ^= u32::from(byte);
-                for _ in 0..8 {
-                    let mask = (self.state & 1).wrapping_neg();
-                    self.state = (self.state >> 1) ^ (self.params.polynomial & mask);
+        if bytes.is_empty() {
+            return;
+        }
+        let mut crc = self.state;
+        if self.params.reflected {
+            let table = match self.params.polynomial {
+                CRC32_ISO_HDLC_POLYNOMIAL => Some(&CRC32_SLICING8_ISO_HDLC),
+                CRC32C_POLYNOMIAL => Some(&CRC32_SLICING8_CRC32C),
+                _ => None,
+            };
+            if let Some(table) = table {
+                let (chunks, rem) = bytes.as_chunks::<8>();
+                for chunk in chunks {
+                    let lo = crc ^ u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                    let hi = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                    crc = table[7][(lo & 0xFF) as usize]
+                        ^ table[6][((lo >> 8) & 0xFF) as usize]
+                        ^ table[5][((lo >> 16) & 0xFF) as usize]
+                        ^ table[4][(lo >> 24) as usize]
+                        ^ table[3][(hi & 0xFF) as usize]
+                        ^ table[2][((hi >> 8) & 0xFF) as usize]
+                        ^ table[1][((hi >> 16) & 0xFF) as usize]
+                        ^ table[0][(hi >> 24) as usize];
+                }
+                for &byte in rem {
+                    crc = (crc >> 8) ^ table[0][((crc as u8) ^ byte) as usize];
                 }
             } else {
-                self.state ^= u32::from(byte) << 24;
-                for _ in 0..8 {
-                    let mask = (self.state >> 31).wrapping_neg();
-                    self.state = (self.state << 1) ^ (self.params.polynomial & mask);
+                let poly = self.params.polynomial;
+                let mut nibble = [0u32; 16];
+                for (i, slot) in nibble.iter_mut().enumerate() {
+                    let mut c = i as u32;
+                    for _ in 0..4 {
+                        let mask = (c & 1).wrapping_neg();
+                        c = (c >> 1) ^ (poly & mask);
+                    }
+                    *slot = c;
+                }
+                for &byte in bytes {
+                    crc ^= u32::from(byte);
+                    crc = (crc >> 4) ^ nibble[(crc & 0x0f) as usize];
+                    crc = (crc >> 4) ^ nibble[(crc & 0x0f) as usize];
                 }
             }
+        } else if self.params.polynomial == CRC32_MPEG2_POLYNOMIAL {
+            let table = &CRC32_SLICING8_MPEG2;
+            let (chunks, rem) = bytes.as_chunks::<8>();
+            for chunk in chunks {
+                let hi = crc ^ u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let lo = u32::from_be_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                crc = table[7][(hi >> 24) as usize]
+                    ^ table[6][((hi >> 16) & 0xFF) as usize]
+                    ^ table[5][((hi >> 8) & 0xFF) as usize]
+                    ^ table[4][(hi & 0xFF) as usize]
+                    ^ table[3][(lo >> 24) as usize]
+                    ^ table[2][((lo >> 16) & 0xFF) as usize]
+                    ^ table[1][((lo >> 8) & 0xFF) as usize]
+                    ^ table[0][(lo & 0xFF) as usize];
+            }
+            for &byte in rem {
+                crc = (crc << 8) ^ table[0][(((crc >> 24) as u8) ^ byte) as usize];
+            }
+        } else {
+            let poly = self.params.polynomial;
+            let mut nibble = [0u32; 16];
+            for (i, slot) in nibble.iter_mut().enumerate() {
+                let mut c = (i as u32) << 28;
+                for _ in 0..4 {
+                    let mask = (c >> 31).wrapping_neg();
+                    c = (c << 1) ^ (poly & mask);
+                }
+                *slot = c;
+            }
+            for &byte in bytes {
+                crc ^= u32::from(byte) << 24;
+                crc = (crc << 4) ^ nibble[(crc >> 28) as usize];
+                crc = (crc << 4) ^ nibble[(crc >> 28) as usize];
+            }
         }
+        self.state = crc;
     }
 
     /// Unfinalized shift-register state, useful for explicit chained records.
@@ -426,10 +634,21 @@ impl Adler32 {
 
     /// Incorporate another byte sequence.
     pub fn update(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.a = (self.a + u32::from(byte)) % ADLER32_MODULUS;
-            self.b = (self.b + self.a) % ADLER32_MODULUS;
+        // Largest number of bytes that can be accumulated before u32 overflow
+        // when starting from the maximum reduced state (65520, 65520).
+        const NMAX: usize = 5552;
+        let mut a = self.a;
+        let mut b = self.b;
+        for chunk in bytes.chunks(NMAX) {
+            for &byte in chunk {
+                a += u32::from(byte);
+                b += a;
+            }
+            a %= ADLER32_MODULUS;
+            b %= ADLER32_MODULUS;
         }
+        self.a = a;
+        self.b = b;
     }
 
     /// Return the current Adler-32 checksum.
@@ -681,94 +900,195 @@ impl FoldChecksum {
             (1u64 << self.bits) - 1
         };
         let mut acc = self.seed & mask;
+        let bits = self.bits;
+        let op = self.op;
+        let unit_size_u64 = unit_size as u64;
 
-        let step = |acc: u64, val: u64, idx: u64| -> u64 {
-            match self.op {
+        let fold_run = |mut acc: u64, start_idx: usize, slice: &[u8], unit: FoldUnit| -> u64 {
+            macro_rules! run_op {
+                ($iter:expr) => {
+                    match op {
+                        FoldOp::Sum => {
+                            for (_, val) in $iter {
+                                acc = acc.wrapping_add(val) & mask;
+                            }
+                        }
+                        FoldOp::Xor => {
+                            for (_, val) in $iter {
+                                acc = (acc ^ val) & mask;
+                            }
+                        }
+                        FoldOp::RotateLeftThenSum(shift) => {
+                            for (_, val) in $iter {
+                                acc = rotate_left_bits(acc, shift, bits, mask).wrapping_add(val)
+                                    & mask;
+                            }
+                        }
+                        FoldOp::SumThenRotateLeft(shift) => {
+                            for (_, val) in $iter {
+                                acc = rotate_left_bits(
+                                    acc.wrapping_add(val) & mask,
+                                    shift,
+                                    bits,
+                                    mask,
+                                );
+                            }
+                        }
+                        FoldOp::RotateLeftThenXor(shift) => {
+                            for (_, val) in $iter {
+                                acc = (rotate_left_bits(acc, shift, bits, mask) ^ val) & mask;
+                            }
+                        }
+                        FoldOp::XorThenRotateLeft(shift) => {
+                            for (_, val) in $iter {
+                                acc = rotate_left_bits((acc ^ val) & mask, shift, bits, mask);
+                            }
+                        }
+                        FoldOp::WeightedOffset { base } => {
+                            for (i, val) in $iter {
+                                let weight = base.wrapping_add((start_idx + i) as u64);
+                                acc = acc.wrapping_add(val.wrapping_mul(weight)) & mask;
+                            }
+                        }
+                        FoldOp::WeightedByteOffset { base } => {
+                            for (i, val) in $iter {
+                                let byte_offset =
+                                    ((start_idx + i) as u64).wrapping_mul(unit_size_u64);
+                                let weight = base.wrapping_add(byte_offset);
+                                acc = acc.wrapping_add(val.wrapping_mul(weight)) & mask;
+                            }
+                        }
+                    }
+                };
+            }
+
+            match unit {
+                FoldUnit::Byte => {
+                    run_op!(slice.iter().enumerate().map(|(i, &b)| (i, u64::from(b))));
+                }
+                FoldUnit::U16(crate::Endian::Little) => {
+                    run_op!(slice
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &w)| (i, u64::from(u16::from_le_bytes(w)))));
+                }
+                FoldUnit::U16(crate::Endian::Big) => {
+                    run_op!(slice
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &w)| (i, u64::from(u16::from_be_bytes(w)))));
+                }
+                FoldUnit::U32(crate::Endian::Little) => {
+                    run_op!(slice
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &w)| (i, u64::from(u32::from_le_bytes(w)))));
+                }
+                FoldUnit::U32(crate::Endian::Big) => {
+                    run_op!(slice
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &w)| (i, u64::from(u32::from_be_bytes(w)))));
+                }
+                FoldUnit::U64(crate::Endian::Little) => {
+                    run_op!(slice
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &w)| (i, u64::from_le_bytes(w))));
+                }
+                FoldUnit::U64(crate::Endian::Big) => {
+                    run_op!(slice
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &w)| (i, u64::from_be_bytes(w))));
+                }
+            }
+            acc
+        };
+
+        let step_one = |acc: u64, val: u64, idx: u64| -> u64 {
+            match op {
                 FoldOp::Sum => acc.wrapping_add(val) & mask,
                 FoldOp::Xor => (acc ^ val) & mask,
                 FoldOp::RotateLeftThenSum(shift) => {
-                    rotate_left_bits(acc, shift, self.bits, mask).wrapping_add(val) & mask
+                    rotate_left_bits(acc, shift, bits, mask).wrapping_add(val) & mask
                 }
                 FoldOp::SumThenRotateLeft(shift) => {
-                    rotate_left_bits(acc.wrapping_add(val) & mask, shift, self.bits, mask)
+                    rotate_left_bits(acc.wrapping_add(val) & mask, shift, bits, mask)
                 }
                 FoldOp::RotateLeftThenXor(shift) => {
-                    (rotate_left_bits(acc, shift, self.bits, mask) ^ val) & mask
+                    (rotate_left_bits(acc, shift, bits, mask) ^ val) & mask
                 }
                 FoldOp::XorThenRotateLeft(shift) => {
-                    rotate_left_bits((acc ^ val) & mask, shift, self.bits, mask)
+                    rotate_left_bits((acc ^ val) & mask, shift, bits, mask)
                 }
                 FoldOp::WeightedOffset { base } => {
                     let weight = base.wrapping_add(idx);
                     acc.wrapping_add(val.wrapping_mul(weight)) & mask
                 }
                 FoldOp::WeightedByteOffset { base } => {
-                    let byte_offset = idx.wrapping_mul(unit_size as u64);
+                    let byte_offset = idx.wrapping_mul(unit_size_u64);
                     let weight = base.wrapping_add(byte_offset);
                     acc.wrapping_add(val.wrapping_mul(weight)) & mask
                 }
             }
         };
 
-        let read_byte = |pos: usize| -> u8 {
-            if zero_range.contains(&pos) {
-                0
-            } else {
-                bytes[pos]
-            }
-        };
+        if zero_range.is_empty() {
+            acc = fold_run(acc, 0, bytes, self.unit);
+        } else {
+            let before_units = zero_range.start / unit_size;
+            let after_units_start = zero_range.end.div_ceil(unit_size);
+            let before_end_byte = before_units * unit_size;
+            let after_start_byte = after_units_start * unit_size;
 
-        match self.unit {
-            FoldUnit::Byte => {
-                for idx in 0..bytes.len() {
-                    acc = step(acc, u64::from(read_byte(idx)), idx as u64);
+            acc = fold_run(acc, 0, &bytes[..before_end_byte], self.unit);
+
+            let read_byte = |pos: usize| -> u8 {
+                if zero_range.contains(&pos) {
+                    0
+                } else {
+                    bytes[pos]
                 }
-            }
-            FoldUnit::U16(endian) => {
-                for (idx, chunk) in bytes.chunks_exact(2).enumerate() {
-                    let base = idx * 2;
-                    let raw = if base + 2 <= zero_range.start || base >= zero_range.end {
-                        [chunk[0], chunk[1]]
-                    } else {
-                        [read_byte(base), read_byte(base + 1)]
-                    };
-                    let val = match endian {
-                        crate::Endian::Little => u16::from_le_bytes(raw),
-                        crate::Endian::Big => u16::from_be_bytes(raw),
-                    };
-                    acc = step(acc, u64::from(val), idx as u64);
-                }
-            }
-            FoldUnit::U32(endian) => {
-                for (idx, chunk) in bytes.chunks_exact(4).enumerate() {
-                    let base = idx * 4;
-                    let raw = if base + 4 <= zero_range.start || base >= zero_range.end {
-                        [chunk[0], chunk[1], chunk[2], chunk[3]]
-                    } else {
-                        [
+            };
+            for idx in before_units..after_units_start {
+                let base = idx * unit_size;
+                let val = if base >= zero_range.start && base + unit_size <= zero_range.end {
+                    0u64
+                } else {
+                    match self.unit {
+                        FoldUnit::Byte => u64::from(read_byte(base)),
+                        FoldUnit::U16(crate::Endian::Little) => {
+                            u64::from(u16::from_le_bytes([read_byte(base), read_byte(base + 1)]))
+                        }
+                        FoldUnit::U16(crate::Endian::Big) => {
+                            u64::from(u16::from_be_bytes([read_byte(base), read_byte(base + 1)]))
+                        }
+                        FoldUnit::U32(crate::Endian::Little) => u64::from(u32::from_le_bytes([
                             read_byte(base),
                             read_byte(base + 1),
                             read_byte(base + 2),
                             read_byte(base + 3),
-                        ]
-                    };
-                    let val = match endian {
-                        crate::Endian::Little => u32::from_le_bytes(raw),
-                        crate::Endian::Big => u32::from_be_bytes(raw),
-                    };
-                    acc = step(acc, u64::from(val), idx as u64);
-                }
-            }
-            FoldUnit::U64(endian) => {
-                for (idx, chunk) in bytes.chunks_exact(8).enumerate() {
-                    let base = idx * 8;
-                    let raw = if base + 8 <= zero_range.start || base >= zero_range.end {
-                        [
-                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
-                            chunk[7],
-                        ]
-                    } else {
-                        [
+                        ])),
+                        FoldUnit::U32(crate::Endian::Big) => u64::from(u32::from_be_bytes([
+                            read_byte(base),
+                            read_byte(base + 1),
+                            read_byte(base + 2),
+                            read_byte(base + 3),
+                        ])),
+                        FoldUnit::U64(crate::Endian::Little) => u64::from_le_bytes([
                             read_byte(base),
                             read_byte(base + 1),
                             read_byte(base + 2),
@@ -777,15 +1097,28 @@ impl FoldChecksum {
                             read_byte(base + 5),
                             read_byte(base + 6),
                             read_byte(base + 7),
-                        ]
-                    };
-                    let val = match endian {
-                        crate::Endian::Little => u64::from_le_bytes(raw),
-                        crate::Endian::Big => u64::from_be_bytes(raw),
-                    };
-                    acc = step(acc, val, idx as u64);
-                }
+                        ]),
+                        FoldUnit::U64(crate::Endian::Big) => u64::from_be_bytes([
+                            read_byte(base),
+                            read_byte(base + 1),
+                            read_byte(base + 2),
+                            read_byte(base + 3),
+                            read_byte(base + 4),
+                            read_byte(base + 5),
+                            read_byte(base + 6),
+                            read_byte(base + 7),
+                        ]),
+                    }
+                };
+                acc = step_one(acc, val, idx as u64);
             }
+
+            acc = fold_run(
+                acc,
+                after_units_start,
+                &bytes[after_start_byte..],
+                self.unit,
+            );
         }
 
         Ok((acc ^ self.xor_out) & mask)
@@ -1338,5 +1671,77 @@ mod arithmetic_checksum_tests {
                 value: 17
             })
         ));
+    }
+
+    #[test]
+    fn custom_crc_polynomials_and_large_adler32_match_reference() {
+        let data: Vec<u8> = (0..12_000usize)
+            .map(|i| ((i.wrapping_mul(37) ^ (i >> 3)) & 0xFF) as u8)
+            .collect();
+
+        // Reference bit-by-bit CRC-16 and CRC-32 for non-preset polynomials.
+        for reflected in [true, false] {
+            let p16 = Crc16Params {
+                polynomial: 0x3D65,
+                seed: 0x1234,
+                xor_out: 0xABCD,
+                reflected,
+                swap_bytes: false,
+            };
+            let mut ref16 = p16.seed;
+            for &b in &data[..257] {
+                if reflected {
+                    ref16 ^= u16::from(b);
+                    for _ in 0..8 {
+                        let mask = (ref16 & 1).wrapping_neg();
+                        ref16 = (ref16 >> 1) ^ (p16.polynomial & mask);
+                    }
+                } else {
+                    ref16 ^= u16::from(b) << 8;
+                    for _ in 0..8 {
+                        let mask = (ref16 >> 15).wrapping_neg();
+                        ref16 = (ref16 << 1) ^ (p16.polynomial & mask);
+                    }
+                }
+            }
+            assert_eq!(p16.compute(&data[..257]), ref16 ^ p16.xor_out);
+
+            let p32 = Crc32Params {
+                polynomial: 0x8141_41AB,
+                seed: 0x1234_5678,
+                xor_out: 0xDEAD_BEEF,
+                reflected,
+                swap_bytes: false,
+            };
+            let mut ref32 = p32.seed;
+            for &b in &data[..257] {
+                if reflected {
+                    ref32 ^= u32::from(b);
+                    for _ in 0..8 {
+                        let mask = (ref32 & 1).wrapping_neg();
+                        ref32 = (ref32 >> 1) ^ (p32.polynomial & mask);
+                    }
+                } else {
+                    ref32 ^= u32::from(b) << 24;
+                    for _ in 0..8 {
+                        let mask = (ref32 >> 31).wrapping_neg();
+                        ref32 = (ref32 << 1) ^ (p32.polynomial & mask);
+                    }
+                }
+            }
+            assert_eq!(p32.compute(&data[..257]), ref32 ^ p32.xor_out);
+        }
+
+        // Large Adler-32 across multiple NMAX=5552 chunks, including worst-case 0xFF bytes.
+        let ones = vec![0xFFu8; 12_000];
+        for buf in [&data, &ones] {
+            let mut a = 1u32;
+            let mut b = 0u32;
+            for &byte in buf {
+                a = (a + u32::from(byte)) % ADLER32_MODULUS;
+                b = (b + a) % ADLER32_MODULUS;
+            }
+            assert_eq!(adler32(buf), (b << 16) | a);
+        }
     }
 }

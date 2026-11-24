@@ -655,10 +655,10 @@
     {
       "crate": "formatkit-codec",
       "module": "png",
-      "path": "formatkit_codec::png::{decode_png_rgba, encode_rgba_png}",
-      "summary": "Self-contained PNG RGBA8888 decoder and encoder.",
-      "domain_aliases": ["PNG", "image codec", "lossless image"],
-      "use_when": "Importing or exporting RGBA8888 PNG images without external image-crate dependencies.",
+      "path": "formatkit_codec::png::{decode_png_rgba, encode_rgba_png, encode_rgba_png_with, PngEncodeOptions, PngCompression, PngFilter}",
+      "summary": "Self-contained PNG RGBA8888 decoder and encoder; encode_rgba_png emits byte-stable stored blocks, encode_rgba_png_with adds DEFLATE compression and adaptive scanline filtering.",
+      "domain_aliases": ["PNG", "image codec", "lossless image", "compressed PNG", "PNG filter", "sprite sheet export"],
+      "use_when": "Importing or exporting RGBA8888 PNG images without external image-crate dependencies; use encode_rgba_png_with(PngEncodeOptions::COMPRESSED) for compact preview sheets.",
       "avoid_when": "Preserving indexed palettes or PNG ancillary metadata chunks is required.",
       "feature_gate": "formatkit/codec"
     },

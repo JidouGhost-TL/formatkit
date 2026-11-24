@@ -1,10 +1,19 @@
 //! Bounded deterministic PNG encoder and decoder for RGBA8 images.
 //!
-//! Encoding emits a minimal, deterministic PNG stream using filter type 0
-//! (`None`) and stored zlib blocks (`IDAT`), checking `max_bytes` before
-//! allocating. Decoding validates the PNG signature, `IHDR`, chunk CRCs,
-//! consecutive `IDAT` payloads, and standard scanline filter types `0..=4`,
-//! returning an RGBA8 [`formatkit_core::Image`].
+//! [`encode_rgba_png`] emits a minimal, deterministic PNG stream using filter
+//! type 0 (`None`) and stored zlib blocks (`IDAT`), checking `max_bytes` before
+//! allocating. Its output is byte-stable across releases.
+//!
+//! [`encode_rgba_png_with`] takes [`PngEncodeOptions`] and can instead emit
+//! real DEFLATE-compressed image data (RFC 1950 zlib framing around RFC 1951
+//! coded blocks) with per-scanline adaptive filter selection, using the
+//! minimum-sum-of-absolute-differences heuristic recommended by the PNG
+//! specification (ISO/IEC 15948, section 12.8). Flat or repetitive sheets such
+//! as glyph atlases typically shrink by one to two orders of magnitude.
+//!
+//! Decoding validates the PNG signature, `IHDR`, chunk CRCs, consecutive
+//! `IDAT` payloads, and standard scanline filter types `0..=4`, returning an
+//! RGBA8 [`formatkit_core::Image`].
 
 use formatkit_core::checksum::Crc32IsoHdlc;
 use formatkit_core::{Error, Image, Result};
@@ -112,6 +121,232 @@ pub fn encode_rgba_png(image: &Image, max_bytes: usize) -> Result<Vec<u8>> {
     ihdr[10] = 0; // compression method: deflate
     ihdr[11] = 0; // filter method: adaptive
     ihdr[12] = 0; // interlace method: none
+
+    let mut out = Vec::with_capacity(total_len);
+    out.extend_from_slice(&PNG_SIGNATURE);
+    write_chunk(&mut out, *b"IHDR", &ihdr);
+    write_chunk(&mut out, *b"IDAT", &idat);
+    write_chunk(&mut out, *b"IEND", &[]);
+    debug_assert_eq!(out.len(), total_len);
+    Ok(out)
+}
+
+/// Zlib payload strategy for [`encode_rgba_png_with`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PngCompression {
+    /// Stored (uncompressed) DEFLATE blocks via [`crate::zlib_store`].
+    ///
+    /// Combined with [`PngFilter::None`] this reproduces [`encode_rgba_png`]
+    /// byte for byte.
+    Stored,
+    /// Real DEFLATE compression at `level` (`1..=10`, where `9` is the usual
+    /// maximum and `10` enables the encoder's slowest exhaustive search).
+    Deflate {
+        /// Compression level in `1..=10`.
+        level: u8,
+    },
+}
+
+/// Scanline filter selection for [`encode_rgba_png_with`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PngFilter {
+    /// Filter type 0 (`None`) on every scanline.
+    None,
+    /// Per scanline, the filter type `0..=4` whose output has the smallest
+    /// sum of absolute values (bytes read as signed), lowest type on ties.
+    Adaptive,
+}
+
+/// Encoder settings for [`encode_rgba_png_with`].
+///
+/// [`Default`] is [`PngEncodeOptions::COMPRESSED`].
+#[doc(alias = "png compression")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PngEncodeOptions {
+    /// Zlib payload strategy.
+    pub compression: PngCompression,
+    /// Scanline filter selection.
+    pub filter: PngFilter,
+}
+
+impl PngEncodeOptions {
+    /// Stored blocks with filter `None`: identical output to [`encode_rgba_png`].
+    pub const STORED: Self = Self {
+        compression: PngCompression::Stored,
+        filter: PngFilter::None,
+    };
+    /// DEFLATE level 9 with adaptive filtering.
+    pub const COMPRESSED: Self = Self {
+        compression: PngCompression::Deflate { level: 9 },
+        filter: PngFilter::Adaptive,
+    };
+}
+
+impl Default for PngEncodeOptions {
+    fn default() -> Self {
+        Self::COMPRESSED
+    }
+}
+
+fn png_limit(max_bytes: usize) -> Error {
+    Error::ResourceLimit {
+        resource: "PNG output bytes",
+        requested: u64::MAX,
+        limit: max_bytes as u64,
+    }
+}
+
+fn filter_scanline_into(filter_type: u8, row: &[u8], prev: &[u8], bpp: usize, out: &mut Vec<u8>) {
+    out.push(filter_type);
+    for i in 0..row.len() {
+        let left = if i >= bpp { row[i - bpp] } else { 0 };
+        let up = prev[i];
+        let up_left = if i >= bpp { prev[i - bpp] } else { 0 };
+        let pred = match filter_type {
+            0 => 0,
+            1 => left,
+            2 => up,
+            3 => ((u16::from(left) + u16::from(up)) / 2) as u8,
+            _ => paeth_predictor(left, up, up_left),
+        };
+        out.push(row[i].wrapping_sub(pred));
+    }
+}
+
+fn signed_abs_sum(filtered: &[u8]) -> u64 {
+    filtered
+        .iter()
+        .map(|&b| u64::from((b as i8).unsigned_abs()))
+        .sum()
+}
+
+/// Encode an RGBA8 [`Image`] into a deterministic PNG byte stream using
+/// explicit [`PngEncodeOptions`].
+///
+/// Output is 8-bit RGBA (`IHDR` color type 6), non-interlaced, with a single
+/// `IDAT` chunk. With [`PngEncodeOptions::STORED`] the result equals
+/// [`encode_rgba_png`]. With DEFLATE compression the filtered scanlines
+/// (`height * (1 + 4 * width)` bytes, about the size of the input image) are
+/// built before compressing, and `max_bytes` bounds the final PNG length;
+/// compressed output larger than `max_bytes` is rejected with
+/// [`Error::ResourceLimit`]. Given the same build and input, output is
+/// deterministic.
+///
+/// ```
+/// use formatkit_codec::png::{decode_png_rgba, encode_rgba_png, encode_rgba_png_with, PngEncodeOptions};
+/// use formatkit_core::Image;
+///
+/// let image = Image::try_new(64, 64, vec![0x40; 64 * 64 * 4]).unwrap();
+/// let small = encode_rgba_png_with(&image, 1 << 20, &PngEncodeOptions::COMPRESSED).unwrap();
+/// let stored = encode_rgba_png(&image, 1 << 20).unwrap();
+/// assert!(small.len() * 20 < stored.len());
+/// assert_eq!(decode_png_rgba(&small, 64 * 64).unwrap(), image);
+/// ```
+pub fn encode_rgba_png_with(
+    image: &Image,
+    max_bytes: usize,
+    options: &PngEncodeOptions,
+) -> Result<Vec<u8>> {
+    let level = match options.compression {
+        PngCompression::Stored if options.filter == PngFilter::None => {
+            return encode_rgba_png(image, max_bytes);
+        }
+        PngCompression::Stored => None,
+        PngCompression::Deflate { level } => {
+            if !(1..=10).contains(&level) {
+                return Err(Error::InvalidField {
+                    what: "PNG deflate level",
+                    value: u64::from(level),
+                });
+            }
+            Some(level)
+        }
+    };
+    image.validate()?;
+    if image.width == 0
+        || image.height == 0
+        || image.width > MAX_PNG_DIM
+        || image.height > MAX_PNG_DIM
+    {
+        return Err(Error::InvalidField {
+            what: "PNG dimensions",
+            value: (u64::from(image.width) << 32) | u64::from(image.height),
+        });
+    }
+    let row_bytes = (image.width as usize)
+        .checked_mul(4)
+        .ok_or_else(|| png_limit(max_bytes))?;
+    let scanline_bytes = row_bytes
+        .checked_add(1)
+        .ok_or_else(|| png_limit(max_bytes))?;
+    let raw_len = scanline_bytes
+        .checked_mul(image.height as usize)
+        .ok_or_else(|| png_limit(max_bytes))?;
+    if level.is_none() {
+        // Stored payload size is exact; reject before allocating.
+        let stored = raw_len
+            .max(1)
+            .div_ceil(u16::MAX as usize)
+            .checked_mul(5)
+            .and_then(|n| n.checked_add(raw_len))
+            .and_then(|n| n.checked_add(6 + 57))
+            .ok_or_else(|| png_limit(max_bytes))?;
+        if stored > max_bytes || stored - 57 > MAX_CHUNK_LEN {
+            return Err(Error::ResourceLimit {
+                resource: "PNG output bytes",
+                requested: stored as u64,
+                limit: max_bytes as u64,
+            });
+        }
+    }
+
+    let mut raw = Vec::with_capacity(raw_len);
+    let zero_row = vec![0u8; row_bytes];
+    let mut candidate = Vec::with_capacity(scanline_bytes);
+    let mut best = Vec::with_capacity(scanline_bytes);
+    let mut prev: &[u8] = &zero_row;
+    for row in image.rgba.chunks_exact(row_bytes) {
+        match options.filter {
+            PngFilter::None => filter_scanline_into(0, row, prev, 4, &mut raw),
+            PngFilter::Adaptive => {
+                let mut best_sum = u64::MAX;
+                for filter_type in 0..=4u8 {
+                    candidate.clear();
+                    filter_scanline_into(filter_type, row, prev, 4, &mut candidate);
+                    let sum = signed_abs_sum(&candidate[1..]);
+                    if sum < best_sum {
+                        best_sum = sum;
+                        std::mem::swap(&mut best, &mut candidate);
+                    }
+                }
+                raw.extend_from_slice(&best);
+            }
+        }
+        prev = row;
+    }
+
+    let idat = match level {
+        None => crate::zlib_store(&raw),
+        Some(level) => miniz_oxide::deflate::compress_to_vec_zlib(&raw, level),
+    };
+    drop(raw);
+    let total_len = idat
+        .len()
+        .checked_add(57)
+        .ok_or_else(|| png_limit(max_bytes))?;
+    if idat.len() > MAX_CHUNK_LEN || total_len > max_bytes {
+        return Err(Error::ResourceLimit {
+            resource: "PNG output bytes",
+            requested: total_len as u64,
+            limit: max_bytes as u64,
+        });
+    }
+
+    let mut ihdr = [0u8; 13];
+    ihdr[0..4].copy_from_slice(&image.width.to_be_bytes());
+    ihdr[4..8].copy_from_slice(&image.height.to_be_bytes());
+    ihdr[8] = 8; // bit depth
+    ihdr[9] = 6; // color type: RGBA
 
     let mut out = Vec::with_capacity(total_len);
     out.extend_from_slice(&PNG_SIGNATURE);
@@ -688,6 +923,118 @@ mod tests {
                 requested: 6,
                 limit: 5,
             })
+        ));
+    }
+
+    fn sheet_image(width: u32, height: u32) -> Image {
+        // Mostly transparent sheet with sparse opaque strokes, like a glyph atlas.
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                if (x % 16 < 3 && y % 16 < 12) || (y % 16 == 5 && x % 16 < 10) {
+                    let at = ((y * width + x) * 4) as usize;
+                    rgba[at..at + 4].copy_from_slice(&[255, 255, (x * 7) as u8, 255]);
+                }
+            }
+        }
+        Image::try_new(width, height, rgba).unwrap()
+    }
+
+    #[test]
+    fn stored_options_match_legacy_encoder_byte_for_byte() {
+        let img = sheet_image(37, 21);
+        let legacy = encode_rgba_png(&img, 1 << 20).unwrap();
+        assert_eq!(
+            encode_rgba_png_with(&img, 1 << 20, &PngEncodeOptions::STORED).unwrap(),
+            legacy
+        );
+        // Pin the legacy stored framing: one stored block after the zlib header.
+        let idat_data = 8 + 25 + 8;
+        assert_eq!(&legacy[idat_data..idat_data + 3], &[0x78, 0x01, 0x01]);
+        assert_eq!(PngEncodeOptions::default(), PngEncodeOptions::COMPRESSED);
+    }
+
+    #[test]
+    fn compressed_round_trips_and_is_much_smaller() {
+        let img = sheet_image(256, 128);
+        let stored = encode_rgba_png(&img, 1 << 22).unwrap();
+        for options in [
+            PngEncodeOptions::COMPRESSED,
+            PngEncodeOptions {
+                compression: PngCompression::Deflate { level: 1 },
+                filter: PngFilter::None,
+            },
+            PngEncodeOptions {
+                compression: PngCompression::Stored,
+                filter: PngFilter::Adaptive,
+            },
+        ] {
+            let png = encode_rgba_png_with(&img, 1 << 22, &options).unwrap();
+            assert_eq!(png, encode_rgba_png_with(&img, 1 << 22, &options).unwrap());
+            assert_eq!(decode_png_rgba(&png, 1 << 20).unwrap(), img);
+            if matches!(options.compression, PngCompression::Deflate { .. }) {
+                assert!(png.len() * 20 < stored.len(), "{options:?}: {}", png.len());
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_filter_picks_minimum_signed_sum() {
+        // A horizontal gradient: Sub (1) leaves constant deltas, so it wins.
+        let width = 8u32;
+        let mut rgba = Vec::new();
+        for y in 0..2u32 {
+            for x in 0..width {
+                let v = (x * 30 + y) as u8;
+                rgba.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let img = Image::try_new(width, 2, rgba).unwrap();
+        let options = PngEncodeOptions {
+            compression: PngCompression::Stored,
+            filter: PngFilter::Adaptive,
+        };
+        let png = encode_rgba_png_with(&img, 4096, &options).unwrap();
+        // Stored block data starts after zlib header (2) + block header (5).
+        let raw = &png[8 + 25 + 8 + 7..];
+        assert_eq!(raw[0], 1);
+        assert_eq!(raw[1 + 4 * width as usize], 2); // second row: Up leaves constant +1
+        assert_eq!(decode_png_rgba(&png, 16).unwrap(), img);
+    }
+
+    #[test]
+    fn compressed_rejects_bad_level_and_limits() {
+        let img = sheet_image(16, 16);
+        assert!(matches!(
+            encode_rgba_png_with(
+                &img,
+                1 << 20,
+                &PngEncodeOptions {
+                    compression: PngCompression::Deflate { level: 0 },
+                    filter: PngFilter::None,
+                }
+            ),
+            Err(Error::InvalidField {
+                what: "PNG deflate level",
+                value: 0
+            })
+        ));
+        let png = encode_rgba_png_with(&img, 1 << 20, &PngEncodeOptions::COMPRESSED).unwrap();
+        assert!(encode_rgba_png_with(&img, png.len(), &PngEncodeOptions::COMPRESSED).is_ok());
+        assert!(matches!(
+            encode_rgba_png_with(&img, png.len() - 1, &PngEncodeOptions::COMPRESSED),
+            Err(Error::ResourceLimit {
+                resource: "PNG output bytes",
+                ..
+            })
+        ));
+        let stored_adaptive = PngEncodeOptions {
+            compression: PngCompression::Stored,
+            filter: PngFilter::Adaptive,
+        };
+        assert!(matches!(
+            encode_rgba_png_with(&img, 100, &stored_adaptive),
+            Err(Error::ResourceLimit { .. })
         ));
     }
 

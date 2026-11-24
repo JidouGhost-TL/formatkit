@@ -74,6 +74,7 @@ Task-oriented reference for every reusable, platform-neutral binary-data mechani
 | Blit, crop, or compose sprites/tiles into a grid atlas | `formatkit_pixel::atlas::{blit_rgba, crop_rgba, compose_grid_atlas, GridAtlasLayout}` | `formatkit-pixel` |
 | Compute floor-halved mipmap dimensions | `formatkit_pixel::mip_extent` | `formatkit-pixel` |
 | Decode or encode PNG, PCX, TGA, or DDS images | `formatkit_codec::png`, `formatkit_codec::pcx`, `formatkit_codec::tga`, `formatkit_codec::dds` (default feature `dds`) | `formatkit-codec` |
+| Encode an RGBA8 PNG with real DEFLATE compression and adaptive scanline filters (or byte-stable stored blocks) | `formatkit_codec::png::{encode_rgba_png_with, PngEncodeOptions, PngCompression, PngFilter}` (`encode_rgba_png` stays stored/filter-`None`) | `formatkit-codec` |
 | Represent decoded RGBA images or 16-bit PCM audio / emit WAV headers | `formatkit_core::{Image, Pcm, wav_header_pcm}` | `formatkit-core` |
 
 ### 5. Resident Layouts, Chunks, Tables, Charmaps & Binary Patches

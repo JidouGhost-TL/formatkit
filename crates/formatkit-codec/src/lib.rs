@@ -93,7 +93,10 @@ pub mod pcx;
 pub use pcx::{decode_pcx_rgba, encode_pcx_indexed, encode_pcx_rgba};
 /// PNG image decoding and RGBA encoding.
 pub mod png;
-pub use png::{decode_png_rgba, encode_rgba_png};
+pub use png::{
+    decode_png_rgba, encode_rgba_png, encode_rgba_png_with, PngCompression, PngEncodeOptions,
+    PngFilter,
+};
 /// Configurable high-bit run-length encoding (RLE) and decoding, plus tagged-header framing.
 pub mod rle;
 pub use rle::{

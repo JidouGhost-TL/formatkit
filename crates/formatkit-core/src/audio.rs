@@ -95,6 +95,7 @@ pub enum WavLoopKind {
 
 impl WavLoopKind {
     /// The `dwType` value stored in the loop record.
+    #[must_use]
     pub const fn to_raw(self) -> u32 {
         match self {
             Self::Forward => 0,
@@ -105,6 +106,7 @@ impl WavLoopKind {
 
     /// Decode a `dwType` value; types above `2` are manufacturer-defined and
     /// return `None`.
+    #[must_use]
     pub const fn from_raw(raw: u32) -> Option<Self> {
         match raw {
             0 => Some(Self::Forward),
@@ -138,6 +140,7 @@ pub struct WavLoop {
 
 impl WavLoop {
     /// An indefinitely repeating forward loop over `start_frame..end_frame`.
+    #[must_use]
     pub const fn forward(start_frame: u32, end_frame: u32) -> Self {
         Self {
             start_frame,
@@ -460,12 +463,39 @@ impl Pcm {
     /// the `smpl` chunk equal [`Self::to_wav_bytes`] except for the RIFF size
     /// field. Use [`wav_bytes_pcm_with_loops`] for several loops or 8-bit data.
     pub fn to_wav_bytes_with_loop(&self, lp: WavLoop) -> crate::Result<Vec<u8>> {
-        self.validate()?;
-        let mut data = Vec::with_capacity(self.samples.len().saturating_mul(2));
-        for &sample in &self.samples {
-            data.extend_from_slice(&sample.to_le_bytes());
+        let header = self.wav_header()?;
+        if u64::from(lp.end_frame) > self.frame_count() as u64 {
+            return Err(crate::Error::InvalidField {
+                what: "WAV loop end frame",
+                value: u64::from(lp.end_frame),
+            });
         }
-        wav_bytes_pcm_with_loops(self.sample_rate, self.channels, 16, &data, &[lp])
+        let smpl = wav_smpl_chunk(self.sample_rate, &[lp])?;
+        let data_bytes = self
+            .samples
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| crate::Error::Malformed("WAV data size overflow".into()))?;
+        let total = (header.len() as u64)
+            .checked_add(data_bytes as u64)
+            .and_then(|n| n.checked_add(smpl.len() as u64))
+            .ok_or_else(|| crate::Error::Malformed("WAV output size overflow".into()))?;
+        if total - 8 > u64::from(u32::MAX) {
+            return Err(crate::Error::InvalidField {
+                what: "WAV RIFF size",
+                value: total - 8,
+            });
+        }
+        let total_usize = usize::try_from(total)
+            .map_err(|_| crate::Error::Malformed("WAV output size overflow".into()))?;
+        let mut out = Vec::with_capacity(total_usize);
+        out.extend_from_slice(&header);
+        for &sample in &self.samples {
+            out.extend_from_slice(&sample.to_le_bytes());
+        }
+        out.extend_from_slice(&smpl);
+        out[4..8].copy_from_slice(&((total - 8) as u32).to_le_bytes());
+        Ok(out)
     }
 
     /// Parse a canonical 16-bit signed little-endian PCM RIFF/WAVE byte buffer.

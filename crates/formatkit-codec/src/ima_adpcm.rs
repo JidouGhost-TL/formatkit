@@ -170,6 +170,7 @@ impl ImaAdpcmHeader {
     }
 
     /// Serialize the header.
+    #[must_use]
     pub fn to_bytes(&self) -> [u8; 4] {
         let p = self.state.predictor.to_le_bytes();
         [p[0], p[1], self.state.step_index, self.reserved]
@@ -352,8 +353,15 @@ pub fn encode_ima_adpcm_codes_exact(
     Some((out, end))
 }
 
-fn set_bits(mask: u128) -> impl Iterator<Item = u8> {
-    (0..=IMA_MAX_STEP_INDEX).filter(move |&i| mask & (1u128 << i) != 0)
+fn set_bits(mut mask: u128) -> impl Iterator<Item = u8> {
+    std::iter::from_fn(move || {
+        if mask == 0 {
+            return None;
+        }
+        let bit = mask.trailing_zeros() as u8;
+        mask &= mask - 1;
+        Some(bit)
+    })
 }
 
 /// Encode samples to packed codes: exactly (see

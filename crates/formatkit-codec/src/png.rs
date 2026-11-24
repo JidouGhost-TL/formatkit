@@ -291,7 +291,15 @@ pub fn encode_rgba_png_with(
             .and_then(|n| n.checked_add(raw_len))
             .and_then(|n| n.checked_add(6 + 57))
             .ok_or_else(|| png_limit(max_bytes))?;
-        if stored > max_bytes || stored - 57 > MAX_CHUNK_LEN {
+        let zlib_len = stored - 57;
+        if zlib_len > MAX_CHUNK_LEN {
+            return Err(Error::ResourceLimit {
+                resource: "PNG output bytes",
+                requested: zlib_len as u64,
+                limit: (MAX_CHUNK_LEN as u64).min(max_bytes as u64),
+            });
+        }
+        if stored > max_bytes {
             return Err(Error::ResourceLimit {
                 resource: "PNG output bytes",
                 requested: stored as u64,
@@ -334,7 +342,14 @@ pub fn encode_rgba_png_with(
         .len()
         .checked_add(57)
         .ok_or_else(|| png_limit(max_bytes))?;
-    if idat.len() > MAX_CHUNK_LEN || total_len > max_bytes {
+    if idat.len() > MAX_CHUNK_LEN {
+        return Err(Error::ResourceLimit {
+            resource: "PNG output bytes",
+            requested: idat.len() as u64,
+            limit: (MAX_CHUNK_LEN as u64).min(max_bytes as u64),
+        });
+    }
+    if total_len > max_bytes {
         return Err(Error::ResourceLimit {
             resource: "PNG output bytes",
             requested: total_len as u64,

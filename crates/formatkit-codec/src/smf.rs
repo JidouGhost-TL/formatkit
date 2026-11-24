@@ -290,6 +290,7 @@ pub enum SmfEvent {
 
 impl SmfEvent {
     /// A track-name text event.
+    #[must_use]
     pub fn track_name(name: impl Into<Vec<u8>>) -> Self {
         Self::Text {
             kind: SmfTextKind::TrackName,
@@ -298,6 +299,7 @@ impl SmfEvent {
     }
 
     /// A marker text event.
+    #[must_use]
     pub fn marker(text: impl Into<Vec<u8>>) -> Self {
         Self::Text {
             kind: SmfTextKind::Marker,
@@ -306,9 +308,9 @@ impl SmfEvent {
     }
 
     /// A tempo event for an integer `bpm` (`60_000_000 / bpm` microseconds
-    /// per quarter note); `bpm` must be at least `4`.
+    /// per quarter note); `bpm` must be in `4..=60_000_000`.
     pub fn tempo_bpm(bpm: u32) -> Result<Self> {
-        if bpm < 4 {
+        if !(4..=60_000_000).contains(&bpm) {
             return Err(Error::InvalidField {
                 what: "SMF tempo BPM",
                 value: u64::from(bpm),
@@ -488,6 +490,7 @@ pub struct SmfTrack {
 
 impl SmfTrack {
     /// An empty track.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -845,6 +848,13 @@ mod tests {
             })
         ));
         assert!(SmfEvent::tempo_bpm(3).is_err());
+        assert_eq!(
+            SmfEvent::tempo_bpm(60_000_000).unwrap(),
+            SmfEvent::Tempo {
+                micros_per_quarter: 1
+            }
+        );
+        assert!(SmfEvent::tempo_bpm(60_000_001).is_err());
     }
 
     #[test]

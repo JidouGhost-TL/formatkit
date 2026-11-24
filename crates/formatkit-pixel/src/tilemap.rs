@@ -72,6 +72,7 @@ impl TextTilemapEntry {
     }
 
     /// Decode a raw entry word.
+    #[must_use]
     pub const fn from_raw(raw: u16) -> Self {
         Self {
             tile: raw & 0x03ff,
@@ -83,6 +84,7 @@ impl TextTilemapEntry {
 
     /// Encode as a raw entry word. Out-of-range `tile` and `palette` values
     /// are masked to their field widths; use [`Self::new`] to reject them.
+    #[must_use]
     pub const fn to_raw(self) -> u16 {
         (self.tile & 0x03ff)
             | if self.h_flip { 0x0400 } else { 0 }
@@ -107,6 +109,7 @@ pub fn decode_text_tilemap_le(bytes: &[u8]) -> Result<Vec<TextTilemapEntry>, Pac
 
 /// Encode entries as little-endian 16-bit words (fields masked as in
 /// [`TextTilemapEntry::to_raw`]).
+#[must_use]
 pub fn encode_text_tilemap_le(entries: &[TextTilemapEntry]) -> Vec<u8> {
     let mut out = Vec::with_capacity(entries.len() * 2);
     for e in entries {
@@ -150,26 +153,31 @@ impl ScreenBlockLayout {
     }
 
     /// Map width in tiles.
+    #[must_use]
     pub const fn width(&self) -> usize {
         self.width
     }
 
     /// Map height in tiles.
+    #[must_use]
     pub const fn height(&self) -> usize {
         self.height
     }
 
     /// Total entry count.
+    #[must_use]
     pub const fn len(&self) -> usize {
         self.width * self.height
     }
 
     /// Always `false`: dimensions are non-zero.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
     }
 
     /// Stored entry index of tile (`x`, `y`), or `None` outside the map.
+    #[must_use]
     pub fn index(&self, x: usize, y: usize) -> Option<usize> {
         if x >= self.width || y >= self.height {
             return None;
@@ -276,13 +284,17 @@ pub fn blit_indexed_tile_8x8(
         });
     }
     for ty in 0..8usize {
-        let dy = y + ty as i64;
+        let Some(dy) = y.checked_add(ty as i64) else {
+            continue;
+        };
         if dy < 0 || dy >= i64::from(dst_h) {
             continue;
         }
         let sy = if options.v_flip { 7 - ty } else { ty };
         for tx in 0..8usize {
-            let dx = x + tx as i64;
+            let Some(dx) = x.checked_add(tx as i64) else {
+                continue;
+            };
             if dx < 0 || dx >= i64::from(dst_w) {
                 continue;
             }
@@ -421,5 +433,25 @@ mod tests {
         assert!(
             blit_indexed_tile_8x8(&mut dst[..4], 10, 10, 0, 0, &tile, &palette, &opaque).is_err()
         );
+    }
+
+    #[test]
+    fn tile_blit_extreme_coordinates_clip_without_overflow() {
+        let tile = [1u8; 64];
+        let palette = [[0, 0, 0, 0], [0xff, 0, 0, 255]];
+        let opts = IndexedTileBlit::default();
+        let sentinel = vec![0xabu8; 8 * 8 * 4];
+        let mut dst = sentinel.clone();
+        for (x, y) in [
+            (i64::MAX - 2, i64::MAX - 2),
+            (i64::MAX - 2, 0),
+            (0, i64::MAX - 2),
+            (i64::MIN, i64::MIN),
+            (i64::MIN, 0),
+            (0, i64::MIN),
+        ] {
+            blit_indexed_tile_8x8(&mut dst, 8, 8, x, y, &tile, &palette, &opts).unwrap();
+            assert_eq!(dst, sentinel);
+        }
     }
 }

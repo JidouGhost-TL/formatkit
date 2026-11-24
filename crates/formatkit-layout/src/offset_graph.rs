@@ -99,6 +99,7 @@ pub struct UnclaimedGap {
 impl UnclaimedGap {
     /// A gap of `byte` covering `from..to`, or `None` when `to <= from`; for
     /// writers that synthesize padding instead of replaying parsed gaps.
+    #[must_use]
     pub fn fill(from: usize, to: usize, byte: u8) -> Option<Self> {
         (to > from).then(|| Self {
             offset: from,
@@ -115,11 +116,13 @@ impl UnclaimedGap {
 pub struct ClaimedReader<'a> {
     data: &'a [u8],
     claimed: Vec<u64>,
-    reads_left: u64,
+    reads_used: u64,
+    read_limit: u64,
 }
 
 impl<'a> ClaimedReader<'a> {
     /// A reader with the default read limit of `16 * len + 65536` reads.
+    #[must_use]
     pub fn new(data: &'a [u8]) -> Self {
         let limit = (data.len() as u64)
             .saturating_mul(16)
@@ -128,25 +131,30 @@ impl<'a> ClaimedReader<'a> {
     }
 
     /// A reader that rejects reads after `max_reads` of them.
+    #[must_use]
     pub fn with_read_limit(data: &'a [u8], max_reads: u64) -> Self {
         Self {
             data,
             claimed: vec![0; data.len().div_ceil(64)],
-            reads_left: max_reads,
+            reads_used: 0,
+            read_limit: max_reads,
         }
     }
 
     /// Region length in bytes.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
     /// True when the region is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 
     /// The whole region, without claiming anything.
+    #[must_use]
     pub fn data(&self) -> &'a [u8] {
         self.data
     }
@@ -157,17 +165,18 @@ impl<'a> ClaimedReader<'a> {
     /// with [`Error::Truncated`] (inside an [`ErrorContext::Field`] naming
     /// `what`) when the range leaves the region; failed reads claim nothing.
     pub fn bytes(&mut self, what: &'static str, at: usize, len: usize) -> Result<&'a [u8]> {
-        self.reads_left = self.reads_left.checked_sub(1).ok_or_else(|| {
-            field_error(
+        if self.reads_used >= self.read_limit {
+            return Err(field_error(
                 what,
                 at,
                 Error::ResourceLimit {
                     resource: "offset-graph field reads",
-                    requested: 1,
-                    limit: 0,
+                    requested: self.reads_used.saturating_add(1),
+                    limit: self.read_limit,
                 },
-            )
-        })?;
+            ));
+        }
+        self.reads_used += 1;
         let end = checked_range(what, at, len, self.data.len())?;
         for i in at..end {
             self.claimed[i / 64] |= 1u64 << (i % 64);
@@ -230,16 +239,19 @@ impl<'a> ClaimedReader<'a> {
     }
 
     /// Whether byte `at` has been claimed (`false` outside the region).
+    #[must_use]
     pub fn is_claimed(&self, at: usize) -> bool {
         at < self.data.len() && self.claimed[at / 64] & (1u64 << (at % 64)) != 0
     }
 
     /// Number of claimed bytes.
+    #[must_use]
     pub fn claimed_len(&self) -> usize {
         self.claimed.iter().map(|w| w.count_ones() as usize).sum()
     }
 
     /// Unclaimed byte runs in ascending order.
+    #[must_use]
     pub fn gaps(&self) -> Vec<UnclaimedGap> {
         let mut out = Vec::new();
         let mut i = 0;
@@ -283,6 +295,7 @@ pub struct PlacementCanvas {
 
 impl PlacementCanvas {
     /// A `len`-byte canvas initialized to `fill`.
+    #[must_use]
     pub fn new(len: usize, fill: u8, policy: OverlapPolicy) -> Self {
         Self {
             buf: vec![fill; len],
@@ -292,11 +305,13 @@ impl PlacementCanvas {
     }
 
     /// Canvas length in bytes.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.buf.len()
     }
 
     /// True when the canvas is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
     }
@@ -374,12 +389,14 @@ impl PlacementCanvas {
     }
 
     /// Whether byte `at` has been placed (`false` outside the canvas).
+    #[must_use]
     pub fn is_written(&self, at: usize) -> bool {
         at < self.buf.len() && self.written[at / 64] & (1u64 << (at % 64)) != 0
     }
 
     /// Byte runs never placed, as `(offset, len)` in ascending order; empty
     /// when every byte was written.
+    #[must_use]
     pub fn unwritten_ranges(&self) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
         let mut i = 0;
@@ -398,11 +415,13 @@ impl PlacementCanvas {
     }
 
     /// The placed bytes.
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.buf
     }
 
     /// Consume the canvas and return its bytes.
+    #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.buf
     }
@@ -512,9 +531,13 @@ mod tests {
         r.u8("b", 0).unwrap();
         assert!(matches!(
             r.u8("c", 0).unwrap_err().leaf(),
-            Error::ResourceLimit { .. }
+            Error::ResourceLimit {
+                requested: 3,
+                limit: 2,
+                ..
+            }
         ));
-        assert_eq!(ClaimedReader::new(&src).reads_left, 4 * 16 + 65_536);
+        assert_eq!(ClaimedReader::new(&src).read_limit, 4 * 16 + 65_536);
     }
 
     #[test]

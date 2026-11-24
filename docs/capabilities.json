@@ -464,6 +464,16 @@
     },
     {
       "crate": "formatkit-pixel",
+      "module": "tilemap",
+      "path": "formatkit_pixel::tilemap::{TextTilemapEntry, decode_text_tilemap_le, encode_text_tilemap_le, ScreenBlockLayout, blit_indexed_tile_8x8, IndexedTileBlit}",
+      "summary": "16-bit text tilemap entry codec (10-bit tile, h/v flip, 4-bit palette bank), 32x32 screen-block entry order with a short final band (row-major for maps up to 32 wide), and 8x8 indexed tile-to-RGBA blitting with palette base, flips, clipping and index-0 transparency.",
+      "domain_aliases": ["tilemap", "screen entry", "screen block", "BG map", "nametable", "tile flip", "palette bank", "tile render"],
+      "use_when": "Decoding or rendering tile-mapped backgrounds whose entries use the common 16-bit tile/flip/palette word, or whose wide maps are stored as 32x32 blocks.",
+      "avoid_when": "Entries use a different bit layout (8-bit affine names or extra priority bits need owner decoding) or tiles are planar (decode with planar first).",
+      "feature_gate": "formatkit/pixel"
+    },
+    {
+      "crate": "formatkit-pixel",
       "module": "atlas",
       "path": "formatkit_pixel::atlas::{blit_rgba, crop_rgba, compose_grid_atlas, GridAtlasLayout}",
       "summary": "RGBA8888 blitting, cropping, and uniform grid-atlas composition.",

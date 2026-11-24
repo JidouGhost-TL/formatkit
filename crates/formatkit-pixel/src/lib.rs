@@ -7,6 +7,8 @@
 //! - [`morton`]: Morton (Z-order) coordinate interleaving and 2D texture swizzle/unswizzle.
 //! - [`palette`]: Grayscale palettes, nearest-color lookup, and RGBA quantization.
 //! - [`planar`]: Interleaved-row planar 8×8 tile unpacking and packing (1/2/4 bitplanes).
+//! - [`tilemap`]: 16-bit text tilemap entries, 32×32 screen-block entry order, and 8×8
+//!   indexed tile-to-RGBA blitting with palette base, flips, and index-0 transparency.
 //!
 //! Crate-root items provide allocation-free 4bpp/8bpp index packing, 16-bit color-word
 //! conversions (`RGB565`, `BGR555`, `RGBA5551`, `RGBA4444`, `RGB444`), and explicit
@@ -45,6 +47,15 @@ pub use palette::{grayscale_palette, nearest_palette_index, quantize_rgba, Palet
 #[doc(alias = "chr")]
 pub mod planar;
 pub use planar::{pack_planar_tile_8x8_into, unpack_planar_tile_8x8_into};
+
+/// Text tilemap entries, 32×32 screen-block entry order, and 8×8 indexed tile blitting.
+#[doc(alias = "screen block")]
+#[doc(alias = "bg map")]
+pub mod tilemap;
+pub use tilemap::{
+    blit_indexed_tile_8x8, decode_text_tilemap_le, encode_text_tilemap_le, IndexedTileBlit,
+    ScreenBlockLayout, TextTilemapEntry,
+};
 
 /// Bits per palette index in a CLUT (paletted) image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

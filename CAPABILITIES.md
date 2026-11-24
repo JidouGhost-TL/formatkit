@@ -73,6 +73,9 @@ Task-oriented reference for every reusable, platform-neutral binary-data mechani
 | Decode bitmask-described pixel formats or S3TC / DXT1 / DXT3 / DXT5 block-compressed textures | `formatkit_pixel::dxt::{decode_dxt, DxtFormat, decode_masked, ChannelMasks, is_contiguous}` | `formatkit-pixel` |
 | Quantize RGBA images to a palette, find nearest palette color, or generate grayscale palettes | `formatkit_pixel::palette::{quantize_rgba, nearest_palette_index, grayscale_palette, PaletteDistanceMetric}` | `formatkit-pixel` |
 | Blit, crop, or compose sprites/tiles into a grid atlas | `formatkit_pixel::atlas::{blit_rgba, crop_rgba, compose_grid_atlas, GridAtlasLayout}` | `formatkit-pixel` |
+| Decode or encode 16-bit text tilemap entries (10-bit tile number, h/v flip, 4-bit palette bank) | `formatkit_pixel::tilemap::{TextTilemapEntry, decode_text_tilemap_le, encode_text_tilemap_le}` | `formatkit-pixel` |
+| Map tile coordinates to entry indices (or reorder whole maps) for tilemaps stored as 32×32 screen blocks with a short final band | `formatkit_pixel::tilemap::ScreenBlockLayout::{new, index, blocks_to_row_major, row_major_to_blocks}` | `formatkit-pixel` |
+| Draw an 8×8 tile of palette indices into an RGBA8888 image with palette base, h/v flip, clipping and index-0 transparency | `formatkit_pixel::tilemap::{blit_indexed_tile_8x8, IndexedTileBlit}` | `formatkit-pixel` |
 | Compute floor-halved mipmap dimensions | `formatkit_pixel::mip_extent` | `formatkit-pixel` |
 | Decode or encode PNG, PCX, TGA, or DDS images | `formatkit_codec::png`, `formatkit_codec::pcx`, `formatkit_codec::tga`, `formatkit_codec::dds` (default feature `dds`) | `formatkit-codec` |
 | Encode an RGBA8 PNG with real DEFLATE compression and adaptive scanline filters (or byte-stable stored blocks) | `formatkit_codec::png::{encode_rgba_png_with, PngEncodeOptions, PngCompression, PngFilter}` (`encode_rgba_png` stays stored/filter-`None`) | `formatkit-codec` |

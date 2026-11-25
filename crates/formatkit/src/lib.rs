@@ -2,7 +2,7 @@
 //!
 //! With `default = []`, the umbrella re-exports the core foundation crates:
 //! - [`core`] (`formatkit-core`): checked bytes/bits, sources, budgets, checksums, and shared values
-//! - [`layout`] (`formatkit-layout`): fields, records, tables, chunks, IFF/RIFF, charmaps, and edits
+//! - [`layout`] (`formatkit-layout`): fields, records, declarative table/chunk/marker specs, symmetric `pack_*` writers, offset-graph rewrites, IFF/RIFF, charmaps, and edits
 //! - [`catalog`] (`formatkit-catalog`): open format identities, detection, and operation contracts
 //! - [`runtime`] (`formatkit-runtime`): explicit owner-module composition and dispatch
 //!

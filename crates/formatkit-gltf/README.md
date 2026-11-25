@@ -9,7 +9,8 @@ helpers.
 - `gltf` — `GltfBuilder` for meshes, primitives, PBR and `KHR_materials_unlit`
   materials, embedded PNG or external images, samplers, skins, morph targets,
   nodes (TRS or matrix), and animations (`LINEAR` and `CUBICSPLINE`), emitting
-  `.glb` (`finish_glb`) or split `.gltf` + `.bin` + textures (`finish_split`).
+  `.glb` (`try_finish_glb` / `finish_glb`) or split `.gltf` + `.bin` + textures
+  (`finish_split`).
 - `glb` — Strict `read_glb` and `write_glb` container framing with 4-byte
   alignment and chunk bounds checks.
 - `json` — Compact, zero-dependency JSON value tree and serializer.

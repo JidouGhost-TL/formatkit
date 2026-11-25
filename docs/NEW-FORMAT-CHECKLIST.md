@@ -7,6 +7,7 @@ Pre-implementation and code-review checklist for adding a new format to any kit 
 ## 1. Reuse Before Writing
 
 - [ ] Checked [`CAPABILITIES.md`](../CAPABILITIES.md) and [`docs/capabilities.json`](capabilities.json) for existing primitives before writing local readers, bitstreams, checksums, LZ/RLE/Huffman/delta codecs, pixel unpackers, swizzlers, charmaps, or table decoders.
+- [ ] Evaluated `formatkit_layout`'s declarative specs (`FixedRecordTableSpec`, `CountedOffsetArraySpec`, `ChunkStreamSpec`, `MarkerScanStreamSpec`) and symmetric `PackPolicy` writers (`pack_fixed_record_table`, `pack_fixed_record_table_with_post_table`, `pack_counted_offset_array`, `pack_chunk_stream`, `pack_marker_scan_stream`) before writing custom table/chunk parsers or packers.
 - [ ] Confirmed that any reused mechanism matches the format's exact semantics (byte order, checksum coverage, LZ history/overshoot/consumed extent, pixel bit/nibble order) rather than relying on a similar name or an accidental round-trip.
 - [ ] Kept format identity, framing, validation error order, bounds, and writer policy in the format owner crate rather than branching inside generic services.
 

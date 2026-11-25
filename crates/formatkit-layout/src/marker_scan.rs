@@ -30,6 +30,9 @@ use crate::tables::OffsetSpan;
 /// assert_eq!(spans[1].offset, 8);
 /// assert_eq!(spans[1].slice(&packed), Some(&b"ITEM12345"[..]));
 /// ```
+#[doc(alias = "marker scan")]
+#[doc(alias = "magic stream")]
+#[doc(alias = "delimited stream")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MarkerScanStreamSpec {
     /// Byte offset where scanning begins.

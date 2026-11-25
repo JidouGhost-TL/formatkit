@@ -488,6 +488,9 @@ pub(crate) fn checked_align_up_multiple_u64(value: u64, align: u64) -> Option<u6
 }
 
 /// Serialization policy controlling alignment and fill bytes for declarative layout writers.
+#[doc(alias = "pack policy")]
+#[doc(alias = "alignment policy")]
+#[doc(alias = "layout writer")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackPolicy {
     /// Byte alignment applied to payload starts (must be `>= 1`).

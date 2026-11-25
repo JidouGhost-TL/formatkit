@@ -6,11 +6,22 @@
 //! UVs/colours/skinning, indices), PBR and `KHR_materials_unlit` materials,
 //! embedded PNG or external images, samplers, skins, morph targets, a node
 //! tree, and animation channels, then serializes either a single self-contained
-//! `.glb` ([`GltfBuilder::finish_glb`]) or a split `.gltf` + `.bin` + textures
-//! bundle ([`GltfBuilder::finish_split`]).
+//! `.glb` ([`GltfBuilder::try_finish_glb`] / [`GltfBuilder::finish_glb`]) or a
+//! split `.gltf` + `.bin` + textures bundle ([`GltfBuilder::finish_split`]).
 //!
 //! [`glb::read_glb`] and [`glb::write_glb`] provide strict, checked GLB 2.0
 //! container framing without external JSON dependencies.
+//!
+//! # Example
+//! ```
+//! use formatkit_gltf::{read_glb, GltfBuilder};
+//!
+//! let mut builder = GltfBuilder::new();
+//! let root = builder.add_node(Some("root".into()), None, None);
+//! let glb = builder.try_finish_glb(vec![root]).unwrap();
+//! let (json, _bin) = read_glb(&glb).unwrap();
+//! assert!(core::str::from_utf8(json).unwrap().contains("\"version\":\"2.0\""));
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

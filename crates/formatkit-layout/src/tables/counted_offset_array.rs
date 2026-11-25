@@ -13,6 +13,30 @@ use crate::spec::{
 };
 
 /// Ordering and deduplication policy applied to resolved offsets in a [`CountedOffsetArraySpec`].
+///
+/// # Example
+/// ```
+/// use formatkit_core::Endian;
+/// use formatkit_layout::{
+///     parse_counted_offset_array, CountedOffsetArraySpec, IntWidth, OffsetOrderPolicy,
+/// };
+///
+/// const SPEC: CountedOffsetArraySpec =
+///     CountedOffsetArraySpec::new(0, 3, IntWidth::U32, Endian::Little, 16)
+///         .with_order_policy(OffsetOrderPolicy::AllowUnsorted);
+///
+/// // Offsets are stored out of physical order: slot 0 -> 16, slot 1 -> 12, slot 2 -> 20
+/// let mut data = Vec::new();
+/// data.extend_from_slice(&16u32.to_le_bytes());
+/// data.extend_from_slice(&12u32.to_le_bytes());
+/// data.extend_from_slice(&20u32.to_le_bytes());
+/// data.extend_from_slice(b"BBBBAAAAcccc");
+///
+/// let spans = parse_counted_offset_array(&data, &SPEC).unwrap();
+/// assert_eq!(spans[0].slice(&data), Some(&b"AAAA"[..]));
+/// assert_eq!(spans[1].slice(&data), Some(&b"BBBB"[..]));
+/// assert_eq!(spans[2].slice(&data), Some(&b"cccc"[..]));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OffsetOrderPolicy {
     /// Require resolved offsets to be monotonically non-decreasing (default).
@@ -52,6 +76,9 @@ pub enum OffsetOrderPolicy {
 /// assert_eq!(spans[1].offset, 16);
 /// assert_eq!(spans[1].size, 6);
 /// ```
+#[doc(alias = "offset table")]
+#[doc(alias = "boundary array")]
+#[doc(alias = "pointer table")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CountedOffsetArraySpec {
     /// Byte offset where the offset array begins.
@@ -583,6 +610,28 @@ pub fn parse_counted_offset_array_with_count_metadata(
 /// - Duplicate physical payload offsets (e.g. an empty payload followed by another entry
 ///   at the same byte offset) when [`CountedOffsetArraySpec::order_policy`] is
 ///   [`OffsetOrderPolicy::SortAndDeduplicate`].
+///
+/// # Example
+/// ```
+/// use formatkit_core::Endian;
+/// use formatkit_layout::{
+///     pack_counted_offset_array, parse_counted_offset_array_with_count, CountedOffsetArraySpec,
+///     IntWidth, PackPolicy,
+/// };
+///
+/// const SPEC: CountedOffsetArraySpec =
+///     CountedOffsetArraySpec::new(0, 0, IntWidth::U32, Endian::Little, 16)
+///         .with_count_adjust(1)
+///         .with_has_eof_sentinel(true);
+///
+/// let payloads: &[&[u8]] = &[b"one", b"two!"];
+/// let policy = PackPolicy::TIGHT.with_data_alignment(4);
+/// let packed = pack_counted_offset_array(&SPEC, &policy, &[], payloads).unwrap();
+/// let spans = parse_counted_offset_array_with_count(&packed, &SPEC, payloads.len()).unwrap();
+/// assert_eq!(spans.len(), 2);
+/// assert_eq!(spans[0].offset, 12);
+/// assert_eq!(spans[1].slice(&packed), Some(&b"two!"[..]));
+/// ```
 pub fn pack_counted_offset_array(
     spec: &CountedOffsetArraySpec,
     policy: &PackPolicy,

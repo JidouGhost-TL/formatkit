@@ -51,6 +51,34 @@ fn plan_offset(
 /// [`TableTermination::FieldEquals`], or [`TableTermination::FieldNotEquals`]),
 /// an optional string pool when [`FixedRecordTableSpec::name_pool`]
 /// is configured, and then the aligned payloads.
+///
+/// # Example
+/// ```
+/// use formatkit_layout::{
+///     pack_fixed_record_table, parse_fixed_record_table_counted, FixedRecordInput,
+///     FixedRecordTableSpec, IntFieldSpec, PackPolicy, SizeMode, TableTermination,
+/// };
+///
+/// const SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+///     8,
+///     0,
+///     16,
+///     Some(IntFieldSpec::u32_le(0)),
+///     SizeMode::Stored(IntFieldSpec::u32_le(4)),
+///     TableTermination::Counted(0),
+/// );
+///
+/// let inputs = [
+///     FixedRecordInput { name: None, key: None, payload: b"abc", record_template: None },
+///     FixedRecordInput { name: None, key: None, payload: b"WXYZ", record_template: None },
+/// ];
+/// let policy = PackPolicy::TIGHT.with_data_alignment(8);
+/// let packed = pack_fixed_record_table(&SPEC, &policy, &[], &inputs).unwrap();
+/// let entries = parse_fixed_record_table_counted(&packed, &SPEC, inputs.len()).unwrap();
+/// assert_eq!(entries[0].offset, 16);
+/// assert_eq!(entries[1].offset, 24);
+/// assert_eq!(entries[1].payload(&packed), Some(&b"WXYZ"[..]));
+/// ```
 pub fn pack_fixed_record_table(
     spec: &FixedRecordTableSpec,
     policy: &PackPolicy,

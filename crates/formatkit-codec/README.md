@@ -1,15 +1,18 @@
 # formatkit-codec
 
-Reusable bounded compression and image codecs with exact consumed-byte reporting
-(`DecodeOutcome`) and no platform catalog or container envelope policy.
+Reusable bounded compression, audio, and image codecs with exact consumed-byte
+reporting (`DecodeOutcome`) and no platform catalog or container envelope policy.
 
 ## Compression & LZSS primitives
 
-- `okumura` — 4096-byte pre-filled ring-buffer LZSS (LSB-first and MSB-first variants).
+- `okumura` — 4096-byte pre-filled ring-buffer LZSS (LSB-first and MSB-first variants,
+  configurable fill byte and initial cursor).
 - `flag_lzss` — parameterized flag-byte / flag-word LZSS stream executor for custom
-  match-token grammars and linear sliding-window history.
+  match-token grammars with linear sliding-window history, fixed ring buffers
+  (`decode_flag_lzss_ring_to_end`), and multi-action `FlagAction` dispatch.
 - `counted_lsb` — externally counted LZ commands with lazy interleaved LSB-first control bytes.
-- `sliding_window` — low-level `append_match`, `find_longest_match`, and `RingBuffer`.
+- `sliding_window` — low-level `append_match`, `find_longest_match`, `HashMatcher`,
+  and `RingBuffer`.
 - `deflate`, `inflate`, `gzip`, `lzma`, `rnc` — bounded standard stream codecs.
 - `huffman`, `rle`, `delta` — canonical Huffman tables, configurable high-bit RLE,
   and allocation-free byte/16-bit delta transforms.
@@ -30,9 +33,16 @@ exact consumed extents and `max_output` checks before allocation:
 - `bit_unpack` — widen packed 1/2/4/8-bit units to 1..=32 bits with a
   conditional offset.
 
+## Audio & music codecs
+
+- `ima_adpcm` — stateful IMA/DVI 4-bit ADPCM mono/interleaved decoding and encoding.
+- `smf` — Standard MIDI File (format 0/1/2) reader, writer, and VLQ helpers.
+- `sf2` — SoundFont 2.04 (`.sf2`) RIFF `sfbk` soundbank writer and structural validator.
+
 ## Image codecs
 
-- `png` — PNG decoding and RGBA encoding.
+- `png` — PNG decoding and RGBA encoding (`encode_rgba_png` stored blocks or
+  `encode_rgba_png_with` DEFLATE-compressed with adaptive scanline filters).
 - `pcx` — PCX decoding and indexed/RGBA encoding.
 - `tga` — TGA decoding and indexed/RGBA encoding.
 - `dds` — DirectDraw Surface decoding, encoding, and rect patching (gated behind

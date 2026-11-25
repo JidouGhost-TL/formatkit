@@ -144,6 +144,48 @@ impl NameFieldSpec {
 }
 
 /// Wire format of entries stored in a string pool referenced by [`NamePoolSpec`].
+///
+/// # Example
+/// ```
+/// use formatkit_core::Endian;
+/// use formatkit_layout::{
+///     pack_fixed_record_table, parse_fixed_record_table, FixedRecordInput, FixedRecordTableSpec,
+///     IntFieldSpec, IntWidth, NameEncoding, NamePoolFormat, NamePoolSpec, OffsetBase, PackPolicy,
+///     SizeMode, TableTermination,
+/// };
+///
+/// const SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+///     12,
+///     0,
+///     16,
+///     Some(IntFieldSpec::u32_le(4)),
+///     SizeMode::Stored(IntFieldSpec::u32_le(8)),
+///     TableTermination::Counted(1),
+/// )
+/// .with_name_pool(
+///     NamePoolSpec::new(
+///         IntFieldSpec::u32_le(0),
+///         OffsetBase::TableEnd,
+///         NameEncoding::Ascii,
+///         32,
+///     )
+///     .with_format(NamePoolFormat::LengthPrefixed {
+///         len_width: IntWidth::U8,
+///         endian: Endian::Little,
+///     }),
+/// );
+///
+/// let inputs = [FixedRecordInput {
+///     name: Some(b"alpha"),
+///     key: None,
+///     payload: b"DATA",
+///     record_template: None,
+/// }];
+/// let packed = pack_fixed_record_table(&SPEC, &PackPolicy::TIGHT, &[], &inputs).unwrap();
+/// let entries = parse_fixed_record_table(&packed, &SPEC).unwrap();
+/// assert_eq!(entries[0].name_str(), Some("alpha"));
+/// assert_eq!(entries[0].payload(&packed), Some(&b"DATA"[..]));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NamePoolFormat {
     /// NUL-terminated byte string (`bytes\0`, default).
@@ -390,6 +432,41 @@ pub enum TableTermination {
 }
 
 /// Predicate matching interior tombstone/free rows based on an integer field value.
+///
+/// # Example
+/// ```
+/// use formatkit_layout::{
+///     parse_fixed_record_table, FixedRecordTableSpec, IntFieldSpec, RowFieldPredicate, SizeMode,
+///     TableTermination,
+/// };
+///
+/// const SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+///     12,
+///     0,
+///     16,
+///     Some(IntFieldSpec::u32_le(4)),
+///     SizeMode::Stored(IntFieldSpec::u32_le(8)),
+///     TableTermination::Counted(2),
+/// )
+/// .with_skip_predicate(RowFieldPredicate::Equals {
+///     field: IntFieldSpec::u32_le(0),
+///     value: 0,
+/// });
+///
+/// let mut data = Vec::new();
+/// // Row 0: tombstone (flag == 0)
+/// data.extend_from_slice(&[0u8; 12]);
+/// // Row 1: active entry (flag == 1)
+/// data.extend_from_slice(&1u32.to_le_bytes());
+/// data.extend_from_slice(&24u32.to_le_bytes());
+/// data.extend_from_slice(&3u32.to_le_bytes());
+/// data.extend_from_slice(b"XYZ");
+///
+/// let entries = parse_fixed_record_table(&data, &SPEC).unwrap();
+/// assert_eq!(entries.len(), 1);
+/// assert_eq!(entries[0].index, 1);
+/// assert_eq!(entries[0].payload(&data), Some(&b"XYZ"[..]));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowFieldPredicate {
     /// Skip rows where `field.read(row) == value`.
@@ -427,6 +504,42 @@ impl RowFieldPredicate {
 
 /// Runtime overrides and detached buffers for [`FixedRecordTableSpec::parse_with`]
 /// and [`FixedRecordTableSpec::iter_with`].
+///
+/// # Example
+/// ```
+/// use formatkit_layout::{
+///     FixedRecordTableSpec, IntFieldSpec, SizeMode, TableParseOptions, TableTermination,
+/// };
+///
+/// const SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+///     8,
+///     0,
+///     64,
+///     Some(IntFieldSpec::u32_le(0)),
+///     SizeMode::Stored(IntFieldSpec::u32_le(4)),
+///     TableTermination::Counted(0),
+/// );
+///
+/// // Only the 8-byte directory row is staged in RAM; payload lives at offset 4096 in a 8192-byte carrier.
+/// let mut table_bytes = Vec::new();
+/// table_bytes.extend_from_slice(&4096u32.to_le_bytes());
+/// table_bytes.extend_from_slice(&512u32.to_le_bytes());
+///
+/// let opts = TableParseOptions::new()
+///     .with_count(1)
+///     .with_carrier_len(8192);
+/// let views: Vec<_> = SPEC
+///     .iter_with(&table_bytes, opts)
+///     .unwrap()
+///     .collect::<Result<_, _>>()
+///     .unwrap();
+/// assert_eq!(views.len(), 1);
+/// assert_eq!((views[0].offset, views[0].size), (4096, 512));
+///
+/// let entries = SPEC.parse_with(&table_bytes, opts).unwrap();
+/// assert_eq!(entries.len(), 1);
+/// assert_eq!((entries[0].offset, entries[0].size), (4096, 512));
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TableParseOptions<'a> {
     /// Override [`FixedRecordTableSpec::termination`] with [`TableTermination::Counted`].
@@ -522,6 +635,9 @@ impl<'a> TableParseOptions<'a> {
 /// assert_eq!(entries[0].size, 4);
 /// assert_eq!(entries[0].payload(&data), Some(&b"BODY"[..]));
 /// ```
+#[doc(alias = "directory table")]
+#[doc(alias = "record table")]
+#[doc(alias = "fixed stride table")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FixedRecordTableSpec {
     /// Fixed byte stride of each record (must be `>= 1`).

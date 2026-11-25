@@ -36,7 +36,7 @@ packages can also be consumed directly without the umbrella.
 | --- | --- |
 | `formatkit` | Umbrella re-export crate (`default = []`; optional `archive`, `pixel`, `codec`, `patch`, `gltf`, `corpus` features) |
 | `formatkit-core` | Checked bytes/bits, sources, budgets, errors, images, PCM/WAV reader & writer (with `fact` and `smpl` loops), `checksum`, `bcd`, `math`, `topology`, `pointer_table`, `padding`, and optional Shift-JIS text |
-| `formatkit-layout` | Configured fields, records, `tables`, `chunks`, `iff`, `charmap`, ranges, resident edits and `offset_graph` exact rewrites |
+| `formatkit-layout` | Configured fields, records, declarative `spec` (`IntFieldSpec`, `OffsetBase`, `PackPolicy`), `tables`, `chunks`, `marker_scan`, `iff`, `charmap`, ranges, resident edits, symmetric `pack_*` writers, and `offset_graph` exact rewrites |
 | `formatkit-catalog` | Open typed identities, detection catalogs and executable operation contracts |
 | `formatkit-runtime` | Explicit owner-module composition (`Strict`/`Legacy`), resident writers and operation dispatch |
 | `formatkit-archive` | Mounted browsing, extraction to caller sinks, injected traversal and `paired_stored_mount` |

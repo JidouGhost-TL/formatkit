@@ -6,8 +6,8 @@ value types for independent format libraries.
 ## What is included
 
 - **Checked I/O & cursors**: `Reader`, `Writer`, explicit-endian slice helpers
-  (`u16_at`, `u32_at`, `uint_le_at`, …), bit cursors (`LsbBitCursor`, `MsbBitCursor`),
-  and interleaved bit readers/writers.
+  (`u16_at`, `u32_at`, `uint_le_at`, …), `bounded_cstr`, `extent` / `checked_align_up`,
+  bit cursors (`LsbBitCursor`, `MsbBitCursor`), and interleaved bit readers/writers.
 - **Sources & accounting**: `RangeSource` implementations (memory, file, slice,
   strided, composite, transformed), `SourceBindings`, `WorkBudget`,
   `ResidentReservation`, `CancellationToken`, and `copy_source_range`.
@@ -15,8 +15,9 @@ value types for independent format libraries.
   and `StoredRangeNamespace`.
 - **Checksums (`checksum`)**: `Crc16`, `Crc32`, `Crc32IsoHdlc`, `Crc32Mpeg2`,
   `Adler32`, wrapping sums/XORs, and configurable `FoldChecksum`.
-- **Shared values & utilities**: `Image`, `audio::Pcm`, `bcd`, `math` (Q12 3-D
-  fixed-point transforms), `topology` (triangle strips/fans), `pointer_table`,
+- **Shared values & utilities**: `Image`, `audio` (`Pcm`, `parse_wav`, `fact` and
+  `smpl` loop chunks), `bcd`, `math` (`binary16_to_f32`, Q12 fixed-point transforms,
+  matrices, and quaternions), `topology` (triangle strips/fans), `pointer_table`,
   `padding`, and `text` (with optional Shift-JIS tables via the default `shift-jis`
   feature).
 

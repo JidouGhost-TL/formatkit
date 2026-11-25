@@ -14,8 +14,8 @@ pub struct PointerTable {
 /// Scan `bytes` for maximal, non-overlapping 4-byte-aligned runs of at least
 /// `min_entries` 32-bit pointers targeting `[base_addr, base_addr + bytes.len())`.
 ///
-/// The caller supplies the platform bus `base_addr` (e.g. `0x0800_0000` for GBA ROMs)
-/// and byte order. Returns an empty `Vec` if `min_entries == 0` or `bytes.len() < 4`.
+/// The caller supplies the memory-mapped bus `base_addr` (e.g. a fixed base address such as
+/// `0x0800_0000`) and byte order. Returns an empty `Vec` if `min_entries == 0` or `bytes.len() < 4`.
 pub fn scan_u32_pointer_tables(
     bytes: &[u8],
     base_addr: u32,

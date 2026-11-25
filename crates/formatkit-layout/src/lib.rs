@@ -1,7 +1,18 @@
-//! Configured, reusable descriptions of binary fields and layout ranges.
+//! Configured, reusable descriptions of binary fields, declarative table/chunk/marker
+//! specifications, symmetric writers, charmaps, offset-graph rewrites, and checked
+//! layout ranges over resident byte slices.
 //!
-//! `formatkit-layout` describes repeatable relationships among resident bytes. Raw
-//! checked reads, numeric decoding, and source coordinates remain in
+//! `formatkit-layout` describes repeatable relationships among resident bytes:
+//! - [`spec`] — shared [`IntFieldSpec`], [`OffsetBase`], [`PackPolicy`], and [`LayoutError`]
+//! - [`tables`] — declarative [`FixedRecordTableSpec`] and [`CountedOffsetArraySpec`]
+//!   (with zero-allocation iterators, metadata-only carrier validation, and symmetric `pack_*`
+//!   writers), plus specialized offset/boundary/size tables
+//! - [`chunks`] and [`marker_scan`] — declarative [`ChunkStreamSpec`] and
+//!   [`MarkerScanStreamSpec`] scanners and symmetric packers
+//! - [`offset_graph`] — [`ClaimedReader`] and [`PlacementCanvas`] for exact rewrites
+//! - [`field`], [`records`], [`ranges`], [`iff`], [`text`], and [`edit`]
+//!
+//! Raw checked reads, numeric decoding, and source coordinates remain in
 //! [`formatkit_core`]; format identity, semantic validation, limits, diagnostics,
 //! and capabilities remain with each format owner.
 //!

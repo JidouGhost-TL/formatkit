@@ -17,6 +17,7 @@ Enable additional crates as needed:
 - `pixel` — `formatkit::pixel` (`formatkit-pixel`)
 - `codec` — `formatkit::codec` (`formatkit-codec`)
 - `patch` — `formatkit::patch` (`formatkit-patch`)
+- `gltf` — `formatkit::gltf` (`formatkit-gltf`)
 - `corpus` — `formatkit::corpus` (`formatkit-corpus`) and `formatkit::corpus_test` (`formatkit-corpus-test`)
 
 Individual crates can also be depended on directly without the umbrella.

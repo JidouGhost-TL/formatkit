@@ -254,6 +254,9 @@ pub enum ChunkAlignmentBase {
 /// assert_eq!(chunks[1].tag, b"CHK1");
 /// assert_eq!(chunks[1].payload(&data), Some(&b"WXYZ"[..]));
 /// ```
+#[doc(alias = "chunk stream")]
+#[doc(alias = "tlv")]
+#[doc(alias = "tag length value")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkStreamSpec {
     /// Byte offset where the first chunk header begins.
@@ -840,6 +843,45 @@ pub struct ChunkInput<'a> {
 }
 
 /// Serialize `chunks` into a sequential chunk stream conforming to `spec` and `policy`.
+///
+/// # Example
+/// ```
+/// use formatkit_layout::{
+///     pack_chunk_stream, parse_chunk_stream, ChunkInput, ChunkSizeMode, ChunkStreamSpec,
+///     IntFieldSpec, PackPolicy,
+/// };
+///
+/// const SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+///     0,
+///     8,
+///     IntFieldSpec::u32_le(4),
+///     ChunkSizeMode::PayloadOnly,
+///     16,
+/// )
+/// .with_tag(0, 4)
+/// .with_alignment(4);
+///
+/// let inputs = [
+///     ChunkInput {
+///         tag: b"ONE ",
+///         payload: b"abc",
+///         header_template: None,
+///         trailer: None,
+///     },
+///     ChunkInput {
+///         tag: b"TWO ",
+///         payload: b"1234",
+///         header_template: None,
+///         trailer: None,
+///     },
+/// ];
+/// let packed = pack_chunk_stream(&SPEC, &PackPolicy::TIGHT, &[], &inputs).unwrap();
+/// let parsed = parse_chunk_stream(&packed, &SPEC).unwrap();
+/// assert_eq!(parsed.len(), 2);
+/// assert_eq!(parsed[0].tag, b"ONE ");
+/// assert_eq!(parsed[0].payload(&packed), Some(&b"abc"[..]));
+/// assert_eq!(parsed[1].payload(&packed), Some(&b"1234"[..]));
+/// ```
 pub fn pack_chunk_stream(
     spec: &ChunkStreamSpec,
     policy: &PackPolicy,

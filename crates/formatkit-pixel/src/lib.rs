@@ -70,10 +70,10 @@ pub enum IndexBits {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NibbleOrder {
     /// Low nibble (`b & 0x0F`) is the first (left) pixel; high nibble (`b >> 4`) is the second.
-    /// Used by GBA 4bpp tiles, TIM2, GIM, and BMP-like layouts.
+    /// Common in little-endian 4bpp packed pixel and bitmap layouts.
     LowFirst,
     /// High nibble (`b >> 4`) is the first (left) pixel; low nibble (`b & 0x0F`) is the second.
-    /// Used by WonderSwan packed tiles and big-endian 4bpp layouts.
+    /// Common in big-endian and MSB-first 4bpp packed pixel layouts.
     HighFirst,
 }
 

@@ -1,4 +1,11 @@
-//! Configured table row descriptions without owner grammar policy.
+//! Configured table row descriptions and declarative directory specs without owner grammar policy.
+//!
+//! Prefer [`FixedRecordTableSpec`] (with [`TableParseOptions`], [`FixedRecordTableSpec::parse_with`],
+//! [`FixedRecordTableSpec::iter_with`], and [`pack_fixed_record_table`]) or
+//! [`CountedOffsetArraySpec`] (with [`OffsetOrderPolicy`] and [`pack_counted_offset_array`])
+//! for declarative fixed-stride directories and counted offset arrays, alongside specialized
+//! aligned-size, counted-boundary, first-word, offset-length, positive-size, and terminal-offset
+//! table helpers.
 
 mod aligned_sizes;
 mod counted_boundaries;

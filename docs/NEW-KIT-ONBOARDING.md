@@ -108,6 +108,33 @@ If your format is an archive or container with child entries, implement `Indexed
 2. Build `Vec<NamespaceEntry>` (each with `name: Option<String>`, `offset: u64`, `size: u64`).
 3. Construct `StoredRangeNamespace::new(source, entries, StoredRangeNamespaceLimits::default())?` (which implements `IndexedNamespace` with zero-copy `ArchiveMemberRangeSource` views).
 
+> **Declarative specs first:** For fixed-stride directory tables, prefer `FixedRecordTableSpec::parse_with` or zero-allocation `FixedRecordTableSpec::iter_with` with `TableParseOptions::new().with_carrier_len(source.len())` so you validate directory offsets against the full carrier length while reading only staged table bytes into memory. For archive writers, reuse the same `const` spec with `pack_fixed_record_table` (or `pack_counted_offset_array`, `pack_chunk_stream`, `pack_marker_scan_stream`) and `PackPolicy`:
+>
+> ```rust
+> use formatkit_layout::{
+>     pack_fixed_record_table, FixedRecordInput, FixedRecordTableSpec, IntFieldSpec,
+>     PackPolicy, SizeMode, TableParseOptions, TableTermination,
+> };
+>
+> const DIR_SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+>     8, 0, 4096,
+>     Some(IntFieldSpec::u32_le(0)),
+>     SizeMode::Stored(IntFieldSpec::u32_le(4)),
+>     TableTermination::Counted(0),
+> );
+>
+> // Lazy metadata-only mount from staged table bytes + external carrier length:
+> let opts = TableParseOptions::new().with_count(entry_count).with_carrier_len(source.len());
+> for view in DIR_SPEC.iter_with(&table_bytes, opts)? {
+>     let view = view?;
+>     // map (view.offset, view.size) into NamespaceEntry
+> }
+>
+> // Symmetric writer using the same spec + PackPolicy:
+> let policy = PackPolicy::TIGHT.with_data_alignment(16);
+> let packed = pack_fixed_record_table(&DIR_SPEC, &policy, &header_prefix, &inputs)?;
+> ```
+
 ### Paired Index + Data Archives
 
 When the directory lives in an index file and member payloads live in a separate data file, use `formatkit_archive::paired_stored_mount::PairedStoredMount` to share role resolution, source revalidation, bounded index I/O, and `StoredRangeNamespace` construction while keeping the directory grammar in your owner callback.

@@ -254,6 +254,16 @@
     },
     {
       "crate": "formatkit-layout",
+      "module": "spec",
+      "path": "formatkit_layout::spec::{IntFieldSpec, IntWidth, OffsetBase, PackPolicy, LayoutError}",
+      "summary": "Shared const-constructible integer/bit-field descriptors, offset-base coordinate transforms (including TableStart, TableEndPlus, and SubtractBase), PackPolicy serialization settings, and LayoutError for declarative layout specs.",
+      "domain_aliases": ["PackPolicy", "IntFieldSpec", "OffsetBase", "declarative layout", "bit-masked field", "pack policy"],
+      "use_when": "Configuring field widths/masks, offset coordinate bases, or alignment and padding policies shared across FixedRecordTableSpec, CountedOffsetArraySpec, ChunkStreamSpec, and MarkerScanStreamSpec.",
+      "avoid_when": "Performing one-off sequential byte reads (use formatkit_core::Reader).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
       "module": "field",
       "path": "formatkit_layout::field::{U8Field, I8Field, U16Field, I16Field, U32Field, I32Field, U64Field, I64Field, F32Field, F64Field, ScaledU32Field, BytesField, U16ArrayField, I16ArrayField, U32ArrayField, I32ArrayField, F32ArrayField}",
       "summary": "Static, const-constructible field descriptors for reading and editing typed values at fixed offsets in resident slices.",
@@ -986,7 +996,7 @@
       "crate": "formatkit-gltf",
       "module": "gltf",
       "path": "formatkit_gltf::gltf::{GltfBuilder, Prim, PrimExtras, MorphTarget, MaterialOptions, AlphaMode, GltfError, GltfSplitOutput, push_animation_channel}",
-      "summary": "Dependency-free glTF 2.0 document builder supporting meshes, PBR and KHR_materials_unlit materials, embedded PNG or external images, samplers, skins, morph targets, TRS/matrix nodes, animations, and .glb or split .gltf+.bin export.",
+      "summary": "Dependency-free glTF 2.0 document builder supporting meshes, PBR and KHR_materials_unlit materials, embedded PNG or external images, samplers, skins, morph targets, TRS/matrix nodes, animations, and fallible .glb (try_finish_glb / finish_glb) or split .gltf+.bin export.",
       "domain_aliases": ["glTF", "GLB", "3D model export", "mesh export", "skeletal animation", "morph targets", "KHR_materials_unlit"],
       "use_when": "Exporting decoded 3D geometry, materials, textures, skeletons, and animations to glTF 2.0 without external JSON dependencies.",
       "avoid_when": "Parsing arbitrary third-party glTF JSON graphs (use glb::read_glb for container framing and a full JSON parser if needed).",

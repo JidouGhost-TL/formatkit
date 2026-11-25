@@ -4,7 +4,8 @@
 //! The builder accumulates one binary buffer (accessor data plus optional
 //! embedded image payloads) and the JSON arrays that index into it — buffer
 //! views, accessors, meshes, materials, textures, images, samplers, skins,
-//! nodes, and animations. [`GltfBuilder::finish_glb`] wraps the JSON and the
+//! nodes, and animations. [`GltfBuilder::try_finish_glb`] (and its infallible
+//! convenience wrapper [`GltfBuilder::finish_glb`]) wraps the JSON and the
 //! buffer into the two-chunk GLB layout; [`GltfBuilder::finish_split`] emits
 //! external `.bin` and image files.
 //!

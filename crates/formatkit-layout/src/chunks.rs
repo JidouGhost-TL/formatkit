@@ -10,7 +10,7 @@ use core::ops::Range;
 
 use formatkit_core::{checked_align_up_multiple, Endian};
 
-use crate::spec::{IntFieldSpec, LayoutError, PackPolicy};
+use crate::spec::{try_push, IntFieldSpec, LayoutError, PackPolicy};
 
 /// The framing shared by one payload-sized, eight-byte-header chunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,33 +221,21 @@ pub enum ChunkAlignmentBase {
 /// `const`-constructible declarative specification for sequential tagged or
 /// tagless chunk streams.
 ///
-/// When [`ChunkStreamSpec::alignment`] is greater than `1`, [`iter_chunk_stream`],
-/// [`parse_chunk_stream`], and [`pack_chunk_stream`] align offsets relative to
-/// byte `0` of the carrier ([`ChunkAlignmentBase::CarrierStart`]). Use
-/// [`iter_chunk_stream_with_alignment_base`],
-/// [`parse_chunk_stream_with_alignment_base`], or
-/// [`pack_chunk_stream_with_alignment_base`] to align relative to
-/// [`ChunkStreamSpec::start_offset`] instead.
-///
 /// # Example
 /// ```
 /// use formatkit_layout::{
 ///     parse_chunk_stream, ChunkSizeMode, ChunkStreamSpec, IntFieldSpec,
 /// };
 ///
-/// const SPEC: ChunkStreamSpec = ChunkStreamSpec {
-///     start_offset: 0,
-///     header_size: 8,
-///     tag_offset: 0,
-///     tag_len: 4,
-///     size_field: IntFieldSpec::u32_le(4),
-///     size_mode: ChunkSizeMode::PayloadOnly,
-///     alignment: 4,
-///     trailer_size: 0,
-///     terminator_tag: None,
-///     require_eof_closure: true,
-///     max_chunks: 64,
-/// };
+/// const SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+///     0,
+///     8,
+///     IntFieldSpec::u32_le(4),
+///     ChunkSizeMode::PayloadOnly,
+///     64,
+/// )
+/// .with_tag(0, 4)
+/// .with_alignment(4);
 ///
 /// let mut data = Vec::new();
 /// // Chunk 0: 3-byte payload + 1 alignment pad byte
@@ -279,15 +267,22 @@ pub struct ChunkStreamSpec {
     pub tag_len: usize,
     /// Integer field inside each chunk header carrying the chunk size.
     pub size_field: IntFieldSpec,
+    /// Non-zero byte multiplier applied to decoded `size_field` values (default `1`).
+    pub size_unit: u64,
     /// Whether `size_field` counts only the payload or includes `header_size`.
     pub size_mode: ChunkSizeMode,
     /// Byte alignment for the next chunk start after each payload + trailer (e.g. `1`, `4`, `2048`; must be `>= 1`).
     pub alignment: usize,
+    /// Coordinate origin used when applying [`ChunkStreamSpec::alignment`] (default [`ChunkAlignmentBase::CarrierStart`]).
+    pub alignment_base: ChunkAlignmentBase,
     /// Fixed number of trailing bytes (e.g. checksum or footer) immediately following each chunk's payload before alignment (default `0`).
     pub trailer_size: usize,
     /// Optional tag that terminates the stream cleanly without being emitted.
     /// Must be `None` when `tag_len == 0`.
     pub terminator_tag: Option<&'static [u8]>,
+    /// When `true`, a chunk whose raw `size_field` decodes to `0` terminates the stream cleanly
+    /// without being emitted (default `false`).
+    pub terminate_on_zero_size: bool,
     /// When `true`, reject trailing bytes shorter than `header_size` at stream end.
     pub require_eof_closure: bool,
     /// Maximum number of chunks accepted before returning [`LayoutError::MaxEntriesExceeded`].
@@ -296,8 +291,9 @@ pub struct ChunkStreamSpec {
 
 impl ChunkStreamSpec {
     /// Construct a [`ChunkStreamSpec`] with sensible defaults
-    /// (`tag_offset: 0`, `tag_len: 0`, `alignment: 1`, `trailer_size: 0`,
-    /// `terminator_tag: None`, `require_eof_closure: true`).
+    /// (`tag_offset: 0`, `tag_len: 0`, `size_unit: 1`, `alignment: 1`,
+    /// `alignment_base: ChunkAlignmentBase::CarrierStart`, `trailer_size: 0`,
+    /// `terminator_tag: None`, `terminate_on_zero_size: false`, `require_eof_closure: true`).
     #[must_use]
     pub const fn new(
         start_offset: usize,
@@ -312,10 +308,13 @@ impl ChunkStreamSpec {
             tag_offset: 0,
             tag_len: 0,
             size_field,
+            size_unit: 1,
             size_mode,
             alignment: 1,
+            alignment_base: ChunkAlignmentBase::CarrierStart,
             trailer_size: 0,
             terminator_tag: None,
+            terminate_on_zero_size: false,
             require_eof_closure: true,
             max_chunks,
         }
@@ -329,10 +328,24 @@ impl ChunkStreamSpec {
         self
     }
 
+    /// Set [`ChunkStreamSpec::size_unit`].
+    #[must_use]
+    pub const fn with_size_unit(mut self, unit: u64) -> Self {
+        self.size_unit = unit;
+        self
+    }
+
     /// Set [`ChunkStreamSpec::alignment`].
     #[must_use]
     pub const fn with_alignment(mut self, alignment: usize) -> Self {
         self.alignment = alignment;
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::alignment_base`].
+    #[must_use]
+    pub const fn with_alignment_base(mut self, base: ChunkAlignmentBase) -> Self {
+        self.alignment_base = base;
         self
     }
 
@@ -347,6 +360,13 @@ impl ChunkStreamSpec {
     #[must_use]
     pub const fn with_terminator_tag(mut self, tag: &'static [u8]) -> Self {
         self.terminator_tag = Some(tag);
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::terminate_on_zero_size`].
+    #[must_use]
+    pub const fn with_terminate_on_zero_size(mut self, enabled: bool) -> Self {
+        self.terminate_on_zero_size = enabled;
         self
     }
 
@@ -369,6 +389,8 @@ pub struct ChunkView<'a> {
     pub payload_offset: usize,
     /// Byte length of the chunk payload.
     pub payload_size: usize,
+    /// Byte length of the fixed trailer following the payload (`0` when no trailer is configured).
+    pub trailer_size: usize,
 }
 
 impl<'a> ChunkView<'a> {
@@ -388,6 +410,29 @@ impl<'a> ChunkView<'a> {
         data.get(range)
     }
 
+    /// Return the checked half-open byte range of this chunk's trailer,
+    /// or `None` when [`ChunkView::trailer_size`] is `0` or arithmetic overflows.
+    #[must_use]
+    pub const fn trailer_range(&self) -> Option<Range<usize>> {
+        if self.trailer_size == 0 {
+            return None;
+        }
+        match self.payload_offset.checked_add(self.payload_size) {
+            Some(start) => match start.checked_add(self.trailer_size) {
+                Some(end) => Some(start..end),
+                None => None,
+            },
+            None => None,
+        }
+    }
+
+    /// Borrow this chunk's trailer slice from `data`, if configured and in bounds.
+    #[must_use]
+    pub fn trailer<'d>(&self, data: &'d [u8]) -> Option<&'d [u8]> {
+        let range = self.trailer_range()?;
+        data.get(range)
+    }
+
     /// Convert this borrowed view into an owned [`ChunkEntry`].
     #[must_use]
     pub fn to_owned_entry(&self) -> ChunkEntry {
@@ -396,6 +441,7 @@ impl<'a> ChunkView<'a> {
             header_offset: self.header_offset,
             payload_offset: self.payload_offset,
             payload_size: self.payload_size,
+            trailer_size: self.trailer_size,
         }
     }
 }
@@ -417,6 +463,8 @@ pub struct ChunkEntry {
     pub payload_offset: usize,
     /// Byte length of the chunk payload.
     pub payload_size: usize,
+    /// Byte length of the fixed trailer following the payload (`0` when no trailer is configured).
+    pub trailer_size: usize,
 }
 
 impl ChunkEntry {
@@ -435,6 +483,29 @@ impl ChunkEntry {
         let range = self.payload_range()?;
         data.get(range)
     }
+
+    /// Return the checked half-open byte range of this chunk's trailer,
+    /// or `None` when [`ChunkEntry::trailer_size`] is `0` or arithmetic overflows.
+    #[must_use]
+    pub const fn trailer_range(&self) -> Option<Range<usize>> {
+        if self.trailer_size == 0 {
+            return None;
+        }
+        match self.payload_offset.checked_add(self.payload_size) {
+            Some(start) => match start.checked_add(self.trailer_size) {
+                Some(end) => Some(start..end),
+                None => None,
+            },
+            None => None,
+        }
+    }
+
+    /// Borrow this chunk's trailer slice from `data`, if configured and in bounds.
+    #[must_use]
+    pub fn trailer<'a>(&self, data: &'a [u8]) -> Option<&'a [u8]> {
+        let range = self.trailer_range()?;
+        data.get(range)
+    }
 }
 
 /// Zero-allocation checked iterator over sequential chunks described by a [`ChunkStreamSpec`].
@@ -442,7 +513,6 @@ impl ChunkEntry {
 pub struct ChunkStreamIter<'a> {
     data: &'a [u8],
     spec: ChunkStreamSpec,
-    alignment_base: ChunkAlignmentBase,
     pos: usize,
     emitted: usize,
     finished: bool,
@@ -452,6 +522,12 @@ fn validate_chunk_stream_spec(spec: &ChunkStreamSpec) -> Result<(), LayoutError>
     if spec.header_size == 0 {
         return Err(LayoutError::InvalidSpec {
             field: "header_size",
+            reason: "must be nonzero",
+        });
+    }
+    if spec.size_unit == 0 {
+        return Err(LayoutError::InvalidSpec {
+            field: "size_unit",
             reason: "must be nonzero",
         });
     }
@@ -524,21 +600,10 @@ fn align_chunk_end(
     }
 }
 
-/// Create a checked, zero-allocation iterator over sequential chunks in `data`
-/// using [`ChunkAlignmentBase::CarrierStart`].
+/// Create a checked, zero-allocation iterator over sequential chunks in `data`.
 pub fn iter_chunk_stream<'a>(
     data: &'a [u8],
     spec: &ChunkStreamSpec,
-) -> Result<ChunkStreamIter<'a>, LayoutError> {
-    iter_chunk_stream_with_alignment_base(data, spec, ChunkAlignmentBase::CarrierStart)
-}
-
-/// Create a checked, zero-allocation iterator over sequential chunks in `data`
-/// with an explicit [`ChunkAlignmentBase`].
-pub fn iter_chunk_stream_with_alignment_base<'a>(
-    data: &'a [u8],
-    spec: &ChunkStreamSpec,
-    alignment_base: ChunkAlignmentBase,
 ) -> Result<ChunkStreamIter<'a>, LayoutError> {
     validate_chunk_stream_spec(spec)?;
     if spec.start_offset > data.len() {
@@ -551,7 +616,6 @@ pub fn iter_chunk_stream_with_alignment_base<'a>(
     Ok(ChunkStreamIter {
         data,
         spec: *spec,
-        alignment_base,
         pos: spec.start_offset,
         emitted: 0,
         finished: false,
@@ -615,20 +679,33 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
             }
         };
 
+        if self.spec.terminate_on_zero_size && raw_size == 0 {
+            self.finished = true;
+            return None;
+        }
+
+        let scaled_size = match raw_size.checked_mul(self.spec.size_unit) {
+            Some(v) => v,
+            None => {
+                self.finished = true;
+                return Some(Err(LayoutError::Overflow { what: "chunk_size" }));
+            }
+        };
+
         let payload_size_u64 = match self.spec.size_mode {
-            ChunkSizeMode::PayloadOnly => raw_size,
+            ChunkSizeMode::PayloadOnly => scaled_size,
             ChunkSizeMode::IncludesHeader => {
                 let hdr_u64 = self.spec.header_size as u64;
-                if raw_size < hdr_u64 {
+                if scaled_size < hdr_u64 {
                     self.finished = true;
                     return Some(Err(LayoutError::SizeSmallerThanHeader {
                         index,
                         offset: header_offset,
-                        declared: raw_size,
+                        declared: scaled_size,
                         header_size: self.spec.header_size,
                     }));
                 }
-                raw_size - hdr_u64
+                scaled_size - hdr_u64
             }
         };
 
@@ -687,7 +764,7 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
                 after_trailer,
                 self.spec.start_offset,
                 self.spec.alignment,
-                self.alignment_base,
+                self.spec.alignment_base,
             ) {
                 Some(v) => v,
                 None => {
@@ -728,29 +805,21 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
             header_offset,
             payload_offset,
             payload_size,
+            trailer_size: self.spec.trailer_size,
         }))
     }
 }
 
 /// Parse all chunks in `data` described by `spec` with strict checked bounds
-/// and zero-advance protection, using [`ChunkAlignmentBase::CarrierStart`].
+/// and zero-advance protection.
 pub fn parse_chunk_stream(
     data: &[u8],
     spec: &ChunkStreamSpec,
 ) -> Result<Vec<ChunkEntry>, LayoutError> {
-    parse_chunk_stream_with_alignment_base(data, spec, ChunkAlignmentBase::CarrierStart)
-}
-
-/// Parse all chunks in `data` described by `spec` with an explicit [`ChunkAlignmentBase`].
-pub fn parse_chunk_stream_with_alignment_base(
-    data: &[u8],
-    spec: &ChunkStreamSpec,
-    alignment_base: ChunkAlignmentBase,
-) -> Result<Vec<ChunkEntry>, LayoutError> {
-    let iter = iter_chunk_stream_with_alignment_base(data, spec, alignment_base)?;
+    let iter = iter_chunk_stream(data, spec)?;
     let mut chunks = Vec::new();
     for item in iter {
-        chunks.push(item?.to_owned_entry());
+        try_push(&mut chunks, item?.to_owned_entry())?;
     }
     Ok(chunks)
 }
@@ -765,31 +834,15 @@ pub struct ChunkInput<'a> {
     /// Optional raw `header_size`-byte header template copied before writing tag and size fields
     /// (preserving owner-specific flags, versions, or auxiliary header fields).
     pub header_template: Option<&'a [u8]>,
+    /// Optional raw `trailer_size`-byte trailer written immediately after `payload`.
+    /// When `None` and `spec.trailer_size > 0`, the trailer region is filled with [`PackPolicy::pad_byte`].
+    pub trailer: Option<&'a [u8]>,
 }
 
-/// Serialize `chunks` into a sequential chunk stream conforming to `spec` and `policy`
-/// using [`ChunkAlignmentBase::CarrierStart`].
+/// Serialize `chunks` into a sequential chunk stream conforming to `spec` and `policy`.
 pub fn pack_chunk_stream(
     spec: &ChunkStreamSpec,
     policy: &PackPolicy,
-    header_prefix: &[u8],
-    chunks: &[ChunkInput<'_>],
-) -> Result<Vec<u8>, LayoutError> {
-    pack_chunk_stream_with_alignment_base(
-        spec,
-        policy,
-        ChunkAlignmentBase::CarrierStart,
-        header_prefix,
-        chunks,
-    )
-}
-
-/// Serialize `chunks` into a sequential chunk stream conforming to `spec`,
-/// `policy`, and `alignment_base`.
-pub fn pack_chunk_stream_with_alignment_base(
-    spec: &ChunkStreamSpec,
-    policy: &PackPolicy,
-    alignment_base: ChunkAlignmentBase,
     header_prefix: &[u8],
     chunks: &[ChunkInput<'_>],
 ) -> Result<Vec<u8>, LayoutError> {
@@ -809,10 +862,22 @@ pub fn pack_chunk_stream_with_alignment_base(
     }
 
     let mut out = Vec::new();
+    out.try_reserve(spec.start_offset)
+        .map_err(|_| LayoutError::AllocationFailed {
+            requested: spec.start_offset,
+        })?;
     out.extend_from_slice(header_prefix);
     out.resize(spec.start_offset, policy.prefix_fill_byte);
 
-    let mut header_buf = vec![policy.record_fill_byte; spec.header_size];
+    let mut header_buf = Vec::new();
+    header_buf
+        .try_reserve_exact(spec.header_size)
+        .map_err(|_| LayoutError::AllocationFailed {
+            requested: spec.header_size,
+        })?;
+    header_buf.resize(spec.header_size, policy.record_fill_byte);
+
+    let has_terminator = spec.terminator_tag.is_some() || spec.terminate_on_zero_size;
 
     for (index, chunk) in chunks.iter().enumerate() {
         if chunk.tag.len() != spec.tag_len {
@@ -827,13 +892,34 @@ pub fn pack_chunk_stream_with_alignment_base(
                 reason: "chunk tag collides with terminator_tag",
             });
         }
+        if let Some(trailer_bytes) = chunk.trailer {
+            if trailer_bytes.len() != spec.trailer_size {
+                return Err(LayoutError::InvalidInput {
+                    index,
+                    reason: "trailer length must equal trailer_size",
+                });
+            }
+        }
 
-        let declared_size = match spec.size_mode {
+        let declared_bytes = match spec.size_mode {
             ChunkSizeMode::PayloadOnly => chunk.payload.len() as u64,
             ChunkSizeMode::IncludesHeader => (spec.header_size as u64)
                 .checked_add(chunk.payload.len() as u64)
                 .ok_or(LayoutError::Overflow { what: "chunk_size" })?,
         };
+        if !declared_bytes.is_multiple_of(spec.size_unit) {
+            return Err(LayoutError::InvalidInput {
+                index,
+                reason: "chunk size is not a multiple of size_unit",
+            });
+        }
+        let raw_size = declared_bytes / spec.size_unit;
+        if spec.terminate_on_zero_size && raw_size == 0 {
+            return Err(LayoutError::InvalidInput {
+                index,
+                reason: "zero-size chunk collides with terminate_on_zero_size",
+            });
+        }
 
         if let Some(tmpl) = chunk.header_template {
             if tmpl.len() != spec.header_size {
@@ -850,11 +936,24 @@ pub fn pack_chunk_stream_with_alignment_base(
         if spec.tag_len > 0 {
             header_buf[spec.tag_offset..spec.tag_offset + spec.tag_len].copy_from_slice(chunk.tag);
         }
-        spec.size_field.write(&mut header_buf, declared_size)?;
+        spec.size_field.write(&mut header_buf, raw_size)?;
 
+        let chunk_bytes = spec
+            .header_size
+            .checked_add(chunk.payload.len())
+            .and_then(|n| n.checked_add(spec.trailer_size))
+            .ok_or(LayoutError::Overflow {
+                what: "chunk_trailer",
+            })?;
+        out.try_reserve(chunk_bytes)
+            .map_err(|_| LayoutError::AllocationFailed {
+                requested: out.len().saturating_add(chunk_bytes),
+            })?;
         out.extend_from_slice(&header_buf);
         out.extend_from_slice(chunk.payload);
-        if spec.trailer_size > 0 {
+        if let Some(trailer_bytes) = chunk.trailer {
+            out.extend_from_slice(trailer_bytes);
+        } else if spec.trailer_size > 0 {
             let new_len =
                 out.len()
                     .checked_add(spec.trailer_size)
@@ -864,14 +963,19 @@ pub fn pack_chunk_stream_with_alignment_base(
             out.resize(new_len, policy.pad_byte);
         }
 
-        let needs_align =
-            index + 1 < chunks.len() || spec.terminator_tag.is_some() || policy.pad_final_entry;
+        let needs_align = index + 1 < chunks.len() || has_terminator || policy.pad_final_entry;
         if needs_align && spec.alignment > 1 {
-            let aligned =
-                align_chunk_end(out.len(), spec.start_offset, spec.alignment, alignment_base)
-                    .ok_or(LayoutError::Overflow {
-                        what: "chunk_alignment",
-                    })?;
+            let aligned = align_chunk_end(
+                out.len(),
+                spec.start_offset,
+                spec.alignment,
+                spec.alignment_base,
+            )
+            .ok_or(LayoutError::Overflow {
+                what: "chunk_alignment",
+            })?;
+            out.try_reserve(aligned.saturating_sub(out.len()))
+                .map_err(|_| LayoutError::AllocationFailed { requested: aligned })?;
             out.resize(aligned, policy.pad_byte);
         }
     }
@@ -879,11 +983,34 @@ pub fn pack_chunk_stream_with_alignment_base(
     if let Some(term_tag) = spec.terminator_tag {
         header_buf.fill(policy.record_fill_byte);
         header_buf[spec.tag_offset..spec.tag_offset + spec.tag_len].copy_from_slice(term_tag);
-        let term_size = match spec.size_mode {
-            ChunkSizeMode::PayloadOnly => 0u64,
-            ChunkSizeMode::IncludesHeader => spec.header_size as u64,
+        let term_raw_size = if spec.terminate_on_zero_size {
+            0u64
+        } else {
+            let term_bytes = match spec.size_mode {
+                ChunkSizeMode::PayloadOnly => 0u64,
+                ChunkSizeMode::IncludesHeader => spec.header_size as u64,
+            };
+            if !term_bytes.is_multiple_of(spec.size_unit) {
+                return Err(LayoutError::InvalidInput {
+                    index: chunks.len(),
+                    reason: "terminator header_size is not a multiple of size_unit",
+                });
+            }
+            term_bytes / spec.size_unit
         };
-        spec.size_field.write(&mut header_buf, term_size)?;
+        spec.size_field.write(&mut header_buf, term_raw_size)?;
+        out.try_reserve(header_buf.len())
+            .map_err(|_| LayoutError::AllocationFailed {
+                requested: out.len().saturating_add(header_buf.len()),
+            })?;
+        out.extend_from_slice(&header_buf);
+    } else if spec.terminate_on_zero_size {
+        header_buf.fill(policy.record_fill_byte);
+        spec.size_field.write(&mut header_buf, 0)?;
+        out.try_reserve(header_buf.len())
+            .map_err(|_| LayoutError::AllocationFailed {
+                requested: out.len().saturating_add(header_buf.len()),
+            })?;
         out.extend_from_slice(&header_buf);
     }
 
@@ -893,6 +1020,8 @@ pub fn pack_chunk_stream_with_alignment_base(
                 what: "data_alignment",
             },
         )?;
+        out.try_reserve(aligned.saturating_sub(out.len()))
+            .map_err(|_| LayoutError::AllocationFailed { requested: aligned })?;
         out.resize(aligned, policy.pad_byte);
     }
 
@@ -984,19 +1113,16 @@ mod tests {
 
     #[test]
     fn chunk_stream_parses_aligned_payload_and_header_inclusive_streams() {
-        const PAYLOAD_SPEC: ChunkStreamSpec = ChunkStreamSpec {
-            start_offset: 4,
-            header_size: 12,
-            tag_offset: 0,
-            tag_len: 4,
-            size_field: IntFieldSpec::u32_le(4),
-            size_mode: ChunkSizeMode::PayloadOnly,
-            alignment: 4,
-            trailer_size: 0,
-            terminator_tag: None,
-            require_eof_closure: true,
-            max_chunks: 16,
-        };
+        const PAYLOAD_SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            4,
+            12,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_alignment(4);
+
         let mut data = Vec::new();
         data.extend_from_slice(b"HDR0");
         data.extend_from_slice(b"AAA0");
@@ -1014,25 +1140,24 @@ mod tests {
         assert_eq!(chunks[0].payload_offset, 16);
         assert_eq!(chunks[0].payload_size, 5);
         assert_eq!(chunks[0].payload_range(), Some(16..21));
+        assert_eq!(chunks[0].trailer_range(), None);
         assert_eq!(chunks[0].payload(&data), Some(&b"hello"[..]));
         assert_eq!(chunks[1].tag, b"BBB0");
         assert_eq!(chunks[1].header_offset, 24);
         assert_eq!(chunks[1].payload_offset, 36);
         assert_eq!(chunks[1].payload_size, 0);
 
-        const INCLUSIVE_SPEC: ChunkStreamSpec = ChunkStreamSpec {
-            start_offset: 0,
-            header_size: 16,
-            tag_offset: 0,
-            tag_len: 8,
-            size_field: IntFieldSpec::u32_be(8),
-            size_mode: ChunkSizeMode::IncludesHeader,
-            alignment: 1,
-            trailer_size: 0,
-            terminator_tag: Some(b"END_MARK"),
-            require_eof_closure: false,
-            max_chunks: 16,
-        };
+        const INCLUSIVE_SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            16,
+            IntFieldSpec::u32_be(8),
+            ChunkSizeMode::IncludesHeader,
+            16,
+        )
+        .with_tag(0, 8)
+        .with_terminator_tag(b"END_MARK")
+        .with_require_eof_closure(false);
+
         let mut inc = Vec::new();
         inc.extend_from_slice(b"CHUNK001");
         inc.extend_from_slice(&20u32.to_be_bytes());
@@ -1051,48 +1176,35 @@ mod tests {
 
     #[test]
     fn chunk_stream_supports_tagless_and_stream_start_alignment_and_checked_range() {
-        const TAGLESS_SPEC: ChunkStreamSpec = ChunkStreamSpec {
-            start_offset: 3, // intentionally unaligned relative to byte 0
-            header_size: 4,
-            tag_offset: 0,
-            tag_len: 0,
-            size_field: IntFieldSpec::u32_le(0),
-            size_mode: ChunkSizeMode::PayloadOnly,
-            alignment: 4,
-            trailer_size: 0,
-            terminator_tag: None,
-            require_eof_closure: true,
-            max_chunks: 16,
-        };
+        const TAGLESS_SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            3, // intentionally unaligned relative to byte 0
+            4,
+            IntFieldSpec::u32_le(0),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_alignment(4)
+        .with_alignment_base(ChunkAlignmentBase::StreamStart);
 
         let inputs = [
             ChunkInput {
                 tag: &[],
                 payload: b"abc",
                 header_template: None,
+                trailer: None,
             },
             ChunkInput {
                 tag: &[],
                 payload: b"12345",
                 header_template: None,
+                trailer: None,
             },
         ];
-        let packed = pack_chunk_stream_with_alignment_base(
-            &TAGLESS_SPEC,
-            &PackPolicy::TIGHT,
-            ChunkAlignmentBase::StreamStart,
-            b"PRE",
-            &inputs,
-        )
-        .unwrap();
-        let views: Vec<_> = iter_chunk_stream_with_alignment_base(
-            &packed,
-            &TAGLESS_SPEC,
-            ChunkAlignmentBase::StreamStart,
-        )
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+        let packed = pack_chunk_stream(&TAGLESS_SPEC, &PackPolicy::TIGHT, b"PRE", &inputs).unwrap();
+        let views: Vec<_> = iter_chunk_stream(&packed, &TAGLESS_SPEC)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(views.len(), 2);
         assert_eq!(views[0].tag, b"");
         assert_eq!(views[0].payload(&packed), Some(&b"abc"[..]));
@@ -1105,44 +1217,42 @@ mod tests {
             header_offset: 0,
             payload_offset: usize::MAX,
             payload_size: 1,
+            trailer_size: 4,
         };
         assert_eq!(bad.payload_range(), None);
+        assert_eq!(bad.trailer_range(), None);
     }
 
     #[test]
     fn pack_chunk_stream_round_trips_templates_terminator_and_rejects_overflow() {
-        const SPEC: ChunkStreamSpec = ChunkStreamSpec {
-            start_offset: 4,
-            header_size: 12,
-            tag_offset: 0,
-            tag_len: 4,
-            size_field: IntFieldSpec::u16_be(4),
-            size_mode: ChunkSizeMode::IncludesHeader,
-            alignment: 4,
-            trailer_size: 0,
-            terminator_tag: Some(b"END!"),
-            require_eof_closure: true,
-            max_chunks: 16,
-        };
+        const SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            4,
+            12,
+            IntFieldSpec::u16_be(4),
+            ChunkSizeMode::IncludesHeader,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_alignment(4)
+        .with_terminator_tag(b"END!");
+
         let mut tmpl = [0u8; 12];
         tmpl[6..12].copy_from_slice(b"AUX123");
-        let policy = PackPolicy {
-            data_alignment: 1,
-            pad_byte: 0xAA,
-            record_fill_byte: 0x00,
-            pad_final_entry: false,
-            prefix_fill_byte: 0xFF,
-        };
+        let policy = PackPolicy::TIGHT
+            .with_pad_byte(0xAA)
+            .with_prefix_fill_byte(0xFF);
         let chunks = [
             ChunkInput {
                 tag: b"ONE_",
                 payload: b"hello",
                 header_template: Some(&tmpl),
+                trailer: None,
             },
             ChunkInput {
                 tag: b"TWO_",
                 payload: b"world!",
                 header_template: None,
+                trailer: None,
             },
         ];
         let packed = pack_chunk_stream(&SPEC, &policy, b"PF", &chunks).unwrap();
@@ -1162,6 +1272,7 @@ mod tests {
             tag: b"BIG_",
             payload: &huge,
             header_template: None,
+            trailer: None,
         }];
         assert_eq!(
             pack_chunk_stream(&SPEC, &PackPolicy::TIGHT, &[], &overflow_chunk),
@@ -1174,19 +1285,9 @@ mod tests {
 
     #[test]
     fn chunk_stream_rejects_invalid_specs_smaller_than_header_oob_and_trailing() {
-        let zero_hdr = ChunkStreamSpec {
-            start_offset: 0,
-            header_size: 0,
-            tag_offset: 0,
-            tag_len: 4,
-            size_field: IntFieldSpec::u32_le(0),
-            size_mode: ChunkSizeMode::PayloadOnly,
-            alignment: 1,
-            trailer_size: 0,
-            terminator_tag: None,
-            require_eof_closure: true,
-            max_chunks: 8,
-        };
+        let zero_hdr =
+            ChunkStreamSpec::new(0, 0, IntFieldSpec::u32_le(0), ChunkSizeMode::PayloadOnly, 8)
+                .with_tag(0, 4);
         assert!(matches!(
             parse_chunk_stream(&[0u8; 8], &zero_hdr),
             Err(LayoutError::InvalidSpec {
@@ -1209,19 +1310,25 @@ mod tests {
             })
         ));
 
-        let inc_spec = ChunkStreamSpec {
-            start_offset: 0,
-            header_size: 8,
-            tag_offset: 0,
-            tag_len: 4,
-            size_field: IntFieldSpec::u32_le(4),
-            size_mode: ChunkSizeMode::IncludesHeader,
-            alignment: 1,
-            trailer_size: 0,
-            terminator_tag: None,
-            require_eof_closure: true,
-            max_chunks: 8,
-        };
+        let zero_unit =
+            ChunkStreamSpec::new(0, 8, IntFieldSpec::u32_le(4), ChunkSizeMode::PayloadOnly, 8)
+                .with_size_unit(0);
+        assert!(matches!(
+            parse_chunk_stream(&[0u8; 8], &zero_unit),
+            Err(LayoutError::InvalidSpec {
+                field: "size_unit",
+                ..
+            })
+        ));
+
+        let inc_spec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::IncludesHeader,
+            8,
+        )
+        .with_tag(0, 4);
         let bad_inc = *b"BAD_\x00\x00\x00\x00";
         assert_eq!(
             parse_chunk_stream(&bad_inc, &inc_spec),
@@ -1260,7 +1367,8 @@ mod tests {
     }
 
     #[test]
-    fn chunk_stream_trailer_size_round_trips_and_rejects_truncation_and_overflow() {
+    fn chunk_stream_trailer_size_unit_and_zero_size_termination() {
+        // 1. Explicit trailer bytes round-trip with trailer_range() and trailer()
         const SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
             0,
             8,
@@ -1272,37 +1380,37 @@ mod tests {
         .with_trailer_size(4)
         .with_alignment(8);
 
-        let policy = PackPolicy {
-            data_alignment: 1,
-            pad_byte: 0xCC,
-            record_fill_byte: 0x00,
-            pad_final_entry: false,
-            prefix_fill_byte: 0x00,
-        };
+        let policy = PackPolicy::TIGHT.with_pad_byte(0xCC);
         let inputs = [
             ChunkInput {
                 tag: b"CHK0",
                 payload: b"abc", // 8 hdr + 3 payload + 4 trailer = 15 -> aligned to 16
                 header_template: None,
+                trailer: Some(b"CRC0"),
             },
             ChunkInput {
                 tag: b"CHK1",
                 payload: b"WXYZ", // 8 hdr + 4 payload + 4 trailer = 16 -> ends at 32
                 header_template: None,
+                trailer: None, // filled with pad_byte 0xCC
             },
         ];
         let packed = pack_chunk_stream(&SPEC, &policy, &[], &inputs).unwrap();
         assert_eq!(packed.len(), 32);
-        // Trailer + align pad bytes after first payload are 0xCC
-        assert_eq!(&packed[11..16], &[0xCC; 5]);
+        assert_eq!(&packed[11..15], b"CRC0");
+        assert_eq!(packed[15], 0xCC);
         assert_eq!(&packed[28..32], &[0xCC; 4]);
 
         let parsed = parse_chunk_stream(&packed, &SPEC).unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].header_offset, 0);
         assert_eq!(parsed[0].payload(&packed), Some(&b"abc"[..]));
+        assert_eq!(parsed[0].trailer_range(), Some(11..15));
+        assert_eq!(parsed[0].trailer(&packed), Some(&b"CRC0"[..]));
         assert_eq!(parsed[1].header_offset, 16);
         assert_eq!(parsed[1].payload(&packed), Some(&b"WXYZ"[..]));
+        assert_eq!(parsed[1].trailer_range(), Some(28..32));
+        assert_eq!(parsed[1].trailer(&packed), Some(&[0xCC; 4][..]));
 
         // Truncated trailer on final chunk is rejected
         assert!(matches!(
@@ -1318,5 +1426,84 @@ mod tests {
                 what: "chunk_trailer"
             })
         );
+
+        // Wrong trailer length on pack is rejected
+        let bad_trailer = [ChunkInput {
+            tag: b"CHK0",
+            payload: b"abc",
+            header_template: None,
+            trailer: Some(b"SHORT"),
+        }];
+        assert!(matches!(
+            pack_chunk_stream(&SPEC, &policy, &[], &bad_trailer),
+            Err(LayoutError::InvalidInput { index: 0, .. })
+        ));
+
+        // 2. size_unit scaling + terminate_on_zero_size round-trip
+        const UNIT_TERM_SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            4,
+            IntFieldSpec::u32_le(0),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_size_unit(4)
+        .with_terminate_on_zero_size(true);
+
+        let unit_inputs = [
+            ChunkInput {
+                tag: &[],
+                payload: b"ABCD",
+                header_template: None,
+                trailer: None,
+            },
+            ChunkInput {
+                tag: &[],
+                payload: b"12345678",
+                header_template: None,
+                trailer: None,
+            },
+        ];
+        let mut unit_packed =
+            pack_chunk_stream(&UNIT_TERM_SPEC, &PackPolicy::TIGHT, &[], &unit_inputs).unwrap();
+        // Verify stored raw sizes are 1 (4/4), 2 (8/4), and terminator 0
+        assert_eq!(u32::from_le_bytes(unit_packed[0..4].try_into().unwrap()), 1);
+        assert_eq!(
+            u32::from_le_bytes(unit_packed[8..12].try_into().unwrap()),
+            2
+        );
+        assert_eq!(
+            u32::from_le_bytes(unit_packed[20..24].try_into().unwrap()),
+            0
+        );
+        // Trailing bytes after zero-size terminator are ignored
+        unit_packed.extend_from_slice(b"TRAILING");
+
+        let unit_parsed = parse_chunk_stream(&unit_packed, &UNIT_TERM_SPEC).unwrap();
+        assert_eq!(unit_parsed.len(), 2);
+        assert_eq!(unit_parsed[0].payload(&unit_packed), Some(&b"ABCD"[..]));
+        assert_eq!(unit_parsed[1].payload(&unit_packed), Some(&b"12345678"[..]));
+
+        // Reject non-multiple of size_unit and zero-size payload under terminate_on_zero_size
+        let bad_unit_in = [ChunkInput {
+            tag: &[],
+            payload: b"ABC",
+            header_template: None,
+            trailer: None,
+        }];
+        assert!(matches!(
+            pack_chunk_stream(&UNIT_TERM_SPEC, &PackPolicy::TIGHT, &[], &bad_unit_in),
+            Err(LayoutError::InvalidInput { index: 0, .. })
+        ));
+        let zero_in = [ChunkInput {
+            tag: &[],
+            payload: b"",
+            header_template: None,
+            trailer: None,
+        }];
+        assert!(matches!(
+            pack_chunk_stream(&UNIT_TERM_SPEC, &PackPolicy::TIGHT, &[], &zero_in),
+            Err(LayoutError::InvalidInput { index: 0, .. })
+        ));
     }
 }

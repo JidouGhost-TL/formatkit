@@ -20,7 +20,7 @@ pub use counted_boundaries::{
 pub use counted_offset_array::{
     pack_counted_offset_array, parse_counted_offset_array, parse_counted_offset_array_metadata,
     parse_counted_offset_array_with_count, parse_counted_offset_array_with_count_metadata,
-    CountedOffsetArraySpec, OffsetSpan,
+    CountedOffsetArraySpec, OffsetOrderPolicy, OffsetSpan,
 };
 pub use counted_u16_boundaries::{
     CountedU16BoundaryError, CountedU16BoundaryTable, ValidatedCountedU16Boundaries,
@@ -35,7 +35,7 @@ pub use fixed_record_table::{
     parse_fixed_record_table_counted_metadata, parse_fixed_record_table_metadata,
     parse_fixed_record_table_with_name_pool, FixedRecordEntry, FixedRecordInput,
     FixedRecordTableIter, FixedRecordTableSpec, FixedRecordView, NameEncoding, NameFieldSpec,
-    NamePoolSpec, SizeMode, TableTermination,
+    NamePoolFormat, NamePoolSpec, RowFieldPredicate, SizeMode, TableParseOptions, TableTermination,
 };
 pub use fixed_stride_offset::{FixedStrideOffsetTable, TableSizeMode};
 pub use offset_length::{OffsetLengthRow, OffsetLengthRows};

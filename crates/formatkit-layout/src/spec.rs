@@ -171,6 +171,13 @@ impl IntFieldSpec {
                 reason: "must be nonzero",
             });
         }
+        let available_mask = self.width.max_value() >> self.bit_shift;
+        if (self.bit_mask & available_mask) == 0 {
+            return Err(LayoutError::InvalidSpec {
+                field: "bit_mask",
+                reason: "must overlap available bits above bit_shift",
+            });
+        }
         Ok(())
     }
 
@@ -445,22 +452,19 @@ impl OffsetBase {
                 Ok((pos, (pos - base) / offset_unit))
             }
             Self::SubtractBase(sub) => {
-                let mut pos = align_payload_offset(cursor, 0, data_alignment, 1)?;
-                let mut scaled = pos.checked_add(sub).ok_or(LayoutError::Overflow {
+                let pos = align_joint_congruence(
+                    cursor,
+                    data_alignment as u64,
+                    offset_unit,
+                    if offset_unit <= 1 {
+                        0
+                    } else {
+                        (offset_unit - (sub % offset_unit)) % offset_unit
+                    },
+                )?;
+                let scaled = pos.checked_add(sub).ok_or(LayoutError::Overflow {
                     what: "offset_add_base",
                 })?;
-                if offset_unit > 1 {
-                    let rem = scaled % offset_unit;
-                    if rem != 0 {
-                        let bump = offset_unit - rem;
-                        pos = pos.checked_add(bump).ok_or(LayoutError::Overflow {
-                            what: "offset_unit_alignment",
-                        })?;
-                        scaled = scaled.checked_add(bump).ok_or(LayoutError::Overflow {
-                            what: "offset_add_base",
-                        })?;
-                    }
-                }
                 Ok((pos, scaled / offset_unit))
             }
         }
@@ -508,6 +512,41 @@ impl PackPolicy {
         prefix_fill_byte: 0,
     };
 
+    /// Set [`PackPolicy::data_alignment`].
+    #[must_use]
+    pub const fn with_data_alignment(mut self, alignment: usize) -> Self {
+        self.data_alignment = alignment;
+        self
+    }
+
+    /// Set [`PackPolicy::pad_byte`].
+    #[must_use]
+    pub const fn with_pad_byte(mut self, byte: u8) -> Self {
+        self.pad_byte = byte;
+        self
+    }
+
+    /// Set [`PackPolicy::record_fill_byte`].
+    #[must_use]
+    pub const fn with_record_fill_byte(mut self, byte: u8) -> Self {
+        self.record_fill_byte = byte;
+        self
+    }
+
+    /// Set [`PackPolicy::pad_final_entry`].
+    #[must_use]
+    pub const fn with_pad_final_entry(mut self, pad: bool) -> Self {
+        self.pad_final_entry = pad;
+        self
+    }
+
+    /// Set [`PackPolicy::prefix_fill_byte`].
+    #[must_use]
+    pub const fn with_prefix_fill_byte(mut self, byte: u8) -> Self {
+        self.prefix_fill_byte = byte;
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<(), LayoutError> {
         if self.data_alignment == 0 {
             return Err(LayoutError::InvalidSpec {
@@ -525,6 +564,95 @@ impl Default for PackPolicy {
     }
 }
 
+const fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        let t = a % b;
+        a = b;
+        b = t;
+    }
+    a
+}
+
+fn mod_inverse_u64(a: u64, m: u64) -> u64 {
+    if m <= 1 {
+        return 0;
+    }
+    let mut t: i128 = 0;
+    let mut new_t: i128 = 1;
+    let mut r: i128 = i128::from(m);
+    let mut new_r: i128 = i128::from(a % m);
+    while new_r != 0 {
+        let q = r / new_r;
+        let tmp_t = t - q * new_t;
+        t = new_t;
+        new_t = tmp_t;
+        let tmp_r = r - q * new_r;
+        r = new_r;
+        new_r = tmp_r;
+    }
+    debug_assert_eq!(r, 1);
+    if t < 0 {
+        t += i128::from(m);
+    }
+    t as u64
+}
+
+/// Find the smallest `pos >= min_pos` such that `pos % data_alignment == 0`
+/// and `pos % offset_unit == target_rem` (where `0 <= target_rem < offset_unit`).
+fn align_joint_congruence(
+    min_pos: u64,
+    data_alignment: u64,
+    offset_unit: u64,
+    target_rem: u64,
+) -> Result<u64, LayoutError> {
+    if data_alignment == 0 {
+        return Err(LayoutError::InvalidSpec {
+            field: "data_alignment",
+            reason: "must be nonzero",
+        });
+    }
+    if offset_unit == 0 {
+        return Err(LayoutError::InvalidSpec {
+            field: "offset_unit",
+            reason: "must be nonzero",
+        });
+    }
+    if data_alignment == 1 && offset_unit == 1 {
+        return Ok(min_pos);
+    }
+    let g = gcd_u64(data_alignment, offset_unit);
+    if !target_rem.is_multiple_of(g) {
+        return Err(LayoutError::InvalidSpec {
+            field: "data_alignment",
+            reason: "data_alignment and offset_unit are unsatisfiable for offset_base",
+        });
+    }
+    let a_prime = data_alignment / g;
+    let u_prime = offset_unit / g;
+    let r_prime = target_rem / g;
+
+    let k_min = min_pos.div_ceil(data_alignment);
+    let k = if u_prime == 1 {
+        k_min
+    } else {
+        let inv = mod_inverse_u64(a_prime, u_prime);
+        let k_rem = ((u128::from(r_prime) * u128::from(inv)) % u128::from(u_prime)) as u64;
+        let cur_rem = k_min % u_prime;
+        let delta_k = if k_rem >= cur_rem {
+            k_rem - cur_rem
+        } else {
+            u_prime - (cur_rem - k_rem)
+        };
+        k_min.checked_add(delta_k).ok_or(LayoutError::Overflow {
+            what: "offset_unit_alignment",
+        })?
+    };
+
+    k.checked_mul(data_alignment).ok_or(LayoutError::Overflow {
+        what: "data_alignment",
+    })
+}
+
 /// Align `cursor` upward to satisfy both `data_alignment` (absolute) and
 /// `(cursor - base) % offset_unit == 0` with `cursor >= base`.
 pub(crate) fn align_payload_offset(
@@ -533,30 +661,25 @@ pub(crate) fn align_payload_offset(
     data_alignment: usize,
     offset_unit: u64,
 ) -> Result<u64, LayoutError> {
-    let align_u64 = data_alignment as u64;
-    let mut pos = cursor.max(base);
-    if align_u64 > 1 {
-        let rem = pos % align_u64;
-        if rem != 0 {
-            pos = pos
-                .checked_add(align_u64 - rem)
-                .ok_or(LayoutError::Overflow {
-                    what: "data_alignment",
-                })?;
-        }
+    let min_pos = cursor.max(base);
+    let target_rem = if offset_unit <= 1 {
+        0
+    } else {
+        base % offset_unit
+    };
+    align_joint_congruence(min_pos, data_alignment as u64, offset_unit, target_rem)
+}
+
+/// Push `value` onto `vec`, reserving fallibly before growing capacity.
+pub(crate) fn try_push<T>(vec: &mut Vec<T>, value: T) -> Result<(), LayoutError> {
+    if vec.len() == vec.capacity() {
+        vec.try_reserve(1)
+            .map_err(|_| LayoutError::AllocationFailed {
+                requested: vec.len().saturating_add(1),
+            })?;
     }
-    if offset_unit > 1 {
-        let rel = pos - base;
-        let rem = rel % offset_unit;
-        if rem != 0 {
-            pos = pos
-                .checked_add(offset_unit - rem)
-                .ok_or(LayoutError::Overflow {
-                    what: "offset_unit_alignment",
-                })?;
-        }
-    }
-    Ok(pos)
+    vec.push(value);
+    Ok(())
 }
 
 /// Structural and validation errors returned by declarative layout parsers and writers.
@@ -666,6 +789,18 @@ pub enum LayoutError {
         /// Maximum representable value for the target integer width.
         max: u64,
     },
+    /// A required magic marker was not found at the expected byte offset.
+    MissingMarker {
+        /// Byte offset where the marker was expected.
+        offset: usize,
+    },
+    /// The input contained fewer entries than the spec's configured minimum.
+    TooFewEntries {
+        /// Number of entries actually found.
+        found: usize,
+        /// Minimum number of entries required by the spec.
+        min: usize,
+    },
     /// A caller-supplied writer input violated the target layout spec.
     InvalidInput {
         /// Zero-based entry or chunk index associated with the failure.
@@ -746,6 +881,15 @@ impl fmt::Display for LayoutError {
             }
             Self::ValueOutOfRange { value, max } => {
                 write!(f, "value {value} exceeds maximum representable value {max}")
+            }
+            Self::MissingMarker { offset } => {
+                write!(f, "missing required marker at offset {offset}")
+            }
+            Self::TooFewEntries { found, min } => {
+                write!(
+                    f,
+                    "found {found} entries, fewer than required minimum of {min}"
+                )
             }
             Self::InvalidInput { index, reason } => {
                 write!(f, "invalid writer input at index {index}: {reason}")
@@ -957,5 +1101,99 @@ mod tests {
         };
         let layout_err = LayoutError::from(core_err.clone());
         assert_eq!(layout_err, LayoutError::Core(core_err));
+    }
+
+    #[test]
+    fn int_field_spec_rejects_disjoint_mask_and_shift() {
+        let buf = [0xFFu8; 4];
+        assert!(matches!(
+            IntFieldSpec::u8(0).masked(4, 0xF0).read(&buf),
+            Err(LayoutError::InvalidSpec {
+                field: "bit_mask",
+                ..
+            })
+        ));
+        assert!(matches!(
+            IntFieldSpec::u16_le(0).masked(12, 0xFFF0).read(&buf),
+            Err(LayoutError::InvalidSpec {
+                field: "bit_mask",
+                ..
+            })
+        ));
+        assert_eq!(
+            IntFieldSpec::u8(0).masked(4, 0x0F).read(&buf).unwrap(),
+            0x0F
+        );
+    }
+
+    #[test]
+    fn joint_alignment_satisfiable_and_unsatisfiable_cases() {
+        // Satisfiable: data_alignment=16, offset_unit=4, base=4 -> pos=16, (16-4)%4==0
+        let pos = align_payload_offset(1, 4, 16, 4).unwrap();
+        assert_eq!(pos, 16);
+        assert_eq!(pos % 16, 0);
+        assert_eq!((pos - 4) % 4, 0);
+
+        // Satisfiable: data_alignment=16, offset_unit=4, base=0
+        let pos0 = align_payload_offset(5, 0, 16, 4).unwrap();
+        assert_eq!(pos0, 16);
+
+        // Satisfiable non-trivial CRT: data_alignment=16, offset_unit=12, base=4
+        // gcd(16, 12)=4, base%4==0; solutions: 16 (16-4=12), 64 (64-4=60), ...
+        let pos_crt1 = align_payload_offset(1, 4, 16, 12).unwrap();
+        assert_eq!(pos_crt1, 16);
+        let pos_crt2 = align_payload_offset(17, 4, 16, 12).unwrap();
+        assert_eq!(pos_crt2, 64);
+        assert_eq!(pos_crt2 % 16, 0);
+        assert_eq!((pos_crt2 - 4) % 12, 0);
+
+        // Unsatisfiable: data_alignment=16, offset_unit=4, base=2 (2 % gcd(16,4) != 0)
+        assert!(matches!(
+            align_payload_offset(1, 2, 16, 4),
+            Err(LayoutError::InvalidSpec {
+                field: "data_alignment",
+                ..
+            })
+        ));
+
+        // SubtractBase satisfiable: sub=4, data_alignment=16, offset_unit=12 -> pos=32 (32+4=36)
+        let (phys, raw) = OffsetBase::SubtractBase(4)
+            .align_and_encode(1, 0, 0, 0, 16, 12)
+            .unwrap();
+        assert_eq!(phys, 32);
+        assert_eq!(phys % 16, 0);
+        assert_eq!(raw, 3);
+        assert_eq!(
+            OffsetBase::SubtractBase(4)
+                .apply(raw * 12, 0, 0, 0)
+                .unwrap(),
+            phys
+        );
+
+        // SubtractBase unsatisfiable: sub=2, data_alignment=16, offset_unit=4
+        assert!(matches!(
+            OffsetBase::SubtractBase(2).align_and_encode(1, 0, 0, 0, 16, 4),
+            Err(LayoutError::InvalidSpec {
+                field: "data_alignment",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn pack_policy_const_builders() {
+        const POLICY: PackPolicy = PackPolicy::TIGHT
+            .with_data_alignment(16)
+            .with_pad_byte(0xAA)
+            .with_record_fill_byte(0xBB)
+            .with_pad_final_entry(true)
+            .with_prefix_fill_byte(0xCC);
+        const {
+            assert!(POLICY.data_alignment == 16);
+            assert!(POLICY.pad_byte == 0xAA);
+            assert!(POLICY.record_fill_byte == 0xBB);
+            assert!(POLICY.pad_final_entry);
+            assert!(POLICY.prefix_fill_byte == 0xCC);
+        }
     }
 }

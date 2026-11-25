@@ -39,11 +39,10 @@ pub mod tables;
 pub mod text;
 
 pub use chunks::{
-    iter_chunk_stream, iter_chunk_stream_with_alignment_base, pack_chunk_stream,
-    pack_chunk_stream_with_alignment_base, parse_chunk_stream,
-    parse_chunk_stream_with_alignment_base, read_header_inclusive_chunk, read_payload_chunk,
-    ChunkAlignmentBase, ChunkEntry, ChunkInput, ChunkSizeMode, ChunkStreamIter, ChunkStreamSpec,
-    ChunkView, InclusiveChunkError, InclusiveChunkSpan, PayloadChunkError, PayloadChunkSpan,
+    iter_chunk_stream, pack_chunk_stream, parse_chunk_stream, read_header_inclusive_chunk,
+    read_payload_chunk, ChunkAlignmentBase, ChunkEntry, ChunkInput, ChunkSizeMode, ChunkStreamIter,
+    ChunkStreamSpec, ChunkView, InclusiveChunkError, InclusiveChunkSpan, PayloadChunkError,
+    PayloadChunkSpan,
 };
 pub use edit::{patch_bytes, patched_bytes, same_size_splice, SameSizeSpliceError};
 pub use field::{
@@ -52,7 +51,10 @@ pub use field::{
     U64Field, U8Field,
 };
 pub use iff::{parse_iff_form, parse_riff_form, IffChunk, IffForm, IFF_FORM_MAGIC, RIFF_MAGIC};
-pub use marker_scan::{pack_marker_scan_stream, parse_marker_scan_stream, MarkerScanStreamSpec};
+pub use marker_scan::{
+    iter_marker_scan_stream, pack_marker_scan_stream, parse_marker_scan_stream, MarkerScanIter,
+    MarkerScanStreamSpec,
+};
 pub use offset_graph::{
     checked_element, checked_offset, ClaimedReader, OverlapPolicy, PlacementCanvas, UnclaimedGap,
 };
@@ -77,10 +79,11 @@ pub use tables::{
     CountedU16BoundaryError, CountedU16BoundaryTable, DerivedAlignedSizes, FirstWordOffsetError,
     FirstWordOffsetTable, FixedRecordEntry, FixedRecordInput, FixedRecordTableIter,
     FixedRecordTableSpec, FixedRecordView, FixedStrideOffsetTable, NameEncoding, NameFieldSpec,
-    NamePoolSpec, OffsetLengthRow, OffsetLengthRows, OffsetSpan, PositiveSizeError,
-    PositiveSizeExtent, PositiveSizeList, SizeAlignment, SizeMode, TableSizeMode, TableTermination,
-    TerminalOffsetError, TerminalOffsetTable, ValidatedCountedBoundaries,
-    ValidatedCountedU16Boundaries, ValidatedPositiveSizes, ValidatedTerminalOffsets,
+    NamePoolFormat, NamePoolSpec, OffsetLengthRow, OffsetLengthRows, OffsetOrderPolicy, OffsetSpan,
+    PositiveSizeError, PositiveSizeExtent, PositiveSizeList, RowFieldPredicate, SizeAlignment,
+    SizeMode, TableParseOptions, TableSizeMode, TableTermination, TerminalOffsetError,
+    TerminalOffsetTable, ValidatedCountedBoundaries, ValidatedCountedU16Boundaries,
+    ValidatedPositiveSizes, ValidatedTerminalOffsets,
 };
 pub use text::{
     format_hex_bytes, parse_hex_bytes, Charmap, CharmapControl, CharmapDecoded, CharmapEntry,

@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/formatkit-core", "crates/formatkit-layout", "crates/formatkit-runtime", "crates/formatkit-corpus", "crates/formatkit-corpus-test", "crates/formatkit-catalog", "crates/formatkit-pixel", "crates/formatkit-codec", "crates/formatkit-archive", "crates/formatkit", "crates/formatkit-patch", "crates/formatkit-gltf"]
 
 [workspace.package]
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
 rust-version = "1.94.1"
 license = "MIT OR Apache-2.0"
@@ -12,14 +12,14 @@ readme = "README.md"
 
 [workspace.dependencies]
 thiserror = "1"
-formatkit-core = { path = "crates/formatkit-core", version = "=0.1.11" }
-formatkit-layout = { path = "crates/formatkit-layout", version = "=0.1.11" }
-formatkit-runtime = { path = "crates/formatkit-runtime", version = "=0.1.11" }
-formatkit-corpus = { path = "crates/formatkit-corpus", version = "=0.1.11" }
-formatkit-corpus-test = { path = "crates/formatkit-corpus-test", version = "=0.1.11" }
-formatkit-catalog = { path = "crates/formatkit-catalog", version = "=0.1.11" }
-formatkit-pixel = { path = "crates/formatkit-pixel", version = "=0.1.11" }
-formatkit-codec = { path = "crates/formatkit-codec", version = "=0.1.11" }
-formatkit-archive = { path = "crates/formatkit-archive", version = "=0.1.11" }
-formatkit-patch = { path = "crates/formatkit-patch", version = "=0.1.11" }
-formatkit-gltf = { path = "crates/formatkit-gltf", version = "=0.1.11" }
+formatkit-core = { path = "crates/formatkit-core", version = "=0.1.12" }
+formatkit-layout = { path = "crates/formatkit-layout", version = "=0.1.12" }
+formatkit-runtime = { path = "crates/formatkit-runtime", version = "=0.1.12" }
+formatkit-corpus = { path = "crates/formatkit-corpus", version = "=0.1.12" }
+formatkit-corpus-test = { path = "crates/formatkit-corpus-test", version = "=0.1.12" }
+formatkit-catalog = { path = "crates/formatkit-catalog", version = "=0.1.12" }
+formatkit-pixel = { path = "crates/formatkit-pixel", version = "=0.1.12" }
+formatkit-codec = { path = "crates/formatkit-codec", version = "=0.1.12" }
+formatkit-archive = { path = "crates/formatkit-archive", version = "=0.1.12" }
+formatkit-patch = { path = "crates/formatkit-patch", version = "=0.1.12" }
+formatkit-gltf = { path = "crates/formatkit-gltf", version = "=0.1.12" }

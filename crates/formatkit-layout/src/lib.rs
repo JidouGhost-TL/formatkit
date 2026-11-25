@@ -20,6 +20,8 @@ pub mod edit;
 pub mod field;
 /// Generic IFF `FORM` and RIFF container chunk parsing.
 pub mod iff;
+/// Aligned magic-marker delimited stream scanning and packing.
+pub mod marker_scan;
 /// Claimed-byte reading and conflict-checked placement for exact rewrites of offset-linked regions.
 #[doc(alias = "pointer graph")]
 #[doc(alias = "claimed bytes")]
@@ -50,6 +52,7 @@ pub use field::{
     U64Field, U8Field,
 };
 pub use iff::{parse_iff_form, parse_riff_form, IffChunk, IffForm, IFF_FORM_MAGIC, RIFF_MAGIC};
+pub use marker_scan::{pack_marker_scan_stream, parse_marker_scan_stream, MarkerScanStreamSpec};
 pub use offset_graph::{
     checked_element, checked_offset, ClaimedReader, OverlapPolicy, PlacementCanvas, UnclaimedGap,
 };
@@ -64,9 +67,10 @@ pub use tables::{
     iter_fixed_record_table, iter_fixed_record_table_counted,
     iter_fixed_record_table_counted_metadata, iter_fixed_record_table_metadata,
     iter_fixed_record_table_with_name_pool, pack_counted_offset_array, pack_fixed_record_table,
-    parse_counted_offset_array, parse_counted_offset_array_metadata,
-    parse_counted_offset_array_with_count, parse_counted_offset_array_with_count_metadata,
-    parse_fixed_record_table, parse_fixed_record_table_bounded, parse_fixed_record_table_counted,
+    pack_fixed_record_table_with_post_table, parse_counted_offset_array,
+    parse_counted_offset_array_metadata, parse_counted_offset_array_with_count,
+    parse_counted_offset_array_with_count_metadata, parse_fixed_record_table,
+    parse_fixed_record_table_bounded, parse_fixed_record_table_counted,
     parse_fixed_record_table_counted_metadata, parse_fixed_record_table_metadata,
     parse_fixed_record_table_with_name_pool, AlignedSizeChain, AlignedSizeCursor, AlignedSizeError,
     AlignedSizeExtent, CountedBoundaryError, CountedBoundaryTable, CountedOffsetArraySpec,

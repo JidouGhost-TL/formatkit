@@ -316,8 +316,12 @@ pub(crate) fn write_int_at(
 pub enum OffsetBase {
     /// Offsets are absolute from byte 0 of the carrier.
     Absolute,
+    /// Offsets are relative to the start of the table (`table_offset`) or offset array (`array_offset`).
+    TableStart,
     /// Offsets are relative to the exclusive end of the table or offset array.
     TableEnd,
+    /// Offsets are relative to the exclusive end of the table or offset array plus a fixed byte bias.
+    TableEndPlus(u64),
     /// Offsets are relative to a fixed base byte offset.
     Fixed(u64),
     /// Offsets are relative to the start of the record or array entry containing them.
@@ -332,13 +336,21 @@ impl OffsetBase {
     pub(crate) fn apply(
         self,
         scaled: u64,
+        table_start: u64,
         table_end: u64,
         record_offset: usize,
     ) -> Result<u64, LayoutError> {
         match self {
             Self::Absolute => Ok(scaled),
+            Self::TableStart => table_start
+                .checked_add(scaled)
+                .ok_or(LayoutError::Overflow { what: "offset" }),
             Self::TableEnd => table_end
                 .checked_add(scaled)
+                .ok_or(LayoutError::Overflow { what: "offset" }),
+            Self::TableEndPlus(bias) => table_end
+                .checked_add(bias)
+                .and_then(|base| base.checked_add(scaled))
                 .ok_or(LayoutError::Overflow { what: "offset" }),
             Self::Fixed(base) => base
                 .checked_add(scaled)
@@ -353,9 +365,11 @@ impl OffsetBase {
     }
 
     /// Encode an exact physical byte offset into a raw unscaled field value.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_exact(
         self,
         physical_offset: u64,
+        table_start: u64,
         table_end: u64,
         record_offset: usize,
         offset_unit: u64,
@@ -364,9 +378,20 @@ impl OffsetBase {
     ) -> Result<u64, LayoutError> {
         let scaled = match self {
             Self::Absolute => physical_offset,
+            Self::TableStart => physical_offset
+                .checked_sub(table_start)
+                .ok_or(LayoutError::InvalidInput { index, reason })?,
             Self::TableEnd => physical_offset
                 .checked_sub(table_end)
                 .ok_or(LayoutError::InvalidInput { index, reason })?,
+            Self::TableEndPlus(bias) => {
+                let base = table_end
+                    .checked_add(bias)
+                    .ok_or(LayoutError::Overflow { what: "offset" })?;
+                physical_offset
+                    .checked_sub(base)
+                    .ok_or(LayoutError::InvalidInput { index, reason })?
+            }
             Self::Fixed(base) => physical_offset
                 .checked_sub(base)
                 .ok_or(LayoutError::InvalidInput { index, reason })?,
@@ -392,16 +417,26 @@ impl OffsetBase {
     pub(crate) fn align_and_encode(
         self,
         cursor: u64,
+        table_start: u64,
         table_end: u64,
         record_offset: usize,
         data_alignment: usize,
         offset_unit: u64,
     ) -> Result<(u64, u64), LayoutError> {
         match self {
-            Self::Absolute | Self::TableEnd | Self::Fixed(_) | Self::RecordStart => {
+            Self::Absolute
+            | Self::TableStart
+            | Self::TableEnd
+            | Self::TableEndPlus(_)
+            | Self::Fixed(_)
+            | Self::RecordStart => {
                 let base = match self {
                     Self::Absolute => 0,
+                    Self::TableStart => table_start,
                     Self::TableEnd => table_end,
+                    Self::TableEndPlus(bias) => table_end
+                        .checked_add(bias)
+                        .ok_or(LayoutError::Overflow { what: "offset" })?,
                     Self::Fixed(b) => b,
                     Self::RecordStart => record_offset as u64,
                     Self::SubtractBase(_) => unreachable!(),
@@ -873,17 +908,44 @@ mod tests {
     #[test]
     fn offset_base_subtract_base_round_trips_and_rejects_underflow() {
         let base = OffsetBase::SubtractBase(0x0800_0000);
-        assert_eq!(base.apply(0x0800_0040, 0, 0).unwrap(), 0x40);
+        assert_eq!(base.apply(0x0800_0040, 0, 0, 0).unwrap(), 0x40);
         assert_eq!(
-            base.apply(0x07FF_FFFF, 0, 0),
+            base.apply(0x07FF_FFFF, 0, 0, 0),
             Err(LayoutError::Overflow {
                 what: "offset_subtract_base"
             })
         );
-        let (phys, raw) = base.align_and_encode(0x31, 0, 0, 4, 1).unwrap();
+        let (phys, raw) = base.align_and_encode(0x31, 0, 0, 0, 4, 1).unwrap();
         assert_eq!(phys, 0x34);
         assert_eq!(raw, 0x0800_0034);
-        assert_eq!(base.apply(raw, 0, 0).unwrap(), phys);
+        assert_eq!(base.apply(raw, 0, 0, 0).unwrap(), phys);
+    }
+
+    #[test]
+    fn offset_base_table_start_and_table_end_plus_round_trip_and_overflow() {
+        let ts = OffsetBase::TableStart;
+        assert_eq!(ts.apply(0x20, 0x100, 0x140, 0x100).unwrap(), 0x120);
+        let (phys, raw) = ts
+            .align_and_encode(0x142, 0x100, 0x140, 0x100, 4, 2)
+            .unwrap();
+        assert_eq!(phys, 0x144);
+        assert_eq!(raw, 0x22);
+        assert_eq!(ts.apply(raw * 2, 0x100, 0x140, 0x100).unwrap(), phys);
+        assert_eq!(
+            ts.apply(u64::MAX, 1, 0, 0),
+            Err(LayoutError::Overflow { what: "offset" })
+        );
+
+        let tep = OffsetBase::TableEndPlus(16);
+        assert_eq!(tep.apply(8, 0x10, 0x40, 0x10).unwrap(), 0x58);
+        let (phys2, raw2) = tep.align_and_encode(0x40, 0x10, 0x40, 0x10, 1, 1).unwrap();
+        assert_eq!(phys2, 0x50);
+        assert_eq!(raw2, 0);
+        assert_eq!(tep.apply(raw2, 0x10, 0x40, 0x10).unwrap(), phys2);
+        assert_eq!(
+            OffsetBase::TableEndPlus(u64::MAX).apply(0, 0, 1, 0),
+            Err(LayoutError::Overflow { what: "offset" })
+        );
     }
 
     #[test]

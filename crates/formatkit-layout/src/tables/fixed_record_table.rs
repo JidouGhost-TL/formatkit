@@ -20,6 +20,10 @@ pub enum NameEncoding {
     /// Truncate at the first NUL byte (`0x00`), trim trailing ASCII spaces (`0x20`),
     /// and require every remaining byte to be ASCII (`0x00..=0x7F`).
     Ascii,
+    /// Truncate at the first NUL byte (`0x00`), require every preceding byte to be
+    /// printable ASCII (`0x20..=0x7E`, rejecting control bytes `0x01..=0x1F` and `0x7F`
+    /// before trimming), then trim trailing ASCII spaces (`0x20`).
+    PrintableAscii,
 }
 
 fn apply_name_encoding(
@@ -49,6 +53,18 @@ fn apply_name_encoding(
             }
             if !trimmed.is_ascii() {
                 return Err(LayoutError::InvalidName { index });
+            }
+        }
+        NameEncoding::PrintableAscii => {
+            if !raw.iter().all(|&b| (0x20..=0x7E).contains(&b)) {
+                return Err(LayoutError::InvalidName { index });
+            }
+            while let Some(&last) = trimmed.last() {
+                if last == b' ' {
+                    trimmed = &trimmed[..trimmed.len() - 1];
+                } else {
+                    break;
+                }
             }
         }
     }
@@ -100,8 +116,18 @@ impl NameFieldSpec {
         if name.len() > self.len || name.contains(&0) {
             return Err(LayoutError::InvalidName { index });
         }
-        if matches!(self.encoding, NameEncoding::Ascii) && !name.is_ascii() {
-            return Err(LayoutError::InvalidName { index });
+        match self.encoding {
+            NameEncoding::NulTerminated | NameEncoding::NulOrSpacePadded => {}
+            NameEncoding::Ascii => {
+                if !name.is_ascii() {
+                    return Err(LayoutError::InvalidName { index });
+                }
+            }
+            NameEncoding::PrintableAscii => {
+                if !name.iter().all(|&b| (0x20..=0x7E).contains(&b)) {
+                    return Err(LayoutError::InvalidName { index });
+                }
+            }
         }
         let end = self
             .end_offset()
@@ -154,13 +180,16 @@ impl NamePoolSpec {
     fn decode_borrowed<'a>(
         self,
         pool_data: &'a [u8],
+        table_start: u64,
         table_end: u64,
         record_offset: usize,
         record: &[u8],
         index: usize,
     ) -> Result<&'a [u8], LayoutError> {
         let raw_off = self.offset_field.read(record)?;
-        let name_off_u64 = self.pool_base.apply(raw_off, table_end, record_offset)?;
+        let name_off_u64 = self
+            .pool_base
+            .apply(raw_off, table_start, table_end, record_offset)?;
         let name_off = usize::try_from(name_off_u64).map_err(|_| LayoutError::Overflow {
             what: "name_pool_offset",
         })?;
@@ -187,8 +216,18 @@ impl NamePoolSpec {
         if name.len() > self.max_len || name.contains(&0) {
             return Err(LayoutError::InvalidName { index });
         }
-        if matches!(self.encoding, NameEncoding::Ascii) && !name.is_ascii() {
-            return Err(LayoutError::InvalidName { index });
+        match self.encoding {
+            NameEncoding::NulTerminated | NameEncoding::NulOrSpacePadded => {}
+            NameEncoding::Ascii => {
+                if !name.is_ascii() {
+                    return Err(LayoutError::InvalidName { index });
+                }
+            }
+            NameEncoding::PrintableAscii => {
+                if !name.iter().all(|&b| (0x20..=0x7E).contains(&b)) {
+                    return Err(LayoutError::InvalidName { index });
+                }
+            }
         }
         Ok(())
     }
@@ -211,6 +250,15 @@ pub enum SizeMode {
     CumulativeAligned {
         /// Initial byte offset of the first entry.
         start: u64,
+        /// Alignment multiple applied to each entry's byte size when advancing the cursor (`>= 1`).
+        align: u64,
+    },
+    /// Each record's `offset_field` stores a size (scaled by [`FixedRecordTableSpec::size_unit`]),
+    /// and entry offsets start at `table_end + bias` and advance by `align_up(size, align)` after
+    /// each entry (with `align >= 1`).
+    CumulativeFromTableEnd {
+        /// Byte offset added to `table_end` to locate the first entry.
+        bias: u64,
         /// Alignment multiple applied to each entry's byte size when advancing the cursor (`>= 1`).
         align: u64,
     },
@@ -237,6 +285,13 @@ pub enum TableTermination {
         /// Integer field inspected in each record.
         field: IntFieldSpec,
         /// Sentinel value that terminates the table when matched.
+        value: u64,
+    },
+    /// Table terminates at the first record where `field.read(row) != value`.
+    FieldNotEquals {
+        /// Integer field inspected in each record.
+        field: IntFieldSpec,
+        /// Active value required for data rows; the first row where the field differs terminates the table.
         value: u64,
     },
     /// Table length is derived from the first record's resolved byte offset:
@@ -269,6 +324,8 @@ pub enum TableTermination {
 ///     size_unit: 1,
 ///     termination: TableTermination::Counted(1),
 ///     skip_empty_zero: false,
+///     skip_field_equals: None,
+///     sentinel_closes_next_offset: false,
 /// };
 ///
 /// let mut data = Vec::new();
@@ -308,19 +365,28 @@ pub struct FixedRecordTableSpec {
     /// How each entry's payload size is determined.
     pub size_mode: SizeMode,
     /// Non-zero byte multiplier applied to [`SizeMode::Stored`], [`SizeMode::CumulativeFrom`],
-    /// and [`SizeMode::CumulativeAligned`] size values.
+    /// [`SizeMode::CumulativeAligned`], and [`SizeMode::CumulativeFromTableEnd`] size values.
     pub size_unit: u64,
     /// How the number of records in the table is determined.
     pub termination: TableTermination,
     /// When `true`, skip all-zero or `(offset == 0, size/end == 0)` tombstone rows while
     /// preserving each surviving entry's physical slot `index`.
     pub skip_empty_zero: bool,
+    /// Optional `(field, value)` predicate skipping interior tombstone/free slots where
+    /// `field.read(row) == value` while preserving physical slot `index`.
+    pub skip_field_equals: Option<(IntFieldSpec, u64)>,
+    /// When `true` with [`SizeMode::NextOffset`] and a sentinel-based termination
+    /// (`ZeroRow`, `FirstByteZero`, `FieldEquals`, or `FieldNotEquals`), use the terminating
+    /// sentinel row's `offset_field` as the exclusive end offset for the final entry instead
+    /// of `carrier_len`.
+    pub sentinel_closes_next_offset: bool,
 }
 
 impl FixedRecordTableSpec {
     /// Construct a [`FixedRecordTableSpec`] with sensible defaults (`name_field: None`,
     /// `name_pool: None`, `key_field: None`, `offset_base: OffsetBase::Absolute`,
-    /// `offset_unit: 1`, `size_unit: 1`, `skip_empty_zero: false`).
+    /// `offset_unit: 1`, `size_unit: 1`, `skip_empty_zero: false`,
+    /// `skip_field_equals: None`, `sentinel_closes_next_offset: false`).
     #[must_use]
     pub const fn new(
         stride: usize,
@@ -344,6 +410,8 @@ impl FixedRecordTableSpec {
             size_unit: 1,
             termination,
             skip_empty_zero: false,
+            skip_field_equals: None,
+            sentinel_closes_next_offset: false,
         }
     }
 
@@ -393,6 +461,21 @@ impl FixedRecordTableSpec {
     #[must_use]
     pub const fn with_skip_empty_zero(mut self, skip: bool) -> Self {
         self.skip_empty_zero = skip;
+        self
+    }
+
+    /// Skip interior tombstone/free slots where `field.read(row) == value`.
+    #[must_use]
+    pub const fn with_skip_field_equals(mut self, field: IntFieldSpec, value: u64) -> Self {
+        self.skip_field_equals = Some((field, value));
+        self
+    }
+
+    /// Use the terminating sentinel row's `offset_field` as the exclusive end offset
+    /// of the final entry under [`SizeMode::NextOffset`].
+    #[must_use]
+    pub const fn with_sentinel_closes_next_offset(mut self, enabled: bool) -> Self {
+        self.sentinel_closes_next_offset = enabled;
         self
     }
 }
@@ -504,6 +587,7 @@ pub struct FixedRecordTableIter<'a> {
     data: &'a [u8],
     name_pool_data: &'a [u8],
     carrier_len: u64,
+    next_offset_terminal: u64,
     spec: FixedRecordTableSpec,
     raw_count: usize,
     active_count: usize,
@@ -532,7 +616,20 @@ fn is_empty_zero_row(spec: &FixedRecordTableSpec, record: &[u8]) -> Result<bool,
         SizeMode::NextOffset
         | SizeMode::CumulativeFrom(_)
         | SizeMode::CumulativeAligned { .. }
+        | SizeMode::CumulativeFromTableEnd { .. }
         | SizeMode::FixedSlot(_) => {}
+    }
+    Ok(false)
+}
+
+fn is_skipped_row(spec: &FixedRecordTableSpec, record: &[u8]) -> Result<bool, LayoutError> {
+    if spec.skip_empty_zero && is_empty_zero_row(spec, record)? {
+        return Ok(true);
+    }
+    if let Some((field, value)) = spec.skip_field_equals {
+        if field.read(record)? == value {
+            return Ok(true);
+        }
     }
     Ok(false)
 }
@@ -589,9 +686,12 @@ impl<'a> FixedRecordTableIter<'a> {
             .ok_or(LayoutError::Overflow {
                 what: "scaled_offset",
             })?;
-        self.spec
-            .offset_base
-            .apply(scaled, self.table_end, record_offset)
+        self.spec.offset_base.apply(
+            scaled,
+            self.spec.table_offset as u64,
+            self.table_end,
+            record_offset,
+        )
     }
 
     fn next_non_skipped_record(
@@ -601,7 +701,7 @@ impl<'a> FixedRecordTableIter<'a> {
         let mut idx = start_index;
         while idx < self.raw_count {
             let (rec_off, rec) = self.record_slice(idx)?;
-            if self.spec.skip_empty_zero && is_empty_zero_row(&self.spec, rec)? {
+            if is_skipped_row(&self.spec, rec)? {
                 idx += 1;
                 continue;
             }
@@ -617,6 +717,7 @@ impl<'a> FixedRecordTableIter<'a> {
         } else if let Some(pool_spec) = self.spec.name_pool {
             Some(pool_spec.decode_borrowed(
                 self.name_pool_data,
+                self.spec.table_offset as u64,
                 self.table_end,
                 record_offset,
                 record,
@@ -684,7 +785,14 @@ impl<'a> FixedRecordTableIter<'a> {
                     }
                     next
                 } else {
-                    data_len
+                    if self.next_offset_terminal < offset {
+                        return Err(LayoutError::NonMonotonic {
+                            index: index + 1,
+                            previous: offset,
+                            current: self.next_offset_terminal,
+                        });
+                    }
+                    self.next_offset_terminal
                 };
                 if next_offset > data_len {
                     return Err(LayoutError::OutOfBounds {
@@ -715,10 +823,11 @@ impl<'a> FixedRecordTableIter<'a> {
                 self.cumulative_cursor = end;
                 (offset, size)
             }
-            SizeMode::CumulativeAligned { start: _, align } => {
+            SizeMode::CumulativeAligned { start: _, align }
+            | SizeMode::CumulativeFromTableEnd { bias: _, align } => {
                 let size_field = self.spec.offset_field.ok_or(LayoutError::InvalidSpec {
                     field: "offset_field",
-                    reason: "required as size source for SizeMode::CumulativeAligned",
+                    reason: "required as size source for cumulative aligned size mode",
                 })?;
                 let raw_size = size_field.read(record)?;
                 let size =
@@ -767,9 +876,12 @@ impl<'a> FixedRecordTableIter<'a> {
                             .ok_or(LayoutError::Overflow {
                                 what: "fixed_slot_offset",
                             })?;
-                    self.spec
-                        .offset_base
-                        .apply(delta, self.table_end, record_offset)?
+                    self.spec.offset_base.apply(
+                        delta,
+                        self.spec.table_offset as u64,
+                        self.table_end,
+                        record_offset,
+                    )?
                 };
                 (offset, slot_size)
             }
@@ -805,10 +917,10 @@ impl<'a> Iterator for FixedRecordTableIter<'a> {
         while self.next_index < self.raw_count {
             let index = self.next_index;
             self.next_index += 1;
-            if self.spec.skip_empty_zero {
+            if self.spec.skip_empty_zero || self.spec.skip_field_equals.is_some() {
                 match self
                     .record_slice(index)
-                    .and_then(|(_, rec)| is_empty_zero_row(&self.spec, rec))
+                    .and_then(|(_, rec)| is_skipped_row(&self.spec, rec))
                 {
                     Ok(true) => continue,
                     Ok(false) => {}
@@ -902,6 +1014,29 @@ fn validate_spec(spec: &FixedRecordTableSpec) -> Result<(), LayoutError> {
     if let Some(field) = spec.offset_field {
         validate_field_in_stride(field, spec.stride, "offset_field")?;
     }
+    if let Some((skip_field, _)) = spec.skip_field_equals {
+        validate_field_in_stride(skip_field, spec.stride, "skip_field_equals")?;
+    }
+    if spec.sentinel_closes_next_offset {
+        if !matches!(spec.size_mode, SizeMode::NextOffset) {
+            return Err(LayoutError::InvalidSpec {
+                field: "sentinel_closes_next_offset",
+                reason: "requires SizeMode::NextOffset",
+            });
+        }
+        if !matches!(
+            spec.termination,
+            TableTermination::ZeroRow
+                | TableTermination::FirstByteZero
+                | TableTermination::FieldEquals { .. }
+                | TableTermination::FieldNotEquals { .. }
+        ) {
+            return Err(LayoutError::InvalidSpec {
+                field: "sentinel_closes_next_offset",
+                reason: "requires sentinel-based TableTermination",
+            });
+        }
+    }
     match spec.size_mode {
         SizeMode::Stored(size_field) => {
             if spec.offset_field.is_none() {
@@ -928,17 +1063,18 @@ fn validate_spec(spec: &FixedRecordTableSpec) -> Result<(), LayoutError> {
                 });
             }
         }
-        SizeMode::CumulativeAligned { align, .. } => {
+        SizeMode::CumulativeAligned { align, .. }
+        | SizeMode::CumulativeFromTableEnd { align, .. } => {
             if align == 0 {
                 return Err(LayoutError::InvalidSpec {
                     field: "size_mode",
-                    reason: "CumulativeAligned align must be nonzero",
+                    reason: "cumulative align must be nonzero",
                 });
             }
             if spec.offset_field.is_none() {
                 return Err(LayoutError::InvalidSpec {
                     field: "offset_field",
-                    reason: "required as size field for SizeMode::CumulativeAligned",
+                    reason: "required as size field for cumulative aligned size mode",
                 });
             }
         }
@@ -963,13 +1099,16 @@ fn validate_spec(spec: &FixedRecordTableSpec) -> Result<(), LayoutError> {
         }
     }
     match spec.termination {
-        TableTermination::FieldEquals { field, .. } => {
+        TableTermination::FieldEquals { field, .. }
+        | TableTermination::FieldNotEquals { field, .. } => {
             validate_field_in_stride(field, spec.stride, "termination")?;
         }
         TableTermination::FirstOffsetDerived => {
             if matches!(
                 spec.size_mode,
-                SizeMode::CumulativeFrom(_) | SizeMode::CumulativeAligned { .. }
+                SizeMode::CumulativeFrom(_)
+                    | SizeMode::CumulativeAligned { .. }
+                    | SizeMode::CumulativeFromTableEnd { .. }
             ) {
                 return Err(LayoutError::InvalidSpec {
                     field: "size_mode",
@@ -982,11 +1121,14 @@ fn validate_spec(spec: &FixedRecordTableSpec) -> Result<(), LayoutError> {
                     reason: "required for TableTermination::FirstOffsetDerived",
                 });
             }
-            if matches!(spec.offset_base, OffsetBase::TableEnd) {
+            if matches!(
+                spec.offset_base,
+                OffsetBase::TableEnd | OffsetBase::TableEndPlus(_)
+            ) {
                 return Err(LayoutError::InvalidSpec {
                     field: "offset_base",
                     reason:
-                        "OffsetBase::TableEnd is circular with TableTermination::FirstOffsetDerived",
+                        "table-end-relative offset_base is circular with TableTermination::FirstOffsetDerived",
                 });
             }
         }
@@ -1090,7 +1232,7 @@ fn iter_fixed_record_table_inner<'a>(
         });
     }
 
-    let (raw_count, table_end_usize) = match spec.termination {
+    let (raw_count, table_end_usize, sentinel_record_offset) = match spec.termination {
         TableTermination::Counted(count) => {
             if count > effective_max {
                 return Err(LayoutError::MaxEntriesExceeded { max: effective_max });
@@ -1111,14 +1253,15 @@ fn iter_fixed_record_table_inner<'a>(
                     available: table_data.len().saturating_sub(spec.table_offset),
                 });
             }
-            (count, end)
+            (count, end, None)
         }
         TableTermination::ZeroRow
         | TableTermination::FirstByteZero
-        | TableTermination::FieldEquals { .. } => {
+        | TableTermination::FieldEquals { .. }
+        | TableTermination::FieldNotEquals { .. } => {
             let mut pos = spec.table_offset;
             let mut count = 0usize;
-            let mut terminated = false;
+            let mut sentinel_off = None;
             while let Some(end) = pos.checked_add(spec.stride) {
                 if end > table_data.len() {
                     break;
@@ -1128,11 +1271,12 @@ fn iter_fixed_record_table_inner<'a>(
                     TableTermination::ZeroRow => row.iter().all(|&b| b == 0),
                     TableTermination::FirstByteZero => row[0] == 0,
                     TableTermination::FieldEquals { field, value } => field.read(row)? == value,
+                    TableTermination::FieldNotEquals { field, value } => field.read(row)? != value,
                     _ => unreachable!(),
                 };
                 if is_sentinel {
+                    sentinel_off = Some(pos);
                     pos = end;
-                    terminated = true;
                     break;
                 }
                 if count >= effective_max {
@@ -1141,14 +1285,17 @@ fn iter_fixed_record_table_inner<'a>(
                 count += 1;
                 pos = end;
             }
-            if !terminated && pos < table_data.len() && table_data.len() - pos < spec.stride {
+            if sentinel_off.is_none()
+                && pos < table_data.len()
+                && table_data.len() - pos < spec.stride
+            {
                 return Err(LayoutError::Truncated {
                     offset: pos,
                     needed: spec.stride,
                     available: table_data.len() - pos,
                 });
             }
-            (count, pos)
+            (count, pos, sentinel_off)
         }
         TableTermination::FirstOffsetDerived => {
             let first_end =
@@ -1172,7 +1319,9 @@ fn iter_fixed_record_table_inner<'a>(
                 .ok_or(LayoutError::Overflow {
                     what: "first_offset",
                 })?;
-            let first_offset = spec.offset_base.apply(scaled, 0, spec.table_offset)?;
+            let first_offset =
+                spec.offset_base
+                    .apply(scaled, spec.table_offset as u64, 0, spec.table_offset)?;
             let table_offset_u64 = spec.table_offset as u64;
             if first_offset < table_offset_u64 || first_offset > carrier_len {
                 return Err(LayoutError::InvalidTableEnd {
@@ -1206,7 +1355,7 @@ fn iter_fixed_record_table_inner<'a>(
                     available: table_data.len().saturating_sub(spec.table_offset),
                 });
             }
-            (count, end)
+            (count, end, None)
         }
         TableTermination::Eof => {
             let remaining = table_data.len() - spec.table_offset;
@@ -1215,16 +1364,16 @@ fn iter_fixed_record_table_inner<'a>(
                 return Err(LayoutError::MaxEntriesExceeded { max: effective_max });
             }
             let end = spec.table_offset + count * spec.stride;
-            (count, end)
+            (count, end, None)
         }
     };
 
-    let active_count = if spec.skip_empty_zero {
+    let active_count = if spec.skip_empty_zero || spec.skip_field_equals.is_some() {
         let mut active = 0usize;
         for idx in 0..raw_count {
             let start = spec.table_offset + idx * spec.stride;
             let row = &table_data[start..start + spec.stride];
-            if !is_empty_zero_row(spec, row)? {
+            if !is_skipped_row(spec, row)? {
                 active += 1;
             }
         }
@@ -1233,8 +1382,44 @@ fn iter_fixed_record_table_inner<'a>(
         raw_count
     };
 
+    let table_start = spec.table_offset as u64;
+    let table_end = table_end_usize as u64;
+    let next_offset_terminal = if spec.sentinel_closes_next_offset {
+        if let Some(sent_off) = sentinel_record_offset {
+            let sentinel_rec = &table_data[sent_off..sent_off + spec.stride];
+            let offset_field = spec.offset_field.expect("validated above");
+            let raw = offset_field.read(sentinel_rec)?;
+            let scaled = raw
+                .checked_mul(spec.offset_unit)
+                .ok_or(LayoutError::Overflow {
+                    what: "scaled_offset",
+                })?;
+            let end_off = spec
+                .offset_base
+                .apply(scaled, table_start, table_end, sent_off)?;
+            if end_off > carrier_len {
+                return Err(LayoutError::OutOfBounds {
+                    index: raw_count,
+                    offset: end_off,
+                    size: 0,
+                    data_len: carrier_len,
+                });
+            }
+            end_off
+        } else {
+            carrier_len
+        }
+    } else {
+        carrier_len
+    };
+
     let cumulative_cursor = match spec.size_mode {
         SizeMode::CumulativeFrom(start) | SizeMode::CumulativeAligned { start, .. } => start,
+        SizeMode::CumulativeFromTableEnd { bias, .. } => {
+            table_end.checked_add(bias).ok_or(LayoutError::Overflow {
+                what: "cumulative_start",
+            })?
+        }
         _ => 0,
     };
 
@@ -1242,11 +1427,12 @@ fn iter_fixed_record_table_inner<'a>(
         data: table_data,
         name_pool_data,
         carrier_len,
+        next_offset_terminal,
         spec: *spec,
         raw_count,
         active_count,
         remaining: active_count,
-        table_end: table_end_usize as u64,
+        table_end,
         next_index: 0,
         cumulative_cursor,
         prev_offset: None,
@@ -1353,13 +1539,27 @@ pub struct FixedRecordInput<'a> {
 /// The resulting buffer begins with `header_prefix` (padded with
 /// [`PackPolicy::prefix_fill_byte`] up to [`FixedRecordTableSpec::table_offset`]),
 /// followed by the fixed-stride record table (plus any sentinel row required by
-/// [`TableTermination::ZeroRow`], [`TableTermination::FirstByteZero`], or
-/// [`TableTermination::FieldEquals`]), an optional NUL-terminated string pool when
-/// [`FixedRecordTableSpec::name_pool`] is configured, and then the aligned payloads.
+/// [`TableTermination::ZeroRow`], [`TableTermination::FirstByteZero`],
+/// [`TableTermination::FieldEquals`], or [`TableTermination::FieldNotEquals`]),
+/// an optional NUL-terminated string pool when [`FixedRecordTableSpec::name_pool`]
+/// is configured, and then the aligned payloads.
 pub fn pack_fixed_record_table(
     spec: &FixedRecordTableSpec,
     policy: &PackPolicy,
     header_prefix: &[u8],
+    entries: &[FixedRecordInput<'_>],
+) -> Result<Vec<u8>, LayoutError> {
+    pack_fixed_record_table_with_post_table(spec, policy, header_prefix, &[], entries)
+}
+
+/// Serialize `entries` into a binary carrier conforming to `spec` and `policy`,
+/// inserting `post_table` verbatim between the end of the record table (including
+/// any sentinel row) and the string pool / first payload.
+pub fn pack_fixed_record_table_with_post_table(
+    spec: &FixedRecordTableSpec,
+    policy: &PackPolicy,
+    header_prefix: &[u8],
+    post_table: &[u8],
     entries: &[FixedRecordInput<'_>],
 ) -> Result<Vec<u8>, LayoutError> {
     validate_spec(spec)?;
@@ -1380,7 +1580,8 @@ pub fn pack_fixed_record_table(
     let sentinel_rows = match spec.termination {
         TableTermination::ZeroRow
         | TableTermination::FirstByteZero
-        | TableTermination::FieldEquals { .. } => 1usize,
+        | TableTermination::FieldEquals { .. }
+        | TableTermination::FieldNotEquals { .. } => 1usize,
         TableTermination::FirstOffsetDerived => {
             if entries.is_empty() {
                 return Err(LayoutError::InvalidInput {
@@ -1395,6 +1596,12 @@ pub fn pack_fixed_record_table(
                 return Err(LayoutError::InvalidInput {
                     index: 0,
                     reason: "TableTermination::Eof cannot pack non-empty inline payloads",
+                });
+            }
+            if !post_table.is_empty() {
+                return Err(LayoutError::InvalidInput {
+                    index: 0,
+                    reason: "TableTermination::Eof cannot pack non-empty post_table",
                 });
             }
             0usize
@@ -1415,21 +1622,52 @@ pub fn pack_fixed_record_table(
         .table_offset
         .checked_add(table_bytes)
         .ok_or(LayoutError::Overflow { what: "table_end" })?;
+    let table_start_u64 = spec.table_offset as u64;
     let table_end_u64 = table_end as u64;
+
+    if !post_table.is_empty() && matches!(spec.termination, TableTermination::FirstOffsetDerived) {
+        return Err(LayoutError::InvalidInput {
+            index: 0,
+            reason: "post_table cannot be placed before first payload under FirstOffsetDerived",
+        });
+    }
+    let post_table_end_u64 =
+        table_end_u64
+            .checked_add(post_table.len() as u64)
+            .ok_or(LayoutError::Overflow {
+                what: "post_table_end",
+            })?;
 
     // Optional string pool planning (K6)
     let mut pool_buf: Vec<u8> = Vec::new();
-    let mut pool_start_u64 = table_end_u64;
+    let mut pool_start_u64 = post_table_end_u64;
     let mut raw_name_offsets: Vec<u64> = Vec::new();
     if let Some(pool) = spec.name_pool {
-        if let OffsetBase::Fixed(base) = pool.pool_base {
-            if base < table_end_u64 {
-                return Err(LayoutError::InvalidSpec {
-                    field: "name_pool",
-                    reason: "Fixed pool_base overlaps record table",
-                });
+        match pool.pool_base {
+            OffsetBase::Fixed(base) => {
+                if base < post_table_end_u64 {
+                    return Err(LayoutError::InvalidSpec {
+                        field: "name_pool",
+                        reason: "Fixed pool_base overlaps record table or post_table",
+                    });
+                }
+                pool_start_u64 = base;
             }
-            pool_start_u64 = base;
+            OffsetBase::TableEndPlus(bias) => {
+                let biased = table_end_u64
+                    .checked_add(bias)
+                    .ok_or(LayoutError::Overflow {
+                        what: "name_pool_start",
+                    })?;
+                if biased < post_table_end_u64 {
+                    return Err(LayoutError::InvalidSpec {
+                        field: "name_pool",
+                        reason: "TableEndPlus pool_base overlaps post_table",
+                    });
+                }
+                pool_start_u64 = biased;
+            }
+            _ => {}
         }
         raw_name_offsets
             .try_reserve_exact(entries.len())
@@ -1448,6 +1686,7 @@ pub fn pack_fixed_record_table(
             let record_offset = spec.table_offset + index * spec.stride;
             let raw_off = pool.pool_base.encode_exact(
                 abs_off,
+                table_start_u64,
                 table_end_u64,
                 record_offset,
                 1,
@@ -1471,7 +1710,7 @@ pub fn pack_fixed_record_table(
             reason: "name_pool cannot be placed before first payload under FirstOffsetDerived",
         });
     }
-    let min_data_start = table_end_u64.max(pool_end_u64);
+    let min_data_start = post_table_end_u64.max(pool_end_u64);
 
     // Plan each entry's physical payload offset and encoded record values.
     struct PlannedEntry {
@@ -1492,7 +1731,22 @@ pub fn pack_fixed_record_table(
             if start < min_data_start {
                 return Err(LayoutError::InvalidSpec {
                     field: "size_mode",
-                    reason: "cumulative start offset overlaps record table or string pool",
+                    reason:
+                        "cumulative start offset overlaps record table, post_table, or string pool",
+                });
+            }
+            start
+        }
+        SizeMode::CumulativeFromTableEnd { bias, .. } => {
+            let start = table_end_u64
+                .checked_add(bias)
+                .ok_or(LayoutError::Overflow {
+                    what: "cumulative_start",
+                })?;
+            if start < min_data_start {
+                return Err(LayoutError::InvalidSpec {
+                    field: "size_mode",
+                    reason: "cumulative start offset overlaps post_table or string pool",
                 });
             }
             start
@@ -1517,6 +1771,7 @@ pub fn pack_fixed_record_table(
                 {
                     let raw = spec.offset_base.encode_exact(
                         table_end_u64,
+                        table_start_u64,
                         table_end_u64,
                         record_offset,
                         spec.offset_unit,
@@ -1527,6 +1782,7 @@ pub fn pack_fixed_record_table(
                 } else {
                     spec.offset_base.align_and_encode(
                         cursor,
+                        table_start_u64,
                         table_end_u64,
                         record_offset,
                         policy.data_alignment,
@@ -1553,6 +1809,7 @@ pub fn pack_fixed_record_table(
                 {
                     let raw = spec.offset_base.encode_exact(
                         table_end_u64,
+                        table_start_u64,
                         table_end_u64,
                         record_offset,
                         spec.offset_unit,
@@ -1563,6 +1820,7 @@ pub fn pack_fixed_record_table(
                 } else {
                     spec.offset_base.align_and_encode(
                         cursor,
+                        table_start_u64,
                         table_end_u64,
                         record_offset,
                         policy.data_alignment,
@@ -1603,7 +1861,8 @@ pub fn pack_fixed_record_table(
                     raw_size: None,
                 });
             }
-            SizeMode::CumulativeAligned { start: _, align } => {
+            SizeMode::CumulativeAligned { start: _, align }
+            | SizeMode::CumulativeFromTableEnd { bias: _, align } => {
                 if !payload_len_u64.is_multiple_of(spec.size_unit) {
                     return Err(LayoutError::InvalidInput {
                         index,
@@ -1639,6 +1898,7 @@ pub fn pack_fixed_record_table(
                 {
                     let raw = spec.offset_base.encode_exact(
                         table_end_u64,
+                        table_start_u64,
                         table_end_u64,
                         record_offset,
                         spec.offset_unit,
@@ -1649,6 +1909,7 @@ pub fn pack_fixed_record_table(
                 } else {
                     spec.offset_base.align_and_encode(
                         cursor,
+                        table_start_u64,
                         table_end_u64,
                         record_offset,
                         policy.data_alignment,
@@ -1660,6 +1921,7 @@ pub fn pack_fixed_record_table(
                     .ok_or(LayoutError::Overflow { what: "entry_end" })?;
                 let raw_end = spec.offset_base.encode_exact(
                     end_u64,
+                    table_start_u64,
                     table_end_u64,
                     record_offset,
                     spec.offset_unit,
@@ -1690,6 +1952,7 @@ pub fn pack_fixed_record_table(
                     {
                         let r = spec.offset_base.encode_exact(
                             table_end_u64,
+                            table_start_u64,
                             table_end_u64,
                             record_offset,
                             spec.offset_unit,
@@ -1700,6 +1963,7 @@ pub fn pack_fixed_record_table(
                     } else {
                         spec.offset_base.align_and_encode(
                             cursor,
+                            table_start_u64,
                             table_end_u64,
                             record_offset,
                             policy.data_alignment,
@@ -1714,13 +1978,17 @@ pub fn pack_fixed_record_table(
                             .ok_or(LayoutError::Overflow {
                                 what: "fixed_slot_offset",
                             })?;
-                    let off = spec
-                        .offset_base
-                        .apply(delta, table_end_u64, record_offset)?;
+                    let off = spec.offset_base.apply(
+                        delta,
+                        table_start_u64,
+                        table_end_u64,
+                        record_offset,
+                    )?;
                     if off < min_data_start {
                         return Err(LayoutError::InvalidInput {
                             index,
-                            reason: "FixedSlot offset overlaps record table or string pool",
+                            reason:
+                                "FixedSlot offset overlaps record table, post_table, or string pool",
                         });
                     }
                     (off, None)
@@ -1742,12 +2010,32 @@ pub fn pack_fixed_record_table(
         }
     }
 
-    if policy.pad_final_entry
-        && policy.data_alignment > 1
-        && !matches!(spec.termination, TableTermination::Eof)
-    {
-        cursor = align_payload_offset(cursor, 0, policy.data_alignment, 1)?;
-    }
+    let sentinel_end_raw = if sentinel_rows == 1 && spec.sentinel_closes_next_offset {
+        let sentinel_record_offset = spec.table_offset + entries.len() * spec.stride;
+        let sentinel_align = if policy.pad_final_entry {
+            policy.data_alignment
+        } else {
+            1
+        };
+        let (end_u64, raw_sentinel) = spec.offset_base.align_and_encode(
+            cursor,
+            table_start_u64,
+            table_end_u64,
+            sentinel_record_offset,
+            sentinel_align,
+            spec.offset_unit,
+        )?;
+        cursor = end_u64;
+        Some(raw_sentinel)
+    } else {
+        if policy.pad_final_entry
+            && policy.data_alignment > 1
+            && !matches!(spec.termination, TableTermination::Eof)
+        {
+            cursor = align_payload_offset(cursor, 0, policy.data_alignment, 1)?;
+        }
+        None
+    };
 
     let total_len =
         usize::try_from(cursor).map_err(|_| LayoutError::Overflow { what: "output_len" })?;
@@ -1824,7 +2112,21 @@ pub fn pack_fixed_record_table(
                     reason: "encoded record matches TableTermination::FieldEquals sentinel",
                 });
             }
+            TableTermination::FieldNotEquals { field, value } if field.read(rec)? != value => {
+                return Err(LayoutError::InvalidInput {
+                    index,
+                    reason: "encoded record does not match TableTermination::FieldNotEquals active value",
+                });
+            }
             _ => {}
+        }
+        if let Some((skip_field, skip_value)) = spec.skip_field_equals {
+            if skip_field.read(rec)? == skip_value {
+                return Err(LayoutError::InvalidInput {
+                    index,
+                    reason: "encoded record matches skip_field_equals tombstone",
+                });
+            }
         }
     }
 
@@ -1833,9 +2135,43 @@ pub fn pack_fixed_record_table(
         let sentinel_start = spec.table_offset + entries.len() * spec.stride;
         let sentinel_rec = &mut out[sentinel_start..sentinel_start + spec.stride];
         sentinel_rec.fill(0);
-        if let TableTermination::FieldEquals { field, value } = spec.termination {
-            field.write(sentinel_rec, value)?;
+        if let Some(raw_end) = sentinel_end_raw {
+            let offset_field = spec.offset_field.expect("validated above");
+            offset_field.write(sentinel_rec, raw_end)?;
         }
+        match spec.termination {
+            TableTermination::FieldEquals { field, value } => {
+                field.write(sentinel_rec, value)?;
+            }
+            TableTermination::FieldNotEquals { field, value } => {
+                let sentinel_val = if value != 0 {
+                    0
+                } else {
+                    1u64 << field.bit_mask.trailing_zeros()
+                };
+                field.write(sentinel_rec, sentinel_val)?;
+            }
+            _ => {}
+        }
+        // Verify sentinel row still satisfies the termination condition
+        let valid_sentinel = match spec.termination {
+            TableTermination::ZeroRow => sentinel_rec.iter().all(|&b| b == 0),
+            TableTermination::FirstByteZero => sentinel_rec[0] == 0,
+            TableTermination::FieldEquals { field, value } => field.read(sentinel_rec)? == value,
+            TableTermination::FieldNotEquals { field, value } => field.read(sentinel_rec)? != value,
+            _ => true,
+        };
+        if !valid_sentinel {
+            return Err(LayoutError::InvalidInput {
+                index: entries.len(),
+                reason: "sentinel row offset_field conflicts with TableTermination sentinel",
+            });
+        }
+    }
+
+    // Post-table inter-section block
+    if !post_table.is_empty() {
+        out[table_end..table_end + post_table.len()].copy_from_slice(post_table);
     }
 
     // String pool
@@ -2757,6 +3093,316 @@ mod tests {
             Err(LayoutError::Overflow {
                 what: "offset_subtract_base"
             })
+        );
+    }
+
+    #[test]
+    fn knob1_field_not_equals_round_trip_and_validation() {
+        // Active rows have tag == 1; terminator row has tag == 0
+        const SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+            12,
+            0,
+            16,
+            Some(IntFieldSpec::u32_le(4)),
+            SizeMode::Stored(IntFieldSpec::u32_le(8)),
+            TableTermination::FieldNotEquals {
+                field: IntFieldSpec::u32_le(0),
+                value: 1,
+            },
+        );
+        let mut tmpl = [0u8; 12];
+        tmpl[0..4].copy_from_slice(&1u32.to_le_bytes());
+        let inputs = [
+            FixedRecordInput {
+                name: None,
+                key: None,
+                payload: b"first",
+                record_template: Some(&tmpl),
+            },
+            FixedRecordInput {
+                name: None,
+                key: None,
+                payload: b"second!",
+                record_template: Some(&tmpl),
+            },
+        ];
+        let packed = pack_fixed_record_table(&SPEC, &PackPolicy::TIGHT, &[], &inputs).unwrap();
+        // Sentinel row at offset 24 must have tag != 1 (written as 0)
+        assert_eq!(u32::from_le_bytes(packed[24..28].try_into().unwrap()), 0);
+        let parsed = parse_fixed_record_table(&packed, &SPEC).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].payload(&packed), Some(&b"first"[..]));
+        assert_eq!(parsed[1].payload(&packed), Some(&b"second!"[..]));
+
+        // Metadata mode also respects FieldNotEquals
+        let meta =
+            parse_fixed_record_table_metadata(&packed[..36], &SPEC, packed.len() as u64).unwrap();
+        assert_eq!(meta.len(), 2);
+
+        // Packing a data row whose field != value is rejected
+        let bad_inputs = [FixedRecordInput {
+            name: None,
+            key: None,
+            payload: b"bad",
+            record_template: None, // tag == 0 != 1
+        }];
+        assert!(matches!(
+            pack_fixed_record_table(&SPEC, &PackPolicy::TIGHT, &[], &bad_inputs),
+            Err(LayoutError::InvalidInput { index: 0, .. })
+        ));
+
+        // Active value == 0 emits sentinel value == 1
+        const ZERO_ACTIVE: FixedRecordTableSpec = FixedRecordTableSpec::new(
+            12,
+            0,
+            16,
+            Some(IntFieldSpec::u32_le(4)),
+            SizeMode::Stored(IntFieldSpec::u32_le(8)),
+            TableTermination::FieldNotEquals {
+                field: IntFieldSpec::u32_le(0),
+                value: 0,
+            },
+        );
+        let zero_packed = pack_fixed_record_table(
+            &ZERO_ACTIVE,
+            &PackPolicy::TIGHT,
+            &[],
+            &[FixedRecordInput {
+                name: None,
+                key: None,
+                payload: b"ok",
+                record_template: None,
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            u32::from_le_bytes(zero_packed[12..16].try_into().unwrap()),
+            1
+        );
+        let zero_parsed = parse_fixed_record_table(&zero_packed, &ZERO_ACTIVE).unwrap();
+        assert_eq!(zero_parsed.len(), 1);
+        assert_eq!(zero_parsed[0].payload(&zero_packed), Some(&b"ok"[..]));
+    }
+
+    #[test]
+    fn knob2_skip_field_equals_preserves_index_next_offset_and_exact_len() {
+        const SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+            8,
+            0,
+            16,
+            Some(IntFieldSpec::u32_le(4)),
+            SizeMode::NextOffset,
+            TableTermination::Counted(4),
+        )
+        .with_key_field(IntFieldSpec::u32_le(0))
+        .with_skip_field_equals(IntFieldSpec::u32_le(0), 0xFFFF_FFFF);
+
+        let mut data = Vec::new();
+        // Slot 0: active (key=10, off=32)
+        data.extend_from_slice(&10u32.to_le_bytes());
+        data.extend_from_slice(&32u32.to_le_bytes());
+        // Slot 1: tombstone (key=0xFFFF_FFFF, bogus offset 0)
+        data.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        // Slot 2: active (key=20, off=36)
+        data.extend_from_slice(&20u32.to_le_bytes());
+        data.extend_from_slice(&36u32.to_le_bytes());
+        // Slot 3: tombstone
+        data.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        // Payloads: 4 bytes + 5 bytes
+        data.extend_from_slice(b"AAAAbbbbb");
+
+        let iter = iter_fixed_record_table(&data, &SPEC).unwrap();
+        assert_eq!(iter.len(), 2);
+        let entries: Vec<_> = iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].index, 0);
+        assert_eq!(entries[0].key, Some(10));
+        assert_eq!(entries[0].payload(&data), Some(&b"AAAA"[..]));
+        assert_eq!(entries[1].index, 2);
+        assert_eq!(entries[1].key, Some(20));
+        assert_eq!(entries[1].payload(&data), Some(&b"bbbbb"[..]));
+    }
+
+    #[test]
+    fn knob3_table_start_table_end_plus_and_cumulative_from_table_end() {
+        // 1. OffsetBase::TableStart with runtime table_offset
+        const TS_SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+            8,
+            16,
+            16,
+            Some(IntFieldSpec::u32_le(0)),
+            SizeMode::Stored(IntFieldSpec::u32_le(4)),
+            TableTermination::Counted(2),
+        )
+        .with_offset_base(OffsetBase::TableStart);
+        let inputs = [
+            FixedRecordInput {
+                name: None,
+                key: None,
+                payload: b"hello",
+                record_template: None,
+            },
+            FixedRecordInput {
+                name: None,
+                key: None,
+                payload: b"world",
+                record_template: None,
+            },
+        ];
+        let packed =
+            pack_fixed_record_table(&TS_SPEC, &PackPolicy::TIGHT, b"HDR!", &inputs).unwrap();
+        // Raw offset 0 relative to table_offset=16 is 16 (2 * 8B records)
+        assert_eq!(u32::from_le_bytes(packed[16..20].try_into().unwrap()), 16);
+        let parsed = parse_fixed_record_table(&packed, &TS_SPEC).unwrap();
+        assert_eq!(parsed[0].offset, 32);
+        assert_eq!(parsed[0].payload(&packed), Some(&b"hello"[..]));
+        assert_eq!(parsed[1].offset, 37);
+        assert_eq!(parsed[1].payload(&packed), Some(&b"world"[..]));
+
+        // 2. OffsetBase::TableEndPlus(12)
+        const TEP_SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+            8,
+            4,
+            16,
+            Some(IntFieldSpec::u32_le(0)),
+            SizeMode::Stored(IntFieldSpec::u32_le(4)),
+            TableTermination::Counted(2),
+        )
+        .with_offset_base(OffsetBase::TableEndPlus(12));
+        let tep_packed = pack_fixed_record_table_with_post_table(
+            &TEP_SPEC,
+            &PackPolicy::TIGHT,
+            b"PFX!",
+            b"INTER_SECTION",
+            &inputs,
+        );
+        // post_table is 13 bytes, so cursor=table_end+13 > table_end+12 -> raw offset 0 is 1
+        let tep_packed = tep_packed.unwrap();
+        let tep_parsed = parse_fixed_record_table(&tep_packed, &TEP_SPEC).unwrap();
+        assert_eq!(tep_parsed[0].payload(&tep_packed), Some(&b"hello"[..]));
+        assert_eq!(tep_parsed[1].payload(&tep_packed), Some(&b"world"[..]));
+
+        // 3. SizeMode::CumulativeFromTableEnd { bias: 8, align: 16 }
+        const CUM_TE_SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+            4,
+            4,
+            16,
+            Some(IntFieldSpec::u32_le(0)),
+            SizeMode::CumulativeFromTableEnd { bias: 8, align: 16 },
+            TableTermination::Counted(2),
+        );
+        let cum_packed = pack_fixed_record_table_with_post_table(
+            &CUM_TE_SPEC,
+            &PackPolicy::TIGHT,
+            b"HDR0",
+            b"POST_BLK", // 8 bytes == bias
+            &inputs,
+        )
+        .unwrap();
+        // table_end = 4 + 8 = 12, + bias 8 = 20; entry 0 (5B) at 20, next at 20 + 16 = 36
+        let cum_parsed = parse_fixed_record_table(&cum_packed, &CUM_TE_SPEC).unwrap();
+        assert_eq!(cum_parsed.len(), 2);
+        assert_eq!((cum_parsed[0].offset, cum_parsed[0].size), (20, 5));
+        assert_eq!(cum_parsed[0].payload(&cum_packed), Some(&b"hello"[..]));
+        assert_eq!((cum_parsed[1].offset, cum_parsed[1].size), (36, 5));
+        assert_eq!(cum_parsed[1].payload(&cum_packed), Some(&b"world"[..]));
+    }
+
+    #[test]
+    fn knob5_sentinel_closes_next_offset_round_trips_with_trailing_bytes() {
+        const SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+            12,
+            0,
+            16,
+            Some(IntFieldSpec::u32_le(8)),
+            SizeMode::NextOffset,
+            TableTermination::FirstByteZero,
+        )
+        .with_name_field(NameFieldSpec::new(0, 8, NameEncoding::PrintableAscii))
+        .with_sentinel_closes_next_offset(true);
+
+        let inputs = [
+            FixedRecordInput {
+                name: Some(b"first"),
+                key: None,
+                payload: b"1234",
+                record_template: None,
+            },
+            FixedRecordInput {
+                name: Some(b"second"),
+                key: None,
+                payload: b"56789",
+                record_template: None,
+            },
+        ];
+        let mut packed = pack_fixed_record_table(&SPEC, &PackPolicy::TIGHT, &[], &inputs).unwrap();
+        // Append trailing carrier bytes after the sentinel's declared end offset
+        packed.extend_from_slice(b"TRAILING_JUNK_OUTSIDE_SENTINEL");
+
+        let parsed = parse_fixed_record_table(&packed, &SPEC).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].name_str(), Some("first"));
+        assert_eq!(parsed[0].payload(&packed), Some(&b"1234"[..]));
+        assert_eq!(parsed[1].name_str(), Some("second"));
+        // Final entry closes at sentinel's offset, NOT at packed.len()!
+        assert_eq!(parsed[1].payload(&packed), Some(&b"56789"[..]));
+    }
+
+    #[test]
+    fn knob8_printable_ascii_and_post_table_bytes() {
+        const SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+            16,
+            0,
+            16,
+            Some(IntFieldSpec::u32_le(8)),
+            SizeMode::Stored(IntFieldSpec::u32_le(12)),
+            TableTermination::Counted(1),
+        )
+        .with_name_field(NameFieldSpec::new(0, 8, NameEncoding::PrintableAscii));
+
+        let inputs = [FixedRecordInput {
+            name: Some(b"ok_1.bin"),
+            key: None,
+            payload: b"PAYLOAD",
+            record_template: None,
+        }];
+        let post = b"SORTED_INDEX_BLOCK";
+        let packed =
+            pack_fixed_record_table_with_post_table(&SPEC, &PackPolicy::TIGHT, &[], post, &inputs)
+                .unwrap();
+        assert_eq!(&packed[16..16 + post.len()], post);
+        let parsed = parse_fixed_record_table(&packed, &SPEC).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name_str(), Some("ok_1.bin"));
+        assert_eq!(parsed[0].offset, (16 + post.len()) as u64);
+        assert_eq!(parsed[0].payload(&packed), Some(&b"PAYLOAD"[..]));
+
+        // Control byte 0x09 (tab) before trailing space is rejected on parse
+        let mut bad_ctrl = packed.clone();
+        bad_ctrl[0..8].copy_from_slice(b"ab\x09   \0\0");
+        assert_eq!(
+            parse_fixed_record_table(&bad_ctrl, &SPEC),
+            Err(LayoutError::InvalidName { index: 0 })
+        );
+
+        // 0x7F (DEL) is rejected on parse and pack
+        let mut bad_del = packed.clone();
+        bad_del[0..8].copy_from_slice(b"ab\x7F\0\0\0\0\0");
+        assert_eq!(
+            parse_fixed_record_table(&bad_del, &SPEC),
+            Err(LayoutError::InvalidName { index: 0 })
+        );
+        let bad_pack = [FixedRecordInput {
+            name: Some(b"ab\x1F"),
+            key: None,
+            payload: b"X",
+            record_template: None,
+        }];
+        assert_eq!(
+            pack_fixed_record_table(&SPEC, &PackPolicy::TIGHT, &[], &bad_pack),
+            Err(LayoutError::InvalidName { index: 0 })
         );
     }
 }

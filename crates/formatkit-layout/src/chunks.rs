@@ -243,6 +243,7 @@ pub enum ChunkAlignmentBase {
 ///     size_field: IntFieldSpec::u32_le(4),
 ///     size_mode: ChunkSizeMode::PayloadOnly,
 ///     alignment: 4,
+///     trailer_size: 0,
 ///     terminator_tag: None,
 ///     require_eof_closure: true,
 ///     max_chunks: 64,
@@ -280,8 +281,10 @@ pub struct ChunkStreamSpec {
     pub size_field: IntFieldSpec,
     /// Whether `size_field` counts only the payload or includes `header_size`.
     pub size_mode: ChunkSizeMode,
-    /// Byte alignment for the next chunk start after each payload (e.g. `1`, `4`, `2048`; must be `>= 1`).
+    /// Byte alignment for the next chunk start after each payload + trailer (e.g. `1`, `4`, `2048`; must be `>= 1`).
     pub alignment: usize,
+    /// Fixed number of trailing bytes (e.g. checksum or footer) immediately following each chunk's payload before alignment (default `0`).
+    pub trailer_size: usize,
     /// Optional tag that terminates the stream cleanly without being emitted.
     /// Must be `None` when `tag_len == 0`.
     pub terminator_tag: Option<&'static [u8]>,
@@ -289,6 +292,70 @@ pub struct ChunkStreamSpec {
     pub require_eof_closure: bool,
     /// Maximum number of chunks accepted before returning [`LayoutError::MaxEntriesExceeded`].
     pub max_chunks: usize,
+}
+
+impl ChunkStreamSpec {
+    /// Construct a [`ChunkStreamSpec`] with sensible defaults
+    /// (`tag_offset: 0`, `tag_len: 0`, `alignment: 1`, `trailer_size: 0`,
+    /// `terminator_tag: None`, `require_eof_closure: true`).
+    #[must_use]
+    pub const fn new(
+        start_offset: usize,
+        header_size: usize,
+        size_field: IntFieldSpec,
+        size_mode: ChunkSizeMode,
+        max_chunks: usize,
+    ) -> Self {
+        Self {
+            start_offset,
+            header_size,
+            tag_offset: 0,
+            tag_len: 0,
+            size_field,
+            size_mode,
+            alignment: 1,
+            trailer_size: 0,
+            terminator_tag: None,
+            require_eof_closure: true,
+            max_chunks,
+        }
+    }
+
+    /// Set [`ChunkStreamSpec::tag_offset`] and [`ChunkStreamSpec::tag_len`].
+    #[must_use]
+    pub const fn with_tag(mut self, tag_offset: usize, tag_len: usize) -> Self {
+        self.tag_offset = tag_offset;
+        self.tag_len = tag_len;
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::alignment`].
+    #[must_use]
+    pub const fn with_alignment(mut self, alignment: usize) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::trailer_size`].
+    #[must_use]
+    pub const fn with_trailer_size(mut self, bytes: usize) -> Self {
+        self.trailer_size = bytes;
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::terminator_tag`].
+    #[must_use]
+    pub const fn with_terminator_tag(mut self, tag: &'static [u8]) -> Self {
+        self.terminator_tag = Some(tag);
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::require_eof_closure`].
+    #[must_use]
+    pub const fn with_require_eof_closure(mut self, require: bool) -> Self {
+        self.require_eof_closure = require;
+        self
+    }
 }
 
 /// Zero-allocation borrowed view of one validated chunk decoded from a [`ChunkStreamSpec`].
@@ -594,11 +661,30 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
             }));
         }
 
+        let after_trailer = match payload_end.checked_add(self.spec.trailer_size) {
+            Some(end) => end,
+            None => {
+                self.finished = true;
+                return Some(Err(LayoutError::Overflow {
+                    what: "chunk_trailer",
+                }));
+            }
+        };
+        if after_trailer > self.data.len() {
+            self.finished = true;
+            return Some(Err(LayoutError::OutOfBounds {
+                index,
+                offset: payload_offset as u64,
+                size: (after_trailer - payload_offset) as u64,
+                data_len: self.data.len() as u64,
+            }));
+        }
+
         let next_pos = if self.spec.alignment == 1 {
-            payload_end
+            after_trailer
         } else {
             let aligned = match align_chunk_end(
-                payload_end,
+                after_trailer,
                 self.spec.start_offset,
                 self.spec.alignment,
                 self.alignment_base,
@@ -613,8 +699,8 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
             };
             if aligned <= self.data.len() {
                 aligned
-            } else if payload_end == self.data.len() {
-                payload_end
+            } else if after_trailer == self.data.len() {
+                after_trailer
             } else {
                 self.finished = true;
                 return Some(Err(LayoutError::OutOfBounds {
@@ -768,6 +854,15 @@ pub fn pack_chunk_stream_with_alignment_base(
 
         out.extend_from_slice(&header_buf);
         out.extend_from_slice(chunk.payload);
+        if spec.trailer_size > 0 {
+            let new_len =
+                out.len()
+                    .checked_add(spec.trailer_size)
+                    .ok_or(LayoutError::Overflow {
+                        what: "chunk_trailer",
+                    })?;
+            out.resize(new_len, policy.pad_byte);
+        }
 
         let needs_align =
             index + 1 < chunks.len() || spec.terminator_tag.is_some() || policy.pad_final_entry;
@@ -897,6 +992,7 @@ mod tests {
             size_field: IntFieldSpec::u32_le(4),
             size_mode: ChunkSizeMode::PayloadOnly,
             alignment: 4,
+            trailer_size: 0,
             terminator_tag: None,
             require_eof_closure: true,
             max_chunks: 16,
@@ -932,6 +1028,7 @@ mod tests {
             size_field: IntFieldSpec::u32_be(8),
             size_mode: ChunkSizeMode::IncludesHeader,
             alignment: 1,
+            trailer_size: 0,
             terminator_tag: Some(b"END_MARK"),
             require_eof_closure: false,
             max_chunks: 16,
@@ -962,6 +1059,7 @@ mod tests {
             size_field: IntFieldSpec::u32_le(0),
             size_mode: ChunkSizeMode::PayloadOnly,
             alignment: 4,
+            trailer_size: 0,
             terminator_tag: None,
             require_eof_closure: true,
             max_chunks: 16,
@@ -1021,6 +1119,7 @@ mod tests {
             size_field: IntFieldSpec::u16_be(4),
             size_mode: ChunkSizeMode::IncludesHeader,
             alignment: 4,
+            trailer_size: 0,
             terminator_tag: Some(b"END!"),
             require_eof_closure: true,
             max_chunks: 16,
@@ -1083,6 +1182,7 @@ mod tests {
             size_field: IntFieldSpec::u32_le(0),
             size_mode: ChunkSizeMode::PayloadOnly,
             alignment: 1,
+            trailer_size: 0,
             terminator_tag: None,
             require_eof_closure: true,
             max_chunks: 8,
@@ -1117,6 +1217,7 @@ mod tests {
             size_field: IntFieldSpec::u32_le(4),
             size_mode: ChunkSizeMode::IncludesHeader,
             alignment: 1,
+            trailer_size: 0,
             terminator_tag: None,
             require_eof_closure: true,
             max_chunks: 8,
@@ -1155,6 +1256,67 @@ mod tests {
         assert_eq!(
             parse_chunk_stream(&one, &capped),
             Err(LayoutError::MaxEntriesExceeded { max: 0 })
+        );
+    }
+
+    #[test]
+    fn chunk_stream_trailer_size_round_trips_and_rejects_truncation_and_overflow() {
+        const SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_trailer_size(4)
+        .with_alignment(8);
+
+        let policy = PackPolicy {
+            data_alignment: 1,
+            pad_byte: 0xCC,
+            record_fill_byte: 0x00,
+            pad_final_entry: false,
+            prefix_fill_byte: 0x00,
+        };
+        let inputs = [
+            ChunkInput {
+                tag: b"CHK0",
+                payload: b"abc", // 8 hdr + 3 payload + 4 trailer = 15 -> aligned to 16
+                header_template: None,
+            },
+            ChunkInput {
+                tag: b"CHK1",
+                payload: b"WXYZ", // 8 hdr + 4 payload + 4 trailer = 16 -> ends at 32
+                header_template: None,
+            },
+        ];
+        let packed = pack_chunk_stream(&SPEC, &policy, &[], &inputs).unwrap();
+        assert_eq!(packed.len(), 32);
+        // Trailer + align pad bytes after first payload are 0xCC
+        assert_eq!(&packed[11..16], &[0xCC; 5]);
+        assert_eq!(&packed[28..32], &[0xCC; 4]);
+
+        let parsed = parse_chunk_stream(&packed, &SPEC).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].header_offset, 0);
+        assert_eq!(parsed[0].payload(&packed), Some(&b"abc"[..]));
+        assert_eq!(parsed[1].header_offset, 16);
+        assert_eq!(parsed[1].payload(&packed), Some(&b"WXYZ"[..]));
+
+        // Truncated trailer on final chunk is rejected
+        assert!(matches!(
+            parse_chunk_stream(&packed[..30], &SPEC),
+            Err(LayoutError::OutOfBounds { index: 1, .. })
+        ));
+
+        // Overflowing trailer_size is rejected
+        let overflow_spec = SPEC.with_trailer_size(usize::MAX);
+        assert_eq!(
+            parse_chunk_stream(&packed, &overflow_spec),
+            Err(LayoutError::Overflow {
+                what: "chunk_trailer"
+            })
         );
     }
 }

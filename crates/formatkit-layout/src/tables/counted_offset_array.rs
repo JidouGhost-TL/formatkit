@@ -30,6 +30,8 @@ use crate::spec::{
 ///     offset_base: OffsetBase::Absolute,
 ///     offset_unit: 1,
 ///     trailing_zero_trim: false,
+///     skip_zero_entries: false,
+///     deduplicate_sorted: false,
 ///     has_eof_sentinel: true,
 ///     require_monotonic: true,
 ///     max_entries: 64,
@@ -66,12 +68,105 @@ pub struct CountedOffsetArraySpec {
     pub offset_unit: u64,
     /// Trim trailing zero raw entries from the array before deriving spans.
     pub trailing_zero_trim: bool,
+    /// Skip interior zero raw entries (or entries `< base` under [`OffsetBase::SubtractBase`])
+    /// instead of only trimming trailing zeros.
+    pub skip_zero_entries: bool,
+    /// Sort and deduplicate unique resolved offsets before deriving `[off[i], off[i + 1])` spans.
+    /// Useful for unsorted or duplicated pointer tables.
+    pub deduplicate_sorted: bool,
     /// When `true`, the final array element is an exclusive end sentinel rather than a member start.
     pub has_eof_sentinel: bool,
-    /// When `true`, resolved offsets must be monotonically non-decreasing.
+    /// When `true` (and `deduplicate_sorted` is `false`), resolved offsets must be monotonically non-decreasing.
     pub require_monotonic: bool,
     /// Maximum number of adjusted offset elements permitted.
     pub max_entries: usize,
+}
+
+impl CountedOffsetArraySpec {
+    /// Construct a [`CountedOffsetArraySpec`] with sensible defaults
+    /// (`count_adjust: 0`, `offset_base: OffsetBase::Absolute`, `offset_unit: 1`,
+    /// `trailing_zero_trim: false`, `skip_zero_entries: false`, `deduplicate_sorted: false`,
+    /// `has_eof_sentinel: false`, `require_monotonic: true`).
+    #[must_use]
+    pub const fn new(
+        array_offset: usize,
+        count: usize,
+        entry_width: IntWidth,
+        endian: Endian,
+        max_entries: usize,
+    ) -> Self {
+        Self {
+            array_offset,
+            count,
+            count_adjust: 0,
+            entry_width,
+            endian,
+            offset_base: OffsetBase::Absolute,
+            offset_unit: 1,
+            trailing_zero_trim: false,
+            skip_zero_entries: false,
+            deduplicate_sorted: false,
+            has_eof_sentinel: false,
+            require_monotonic: true,
+            max_entries,
+        }
+    }
+
+    /// Set [`CountedOffsetArraySpec::count_adjust`].
+    #[must_use]
+    pub const fn with_count_adjust(mut self, count_adjust: i32) -> Self {
+        self.count_adjust = count_adjust;
+        self
+    }
+
+    /// Set [`CountedOffsetArraySpec::offset_base`].
+    #[must_use]
+    pub const fn with_offset_base(mut self, offset_base: OffsetBase) -> Self {
+        self.offset_base = offset_base;
+        self
+    }
+
+    /// Set [`CountedOffsetArraySpec::offset_unit`].
+    #[must_use]
+    pub const fn with_offset_unit(mut self, offset_unit: u64) -> Self {
+        self.offset_unit = offset_unit;
+        self
+    }
+
+    /// Set [`CountedOffsetArraySpec::trailing_zero_trim`].
+    #[must_use]
+    pub const fn with_trailing_zero_trim(mut self, trim: bool) -> Self {
+        self.trailing_zero_trim = trim;
+        self
+    }
+
+    /// Set [`CountedOffsetArraySpec::skip_zero_entries`].
+    #[must_use]
+    pub const fn with_skip_zero_entries(mut self, skip: bool) -> Self {
+        self.skip_zero_entries = skip;
+        self
+    }
+
+    /// Set [`CountedOffsetArraySpec::deduplicate_sorted`].
+    #[must_use]
+    pub const fn with_deduplicate_sorted(mut self, dedup: bool) -> Self {
+        self.deduplicate_sorted = dedup;
+        self
+    }
+
+    /// Set [`CountedOffsetArraySpec::has_eof_sentinel`].
+    #[must_use]
+    pub const fn with_has_eof_sentinel(mut self, has_sentinel: bool) -> Self {
+        self.has_eof_sentinel = has_sentinel;
+        self
+    }
+
+    /// Set [`CountedOffsetArraySpec::require_monotonic`].
+    #[must_use]
+    pub const fn with_require_monotonic(mut self, require: bool) -> Self {
+        self.require_monotonic = require;
+        self
+    }
 }
 
 /// One validated `(offset, size)` span derived from a [`CountedOffsetArraySpec`].
@@ -197,6 +292,7 @@ pub fn parse_counted_offset_array_with_count_metadata(
         return Ok(Vec::new());
     }
 
+    let table_start = spec.array_offset as u64;
     let table_end = array_end as u64;
     let resolve_at = |index: usize| -> Result<u64, LayoutError> {
         let record_offset = spec.array_offset + index * elem_bytes;
@@ -206,7 +302,9 @@ pub fn parse_counted_offset_array_with_count_metadata(
             .ok_or(LayoutError::Overflow {
                 what: "scaled_offset",
             })?;
-        let offset = spec.offset_base.apply(scaled, table_end, record_offset)?;
+        let offset = spec
+            .offset_base
+            .apply(scaled, table_start, table_end, record_offset)?;
         if offset > carrier_len {
             return Err(LayoutError::OutOfBounds {
                 index,
@@ -218,42 +316,141 @@ pub fn parse_counted_offset_array_with_count_metadata(
         Ok(offset)
     };
 
+    let resolve_member_opt = |index: usize| -> Result<Option<u64>, LayoutError> {
+        let record_offset = spec.array_offset + index * elem_bytes;
+        let raw_val = read_int_at(table_data, record_offset, spec.entry_width, spec.endian)?;
+        if spec.skip_zero_entries && raw_val == 0 {
+            return Ok(None);
+        }
+        let scaled = raw_val
+            .checked_mul(spec.offset_unit)
+            .ok_or(LayoutError::Overflow {
+                what: "scaled_offset",
+            })?;
+        if spec.skip_zero_entries {
+            if let OffsetBase::SubtractBase(base) = spec.offset_base {
+                if scaled < base {
+                    return Ok(None);
+                }
+            }
+        }
+        let offset = spec
+            .offset_base
+            .apply(scaled, table_start, table_end, record_offset)?;
+        if offset > carrier_len {
+            return Err(LayoutError::OutOfBounds {
+                index,
+                offset,
+                size: 0,
+                data_len: carrier_len,
+            });
+        }
+        Ok(Some(offset))
+    };
+
     let member_count = if spec.has_eof_sentinel {
         trimmed_count - 1
     } else {
         trimmed_count
     };
 
-    if spec.require_monotonic {
-        // Single-pass, single-allocation path for monotonic offset arrays.
-        let mut spans = Vec::new();
-        spans
-            .try_reserve_exact(member_count)
-            .map_err(|_| LayoutError::AllocationFailed {
-                requested: member_count,
-            })?;
-        let mut prev = resolve_at(0)?;
-        for index in 1..trimmed_count {
-            let current = resolve_at(index)?;
-            if current < prev {
-                return Err(LayoutError::NonMonotonic {
+    if spec.deduplicate_sorted {
+        let terminal = if spec.has_eof_sentinel {
+            resolve_at(trimmed_count - 1)?
+        } else {
+            carrier_len
+        };
+        if member_count == 0 {
+            return Ok(Vec::new());
+        }
+        let mut unique: Vec<u64> = Vec::new();
+        for index in 0..member_count {
+            let Some(offset) = resolve_member_opt(index)? else {
+                continue;
+            };
+            if offset > terminal {
+                return Err(LayoutError::OutOfBounds {
                     index,
-                    previous: prev,
-                    current,
+                    offset,
+                    size: 0,
+                    data_len: terminal,
                 });
             }
-            spans.push(OffsetSpan {
-                index: index - 1,
-                offset: prev,
-                size: current - prev,
-            });
-            prev = current;
+            unique.push(offset);
         }
-        if !spec.has_eof_sentinel {
+        if unique.is_empty() {
+            return Ok(Vec::new());
+        }
+        unique.sort_unstable();
+        unique.dedup();
+
+        let mut spans = Vec::new();
+        spans
+            .try_reserve_exact(unique.len())
+            .map_err(|_| LayoutError::AllocationFailed {
+                requested: unique.len(),
+            })?;
+        for (i, &offset) in unique.iter().enumerate() {
+            let next = unique.get(i + 1).copied().unwrap_or(terminal);
             spans.push(OffsetSpan {
-                index: trimmed_count - 1,
-                offset: prev,
-                size: carrier_len - prev,
+                index: i,
+                offset,
+                size: next - offset,
+            });
+        }
+        Ok(spans)
+    } else if spec.require_monotonic {
+        let terminal = if spec.has_eof_sentinel {
+            Some(resolve_at(trimmed_count - 1)?)
+        } else {
+            None
+        };
+        let mut spans = Vec::new();
+        if !spec.skip_zero_entries {
+            spans
+                .try_reserve_exact(member_count)
+                .map_err(|_| LayoutError::AllocationFailed {
+                    requested: member_count,
+                })?;
+        }
+        let mut prev: Option<(usize, u64)> = None;
+        for index in 0..member_count {
+            let Some(current) = resolve_member_opt(index)? else {
+                continue;
+            };
+            if let Some((prev_idx, prev_off)) = prev {
+                if current < prev_off {
+                    return Err(LayoutError::NonMonotonic {
+                        index,
+                        previous: prev_off,
+                        current,
+                    });
+                }
+                spans.push(OffsetSpan {
+                    index: prev_idx,
+                    offset: prev_off,
+                    size: current - prev_off,
+                });
+            }
+            prev = Some((index, current));
+        }
+        if let Some((last_idx, last_off)) = prev {
+            let end_bound = if let Some(term) = terminal {
+                if term < last_off {
+                    return Err(LayoutError::NonMonotonic {
+                        index: trimmed_count - 1,
+                        previous: last_off,
+                        current: term,
+                    });
+                }
+                term
+            } else {
+                carrier_len
+            };
+            spans.push(OffsetSpan {
+                index: last_idx,
+                offset: last_off,
+                size: end_bound - last_off,
             });
         }
         Ok(spans)
@@ -269,14 +466,18 @@ pub fn parse_counted_offset_array_with_count_metadata(
             return Ok(Vec::new());
         }
 
-        let mut order: Vec<(u64, usize)> = Vec::new();
-        order
-            .try_reserve_exact(member_count)
-            .map_err(|_| LayoutError::AllocationFailed {
-                requested: member_count,
-            })?;
+        let mut order: Vec<(u64, usize, usize)> = Vec::new();
+        if !spec.skip_zero_entries {
+            order
+                .try_reserve_exact(member_count)
+                .map_err(|_| LayoutError::AllocationFailed {
+                    requested: member_count,
+                })?;
+        }
         for index in 0..member_count {
-            let offset = resolve_at(index)?;
+            let Some(offset) = resolve_member_opt(index)? else {
+                continue;
+            };
             if offset > terminal {
                 return Err(LayoutError::OutOfBounds {
                     index,
@@ -285,18 +486,22 @@ pub fn parse_counted_offset_array_with_count_metadata(
                     data_len: terminal,
                 });
             }
-            order.push((offset, index));
+            let out_pos = order.len();
+            order.push((offset, index, out_pos));
+        }
+        if order.is_empty() {
+            return Ok(Vec::new());
         }
         order.sort_unstable();
 
         let mut spans = Vec::new();
         spans
-            .try_reserve_exact(member_count)
+            .try_reserve_exact(order.len())
             .map_err(|_| LayoutError::AllocationFailed {
-                requested: member_count,
+                requested: order.len(),
             })?;
         spans.resize(
-            member_count,
+            order.len(),
             OffsetSpan {
                 index: 0,
                 offset: 0,
@@ -304,9 +509,9 @@ pub fn parse_counted_offset_array_with_count_metadata(
             },
         );
         for pos in 0..order.len() {
-            let (offset, orig_index) = order[pos];
-            let next = order.get(pos + 1).map_or(terminal, |&(off, _)| off);
-            spans[orig_index] = OffsetSpan {
+            let (offset, orig_index, out_pos) = order[pos];
+            let next = order.get(pos + 1).map_or(terminal, |&(off, _, _)| off);
+            spans[out_pos] = OffsetSpan {
                 index: orig_index,
                 offset,
                 size: next - offset,
@@ -368,6 +573,7 @@ pub fn pack_counted_offset_array(
         .array_offset
         .checked_add(array_bytes)
         .ok_or(LayoutError::Overflow { what: "array_end" })?;
+    let table_start = spec.array_offset as u64;
     let table_end = array_end as u64;
 
     let mut offsets: Vec<(usize, u64)> = Vec::new();
@@ -382,6 +588,7 @@ pub fn pack_counted_offset_array(
         let record_offset = spec.array_offset + index * elem_bytes;
         let (offset_u64, raw_offset) = spec.offset_base.align_and_encode(
             cursor,
+            table_start,
             table_end,
             record_offset,
             policy.data_alignment,
@@ -407,6 +614,7 @@ pub fn pack_counted_offset_array(
         };
         let (end_u64, raw_sentinel) = spec.offset_base.align_and_encode(
             cursor,
+            table_start,
             table_end,
             sentinel_record_offset,
             sentinel_align,
@@ -454,19 +662,10 @@ mod tests {
 
     #[test]
     fn parses_u32_le_with_eof_sentinel_and_count_adjust() {
-        const SPEC: CountedOffsetArraySpec = CountedOffsetArraySpec {
-            array_offset: 4,
-            count: 2,
-            count_adjust: 1,
-            entry_width: IntWidth::U32,
-            endian: Endian::Little,
-            offset_base: OffsetBase::Absolute,
-            offset_unit: 1,
-            trailing_zero_trim: false,
-            has_eof_sentinel: true,
-            require_monotonic: true,
-            max_entries: 16,
-        };
+        const SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(4, 2, IntWidth::U32, Endian::Little, 16)
+                .with_count_adjust(1)
+                .with_has_eof_sentinel(true);
         let mut data = Vec::new();
         data.extend_from_slice(&2u32.to_le_bytes());
         data.extend_from_slice(&16u32.to_le_bytes());
@@ -482,19 +681,10 @@ mod tests {
 
     #[test]
     fn parses_u16_be_sector_scaled_with_trailing_zero_trim_and_metadata_700mb() {
-        const SPEC: CountedOffsetArraySpec = CountedOffsetArraySpec {
-            array_offset: 0,
-            count: 4,
-            count_adjust: 0,
-            entry_width: IntWidth::U16,
-            endian: Endian::Big,
-            offset_base: OffsetBase::Absolute,
-            offset_unit: 2048,
-            trailing_zero_trim: true,
-            has_eof_sentinel: false,
-            require_monotonic: true,
-            max_entries: 16,
-        };
+        const SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(0, 4, IntWidth::U16, Endian::Big, 16)
+                .with_offset_unit(2048)
+                .with_trailing_zero_trim(true);
         let mut table_only = Vec::new();
         table_only.extend_from_slice(&1u16.to_be_bytes());
         table_only.extend_from_slice(&2u16.to_be_bytes());
@@ -512,19 +702,10 @@ mod tests {
 
     #[test]
     fn parses_negative_count_adjust_and_table_end_base_with_runtime_count() {
-        const SPEC: CountedOffsetArraySpec = CountedOffsetArraySpec {
-            array_offset: 0,
-            count: 0,
-            count_adjust: -2,
-            entry_width: IntWidth::U32,
-            endian: Endian::Little,
-            offset_base: OffsetBase::TableEnd,
-            offset_unit: 1,
-            trailing_zero_trim: false,
-            has_eof_sentinel: false,
-            require_monotonic: true,
-            max_entries: 16,
-        };
+        const SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(0, 0, IntWidth::U32, Endian::Little, 16)
+                .with_count_adjust(-2)
+                .with_offset_base(OffsetBase::TableEnd);
         let mut data = Vec::new();
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&3u32.to_le_bytes());
@@ -543,19 +724,7 @@ mod tests {
         data.extend_from_slice(&8u32.to_le_bytes());
         data.extend_from_slice(b"BBBBAAAA");
 
-        let strict_spec = CountedOffsetArraySpec {
-            array_offset: 0,
-            count: 2,
-            count_adjust: 0,
-            entry_width: IntWidth::U32,
-            endian: Endian::Little,
-            offset_base: OffsetBase::Absolute,
-            offset_unit: 1,
-            trailing_zero_trim: false,
-            has_eof_sentinel: false,
-            require_monotonic: true,
-            max_entries: 8,
-        };
+        let strict_spec = CountedOffsetArraySpec::new(0, 2, IntWidth::U32, Endian::Little, 8);
         assert_eq!(
             parse_counted_offset_array(&data, &strict_spec),
             Err(LayoutError::NonMonotonic {
@@ -565,10 +734,7 @@ mod tests {
             })
         );
 
-        let relaxed_spec = CountedOffsetArraySpec {
-            require_monotonic: false,
-            ..strict_spec
-        };
+        let relaxed_spec = strict_spec.with_require_monotonic(false);
         let spans = parse_counted_offset_array(&data, &relaxed_spec).unwrap();
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].offset, 12);
@@ -581,19 +747,8 @@ mod tests {
 
     #[test]
     fn rejects_invalid_count_oob_overflow_and_max_entries() {
-        let bad_adjust = CountedOffsetArraySpec {
-            array_offset: 0,
-            count: 1,
-            count_adjust: -2,
-            entry_width: IntWidth::U32,
-            endian: Endian::Little,
-            offset_base: OffsetBase::Absolute,
-            offset_unit: 1,
-            trailing_zero_trim: false,
-            has_eof_sentinel: false,
-            require_monotonic: true,
-            max_entries: 8,
-        };
+        let bad_adjust = CountedOffsetArraySpec::new(0, 1, IntWidth::U32, Endian::Little, 8)
+            .with_count_adjust(-2);
         assert_eq!(
             parse_counted_offset_array(&[0u8; 8], &bad_adjust),
             Err(LayoutError::InvalidCount {
@@ -602,10 +757,7 @@ mod tests {
             })
         );
 
-        let oob_spec = CountedOffsetArraySpec {
-            count_adjust: 0,
-            ..bad_adjust
-        };
+        let oob_spec = bad_adjust.with_count_adjust(0);
         let mut oob = Vec::new();
         oob.extend_from_slice(&99u32.to_le_bytes());
         assert!(matches!(
@@ -613,10 +765,7 @@ mod tests {
             Err(LayoutError::OutOfBounds { index: 0, .. })
         ));
 
-        let ov_spec = CountedOffsetArraySpec {
-            offset_unit: u64::MAX,
-            ..oob_spec
-        };
+        let ov_spec = oob_spec.with_offset_unit(u64::MAX);
         assert_eq!(
             parse_counted_offset_array(&2u32.to_le_bytes(), &ov_spec),
             Err(LayoutError::Overflow {
@@ -637,19 +786,11 @@ mod tests {
     #[test]
     fn pack_counted_offset_array_round_trips_all_widths_sentinels_and_alignment() {
         // 1. U32 LE with EOF sentinel, header_prefix, and TableEnd base
-        const SENTINEL_SPEC: CountedOffsetArraySpec = CountedOffsetArraySpec {
-            array_offset: 4,
-            count: 0,
-            count_adjust: 1,
-            entry_width: IntWidth::U32,
-            endian: Endian::Little,
-            offset_base: OffsetBase::TableEnd,
-            offset_unit: 1,
-            trailing_zero_trim: false,
-            has_eof_sentinel: true,
-            require_monotonic: true,
-            max_entries: 16,
-        };
+        const SENTINEL_SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(4, 0, IntWidth::U32, Endian::Little, 16)
+                .with_count_adjust(1)
+                .with_offset_base(OffsetBase::TableEnd)
+                .with_has_eof_sentinel(true);
         let payloads: &[&[u8]] = &[b"alpha", b"beta!", b""];
         let packed = pack_counted_offset_array(
             &SENTINEL_SPEC,
@@ -665,19 +806,9 @@ mod tests {
         assert_eq!(spans[2].slice(&packed), Some(&b""[..]));
 
         // 2. U24 BE sector-scaled without EOF sentinel
-        const SECTOR_SPEC: CountedOffsetArraySpec = CountedOffsetArraySpec {
-            array_offset: 0,
-            count: 2,
-            count_adjust: 0,
-            entry_width: IntWidth::U24,
-            endian: Endian::Big,
-            offset_base: OffsetBase::Absolute,
-            offset_unit: 2048,
-            trailing_zero_trim: false,
-            has_eof_sentinel: false,
-            require_monotonic: true,
-            max_entries: 16,
-        };
+        const SECTOR_SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(0, 2, IntWidth::U24, Endian::Big, 16)
+                .with_offset_unit(2048);
         let sec_payloads: &[&[u8]] = &[&[0x11; 2048], &[0x22; 100]];
         let sec_packed =
             pack_counted_offset_array(&SECTOR_SPEC, &PackPolicy::TIGHT, &[], sec_payloads).unwrap();
@@ -689,19 +820,8 @@ mod tests {
         assert_eq!(sec_spans[1].size, 100);
 
         // 3. U64 BE with alignment and pad_final_entry
-        const U64_SPEC: CountedOffsetArraySpec = CountedOffsetArraySpec {
-            array_offset: 8,
-            count: 2,
-            count_adjust: 0,
-            entry_width: IntWidth::U64,
-            endian: Endian::Big,
-            offset_base: OffsetBase::Absolute,
-            offset_unit: 1,
-            trailing_zero_trim: false,
-            has_eof_sentinel: false,
-            require_monotonic: true,
-            max_entries: 16,
-        };
+        const U64_SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(8, 2, IntWidth::U64, Endian::Big, 16);
         let policy = PackPolicy {
             data_alignment: 8,
             pad_byte: 0xAA,
@@ -719,19 +839,8 @@ mod tests {
         assert_eq!(u64_spans[1].offset % 8, 0);
 
         // 4. U8 width out-of-range rejection
-        const U8_SPEC: CountedOffsetArraySpec = CountedOffsetArraySpec {
-            array_offset: 0,
-            count: 2,
-            count_adjust: 0,
-            entry_width: IntWidth::U8,
-            endian: Endian::Little,
-            offset_base: OffsetBase::Absolute,
-            offset_unit: 1,
-            trailing_zero_trim: false,
-            has_eof_sentinel: false,
-            require_monotonic: true,
-            max_entries: 16,
-        };
+        const U8_SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(0, 2, IntWidth::U8, Endian::Little, 16);
         let huge = [0u8; 300];
         assert_eq!(
             pack_counted_offset_array(&U8_SPEC, &PackPolicy::TIGHT, &[], &[&huge, b"x"]),
@@ -744,19 +853,11 @@ mod tests {
 
     #[test]
     fn subtract_base_round_trips_and_rejects_underflow() {
-        const BUS_SPEC: CountedOffsetArraySpec = CountedOffsetArraySpec {
-            array_offset: 0,
-            count: 2,
-            count_adjust: 1,
-            entry_width: IntWidth::U32,
-            endian: Endian::Little,
-            offset_base: OffsetBase::SubtractBase(0x0800_0000),
-            offset_unit: 1,
-            trailing_zero_trim: false,
-            has_eof_sentinel: true,
-            require_monotonic: true,
-            max_entries: 16,
-        };
+        const BUS_SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(0, 2, IntWidth::U32, Endian::Little, 16)
+                .with_count_adjust(1)
+                .with_offset_base(OffsetBase::SubtractBase(0x0800_0000))
+                .with_has_eof_sentinel(true);
         let packed =
             pack_counted_offset_array(&BUS_SPEC, &PackPolicy::TIGHT, &[], &[b"ABCD", b"EF"])
                 .unwrap();
@@ -784,5 +885,96 @@ mod tests {
                 what: "offset_subtract_base"
             })
         );
+    }
+
+    #[test]
+    fn skip_zero_entries_deduplicate_sorted_and_table_start_base() {
+        // 1. Interior zeros skipped while preserving physical slot index
+        const SKIP_SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(0, 4, IntWidth::U32, Endian::Little, 16)
+                .with_skip_zero_entries(true);
+        let mut data = Vec::new();
+        data.extend_from_slice(&16u32.to_le_bytes()); // slot 0
+        data.extend_from_slice(&0u32.to_le_bytes()); // slot 1 (skipped)
+        data.extend_from_slice(&20u32.to_le_bytes()); // slot 2
+        data.extend_from_slice(&0u32.to_le_bytes()); // slot 3 (skipped)
+        data.extend_from_slice(b"AAAABBBBBB");
+
+        let spans = parse_counted_offset_array(&data, &SKIP_SPEC).unwrap();
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].index, 0);
+        assert_eq!(spans[0].slice(&data), Some(&b"AAAA"[..]));
+        assert_eq!(spans[1].index, 2);
+        assert_eq!(spans[1].slice(&data), Some(&b"BBBBBB"[..]));
+
+        // 2. skip_zero_entries with SubtractBase skips entries < base
+        const BUS_SKIP: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(0, 3, IntWidth::U32, Endian::Little, 16)
+                .with_offset_base(OffsetBase::SubtractBase(0x8000_0000))
+                .with_skip_zero_entries(true);
+        let mut bus_data = Vec::new();
+        bus_data.extend_from_slice(&0x8000_000Cu32.to_le_bytes());
+        bus_data.extend_from_slice(&0x0000_0000u32.to_le_bytes()); // < base, skipped
+        bus_data.extend_from_slice(&0x8000_0010u32.to_le_bytes());
+        bus_data.extend_from_slice(b"12345678");
+        let bus_spans = parse_counted_offset_array(&bus_data, &BUS_SKIP).unwrap();
+        assert_eq!(bus_spans.len(), 2);
+        assert_eq!(bus_spans[0].index, 0);
+        assert_eq!(bus_spans[0].slice(&bus_data), Some(&b"1234"[..]));
+        assert_eq!(bus_spans[1].index, 2);
+        assert_eq!(bus_spans[1].slice(&bus_data), Some(&b"5678"[..]));
+
+        // 3. deduplicate_sorted handles unsorted + duplicated + interior-zero pointers
+        const DEDUP_SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(0, 5, IntWidth::U32, Endian::Little, 16)
+                .with_skip_zero_entries(true)
+                .with_deduplicate_sorted(true);
+        let mut dup_data = Vec::new();
+        dup_data.extend_from_slice(&24u32.to_le_bytes());
+        dup_data.extend_from_slice(&20u32.to_le_bytes());
+        dup_data.extend_from_slice(&0u32.to_le_bytes());
+        dup_data.extend_from_slice(&24u32.to_le_bytes());
+        dup_data.extend_from_slice(&20u32.to_le_bytes());
+        dup_data.extend_from_slice(b"XXXXYYYYYY");
+        let dedup_spans = parse_counted_offset_array(&dup_data, &DEDUP_SPEC).unwrap();
+        assert_eq!(dedup_spans.len(), 2);
+        assert_eq!(dedup_spans[0].index, 0);
+        assert_eq!(dedup_spans[0].offset, 20);
+        assert_eq!(dedup_spans[0].slice(&dup_data), Some(&b"XXXX"[..]));
+        assert_eq!(dedup_spans[1].index, 1);
+        assert_eq!(dedup_spans[1].offset, 24);
+        assert_eq!(dedup_spans[1].slice(&dup_data), Some(&b"YYYYYY"[..]));
+
+        // 4. OffsetBase::TableStart and OffsetBase::TableEndPlus round-trip
+        const TABLE_START_SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(8, 2, IntWidth::U32, Endian::Little, 16)
+                .with_offset_base(OffsetBase::TableStart);
+        let ts_packed = pack_counted_offset_array(
+            &TABLE_START_SPEC,
+            &PackPolicy::TIGHT,
+            b"HEAD",
+            &[b"hi", b"yo!"],
+        )
+        .unwrap();
+        // Raw offset 0 relative to array_offset=8 is 8 (the 2 u32s)
+        assert_eq!(u32::from_le_bytes(ts_packed[8..12].try_into().unwrap()), 8);
+        let ts_spans = parse_counted_offset_array(&ts_packed, &TABLE_START_SPEC).unwrap();
+        assert_eq!(ts_spans[0].slice(&ts_packed), Some(&b"hi"[..]));
+        assert_eq!(ts_spans[1].slice(&ts_packed), Some(&b"yo!"[..]));
+
+        const TABLE_END_PLUS_SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(4, 2, IntWidth::U32, Endian::Little, 16)
+                .with_offset_base(OffsetBase::TableEndPlus(16));
+        let tep_packed = pack_counted_offset_array(
+            &TABLE_END_PLUS_SPEC,
+            &PackPolicy::TIGHT,
+            b"HDR!",
+            &[b"AA", b"BBB"],
+        )
+        .unwrap();
+        let tep_spans = parse_counted_offset_array(&tep_packed, &TABLE_END_PLUS_SPEC).unwrap();
+        assert_eq!(tep_spans[0].offset, 4 + 8 + 16);
+        assert_eq!(tep_spans[0].slice(&tep_packed), Some(&b"AA"[..]));
+        assert_eq!(tep_spans[1].slice(&tep_packed), Some(&b"BBB"[..]));
     }
 }

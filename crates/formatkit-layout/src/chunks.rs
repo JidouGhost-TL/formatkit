@@ -282,6 +282,11 @@ pub struct ChunkStreamSpec {
     pub trailer_size: usize,
     /// Optional tag that terminates the stream cleanly without being emitted.
     /// Must be `None` when `tag_len == 0`.
+    ///
+    /// Also recognized at EOF when fewer than `header_size` bytes remain,
+    /// provided at least `tag_offset + tag_len` bytes are available and (when
+    /// `require_eof_closure` is `true`) any trailing bytes after the tag are
+    /// zero padding.
     pub terminator_tag: Option<&'static [u8]>,
     /// When `true`, a chunk whose raw `size_field` decodes to `0` terminates the stream cleanly
     /// without being emitted (default `false`).
@@ -639,6 +644,16 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
         let remaining = self.data.len() - self.pos;
         if remaining < self.spec.header_size {
             self.finished = true;
+            if let Some(term) = self.spec.terminator_tag {
+                let tag_end = self.spec.tag_offset + self.spec.tag_len;
+                if remaining >= tag_end
+                    && &self.data[self.pos + self.spec.tag_offset..self.pos + tag_end] == term
+                    && (!self.spec.require_eof_closure
+                        || self.data[self.pos + tag_end..].iter().all(|&b| b == 0))
+                {
+                    return None;
+                }
+            }
             if self.spec.require_eof_closure {
                 return Some(Err(LayoutError::TrailingBytes {
                     offset: self.pos,
@@ -1547,5 +1562,131 @@ mod tests {
             pack_chunk_stream(&UNIT_TERM_SPEC, &PackPolicy::TIGHT, &[], &zero_in),
             Err(LayoutError::InvalidInput { index: 0, .. })
         ));
+    }
+
+    #[test]
+    fn chunk_stream_accepts_short_eof_terminator_and_rejects_mismatched_short_tail() {
+        // 1. header_size: 8 with 4-byte b"****" terminator at EOF
+        const SPEC8: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_terminator_tag(b"****");
+
+        let mut data8 = Vec::new();
+        data8.extend_from_slice(b"CHK0");
+        data8.extend_from_slice(&4u32.to_le_bytes());
+        data8.extend_from_slice(b"DATA");
+        data8.extend_from_slice(b"****");
+
+        let parsed8 = parse_chunk_stream(&data8, &SPEC8).unwrap();
+        assert_eq!(parsed8.len(), 1);
+        assert_eq!(parsed8[0].tag, b"CHK0");
+        assert_eq!(parsed8[0].payload(&data8), Some(&b"DATA"[..]));
+
+        let iter8: Vec<_> = iter_chunk_stream(&data8, &SPEC8)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(iter8.len(), 1);
+        assert_eq!(iter8[0].tag, b"CHK0");
+
+        // 2. header_size: 16 with 4-byte b"DNES" terminator at EOF (exact and zero-padded)
+        const SPEC16: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            16,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_terminator_tag(b"DNES");
+
+        let mut data16 = Vec::new();
+        data16.extend_from_slice(b"BLK0");
+        data16.extend_from_slice(&3u32.to_le_bytes());
+        data16.extend_from_slice(&[0u8; 8]);
+        data16.extend_from_slice(b"abc");
+        data16.extend_from_slice(b"DNES");
+
+        let parsed16 = parse_chunk_stream(&data16, &SPEC16).unwrap();
+        assert_eq!(parsed16.len(), 1);
+        assert_eq!(parsed16[0].tag, b"BLK0");
+        assert_eq!(parsed16[0].payload(&data16), Some(&b"abc"[..]));
+
+        // Zero-padded short terminator (8 bytes < header_size 16)
+        let mut padded16 = data16.clone();
+        padded16.extend_from_slice(&[0u8; 4]);
+        let parsed_padded = parse_chunk_stream(&padded16, &SPEC16).unwrap();
+        assert_eq!(parsed_padded.len(), 1);
+
+        // Non-zero trailing bytes after short terminator are rejected when require_eof_closure is true
+        let mut dirty16 = data16.clone();
+        dirty16.extend_from_slice(b"\xAA\xBB");
+        assert_eq!(
+            parse_chunk_stream(&dirty16, &SPEC16),
+            Err(LayoutError::TrailingBytes {
+                offset: 19,
+                remaining: 6,
+            })
+        );
+        // Accepted when require_eof_closure is false
+        let lax16 = SPEC16.with_require_eof_closure(false);
+        assert_eq!(parse_chunk_stream(&dirty16, &lax16).unwrap().len(), 1);
+
+        // 3. Mismatched short tail is rejected
+        let mut bad_tail = Vec::new();
+        bad_tail.extend_from_slice(b"CHK0");
+        bad_tail.extend_from_slice(&4u32.to_le_bytes());
+        bad_tail.extend_from_slice(b"DATA");
+        bad_tail.extend_from_slice(b"NOPE");
+        assert_eq!(
+            parse_chunk_stream(&bad_tail, &SPEC8),
+            Err(LayoutError::TrailingBytes {
+                offset: 12,
+                remaining: 4,
+            })
+        );
+
+        // Truncated terminator shorter than tag_offset + tag_len is rejected
+        let mut trunc_term = Vec::new();
+        trunc_term.extend_from_slice(b"CHK0");
+        trunc_term.extend_from_slice(&4u32.to_le_bytes());
+        trunc_term.extend_from_slice(b"DATA");
+        trunc_term.extend_from_slice(b"**");
+        assert_eq!(
+            parse_chunk_stream(&trunc_term, &SPEC8),
+            Err(LayoutError::TrailingBytes {
+                offset: 12,
+                remaining: 2,
+            })
+        );
+
+        // 4. Non-zero tag_offset short-EOF terminator
+        const OFFSET_SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            12,
+            IntFieldSpec::u32_le(0),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(4, 4)
+        .with_terminator_tag(b"END!");
+
+        let mut off_data = Vec::new();
+        off_data.extend_from_slice(&2u32.to_le_bytes());
+        off_data.extend_from_slice(b"TAG0");
+        off_data.extend_from_slice(&0u32.to_le_bytes());
+        off_data.extend_from_slice(b"hi");
+        off_data.extend_from_slice(&[0u8; 4]);
+        off_data.extend_from_slice(b"END!");
+        let parsed_off = parse_chunk_stream(&off_data, &OFFSET_SPEC).unwrap();
+        assert_eq!(parsed_off.len(), 1);
+        assert_eq!(parsed_off[0].tag, b"TAG0");
+        assert_eq!(parsed_off[0].payload(&off_data), Some(&b"hi"[..]));
     }
 }

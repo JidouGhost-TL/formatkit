@@ -12,7 +12,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-/// Header-inclusive and payload-sized tagged chunk spans.
+/// Header-inclusive and payload-sized tagged or tagless chunk spans and streams.
 pub mod chunks;
 /// Checked in-place patching and same-size splicing on resident byte slices.
 pub mod edit;
@@ -29,7 +29,7 @@ pub mod offset_graph;
 pub mod ranges;
 /// Fixed-stride record views with checked bounds.
 pub mod records;
-/// Shared declarative field, offset-base, and error types for layout specs.
+/// Shared declarative field, offset-base, pack-policy, and error types for layout specs.
 pub mod spec;
 /// Offset tables, boundary tables, and aligned-size chains.
 pub mod tables;
@@ -37,9 +37,11 @@ pub mod tables;
 pub mod text;
 
 pub use chunks::{
-    iter_chunk_stream, parse_chunk_stream, read_header_inclusive_chunk, read_payload_chunk,
-    ChunkEntry, ChunkSizeMode, ChunkStreamIter, ChunkStreamSpec, InclusiveChunkError,
-    InclusiveChunkSpan, PayloadChunkError, PayloadChunkSpan,
+    iter_chunk_stream, iter_chunk_stream_with_alignment_base, pack_chunk_stream,
+    pack_chunk_stream_with_alignment_base, parse_chunk_stream,
+    parse_chunk_stream_with_alignment_base, read_header_inclusive_chunk, read_payload_chunk,
+    ChunkAlignmentBase, ChunkEntry, ChunkInput, ChunkSizeMode, ChunkStreamIter, ChunkStreamSpec,
+    ChunkView, InclusiveChunkError, InclusiveChunkSpan, PayloadChunkError, PayloadChunkSpan,
 };
 pub use edit::{patch_bytes, patched_bytes, same_size_splice, SameSizeSpliceError};
 pub use field::{
@@ -57,13 +59,19 @@ pub use ranges::{
     ChildRunError, NondecreasingSuccessorRangesError, OrderedExtentError, SuccessorRangesError,
 };
 pub use records::{FixedRecords, RecordOverflow};
-pub use spec::{IntFieldSpec, IntWidth, LayoutError, OffsetBase};
+pub use spec::{IntFieldSpec, IntWidth, LayoutError, OffsetBase, PackPolicy};
 pub use tables::{
-    iter_fixed_record_table, parse_counted_offset_array, parse_fixed_record_table,
-    parse_fixed_record_table_bounded, AlignedSizeChain, AlignedSizeCursor, AlignedSizeError,
-    AlignedSizeExtent, CountedBoundaryError, CountedBoundaryTable, CountedOffsetArraySpec,
-    CountedU16BoundaryError, CountedU16BoundaryTable, DerivedAlignedSizes, FirstWordOffsetError,
-    FirstWordOffsetTable, FixedRecordEntry, FixedRecordTableIter, FixedRecordTableSpec,
+    iter_fixed_record_table, iter_fixed_record_table_counted,
+    iter_fixed_record_table_counted_metadata, iter_fixed_record_table_metadata,
+    pack_counted_offset_array, pack_fixed_record_table, parse_counted_offset_array,
+    parse_counted_offset_array_metadata, parse_counted_offset_array_with_count,
+    parse_counted_offset_array_with_count_metadata, parse_fixed_record_table,
+    parse_fixed_record_table_bounded, parse_fixed_record_table_counted,
+    parse_fixed_record_table_counted_metadata, parse_fixed_record_table_metadata, AlignedSizeChain,
+    AlignedSizeCursor, AlignedSizeError, AlignedSizeExtent, CountedBoundaryError,
+    CountedBoundaryTable, CountedOffsetArraySpec, CountedU16BoundaryError, CountedU16BoundaryTable,
+    DerivedAlignedSizes, FirstWordOffsetError, FirstWordOffsetTable, FixedRecordEntry,
+    FixedRecordInput, FixedRecordTableIter, FixedRecordTableSpec, FixedRecordView,
     FixedStrideOffsetTable, NameEncoding, NameFieldSpec, OffsetLengthRow, OffsetLengthRows,
     OffsetSpan, PositiveSizeError, PositiveSizeExtent, PositiveSizeList, SizeAlignment, SizeMode,
     TableSizeMode, TableTermination, TerminalOffsetError, TerminalOffsetTable,

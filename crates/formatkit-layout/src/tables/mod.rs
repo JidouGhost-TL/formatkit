@@ -17,15 +17,22 @@ pub use aligned_sizes::{
 pub use counted_boundaries::{
     CountedBoundaryError, CountedBoundaryTable, ValidatedCountedBoundaries,
 };
-pub use counted_offset_array::{parse_counted_offset_array, CountedOffsetArraySpec, OffsetSpan};
+pub use counted_offset_array::{
+    pack_counted_offset_array, parse_counted_offset_array, parse_counted_offset_array_metadata,
+    parse_counted_offset_array_with_count, parse_counted_offset_array_with_count_metadata,
+    CountedOffsetArraySpec, OffsetSpan,
+};
 pub use counted_u16_boundaries::{
     CountedU16BoundaryError, CountedU16BoundaryTable, ValidatedCountedU16Boundaries,
 };
 pub use first_word_offsets::{FirstWordOffsetError, FirstWordOffsetTable};
 pub use fixed_record_table::{
-    iter_fixed_record_table, parse_fixed_record_table, parse_fixed_record_table_bounded,
-    FixedRecordEntry, FixedRecordTableIter, FixedRecordTableSpec, NameEncoding, NameFieldSpec,
-    SizeMode, TableTermination,
+    iter_fixed_record_table, iter_fixed_record_table_counted,
+    iter_fixed_record_table_counted_metadata, iter_fixed_record_table_metadata,
+    pack_fixed_record_table, parse_fixed_record_table, parse_fixed_record_table_bounded,
+    parse_fixed_record_table_counted, parse_fixed_record_table_counted_metadata,
+    parse_fixed_record_table_metadata, FixedRecordEntry, FixedRecordInput, FixedRecordTableIter,
+    FixedRecordTableSpec, FixedRecordView, NameEncoding, NameFieldSpec, SizeMode, TableTermination,
 };
 pub use fixed_stride_offset::{FixedStrideOffsetTable, TableSizeMode};
 pub use offset_length::{OffsetLengthRow, OffsetLengthRows};

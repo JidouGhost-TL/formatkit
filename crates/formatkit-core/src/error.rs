@@ -36,7 +36,7 @@ impl std::fmt::Display for ErrorContext {
     }
 }
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum Error {
     /// A typed leaf error with one additional location frame.
     #[error("{frame}: {source}")]

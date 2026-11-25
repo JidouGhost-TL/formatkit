@@ -140,6 +140,7 @@ const HASH_BITS: usize = 14;
 const HASH_SIZE: usize = 1 << HASH_BITS;
 const HASH_MASK: usize = HASH_SIZE - 1;
 const HASH_NONE: u32 = u32::MAX;
+const MAX_HASH_WINDOW: usize = 1 << 20;
 
 #[inline]
 fn hash3(b0: u8, b1: u8, b2: u8) -> usize {
@@ -164,15 +165,33 @@ pub struct HashMatcher {
 
 impl HashMatcher {
     /// Create a match finder supporting back-reference distances up to `max_dist`.
+    ///
+    /// For distances exceeding the internal hash-window ceiling (`1 << 20`),
+    /// queries fall back cleanly to [`find_longest_match`] without overflowing
+    /// or over-allocating.
     #[must_use]
     pub fn new(max_dist: usize) -> Self {
-        let window_size = max_dist.max(1).next_power_of_two();
-        Self {
-            head: vec![HASH_NONE; HASH_SIZE],
-            prev: vec![HASH_NONE; window_size],
-            window_mask: window_size - 1,
-            max_dist,
-            inserted_up_to: 0,
+        let clamped = max_dist.max(1);
+        let window_size = if clamped <= MAX_HASH_WINDOW {
+            clamped.checked_next_power_of_two()
+        } else {
+            None
+        };
+        match window_size {
+            Some(size) => Self {
+                head: vec![HASH_NONE; HASH_SIZE],
+                prev: vec![HASH_NONE; size],
+                window_mask: size - 1,
+                max_dist,
+                inserted_up_to: 0,
+            },
+            None => Self {
+                head: Vec::new(),
+                prev: Vec::new(),
+                window_mask: 0,
+                max_dist,
+                inserted_up_to: 0,
+            },
         }
     }
 
@@ -186,7 +205,7 @@ impl HashMatcher {
     /// Index a single position `pos` into the 3-byte hash chain.
     #[inline]
     pub fn insert(&mut self, data: &[u8], pos: usize) {
-        if pos + 3 <= data.len() && pos < HASH_NONE as usize {
+        if !self.prev.is_empty() && pos + 3 <= data.len() && pos < HASH_NONE as usize {
             let h = hash3(data[pos], data[pos + 1], data[pos + 2]);
             let slot = pos & self.window_mask;
             self.prev[slot] = self.head[h];
@@ -198,6 +217,9 @@ impl HashMatcher {
     /// see every preceding 3-byte sequence in the window.
     #[inline]
     pub fn advance_to(&mut self, data: &[u8], pos: usize) {
+        if self.prev.is_empty() {
+            return;
+        }
         let target = pos.min(data.len().saturating_sub(2));
         while self.inserted_up_to < target {
             let p = self.inserted_up_to;
@@ -231,7 +253,7 @@ impl HashMatcher {
         {
             return None;
         }
-        if min_len < 3 || data.len() >= HASH_NONE as usize {
+        if self.prev.is_empty() || min_len < 3 || data.len() >= HASH_NONE as usize {
             return find_longest_match(data, pos, min_dist, self.max_dist, min_len, max_len);
         }
         let avail = data.len() - pos;
@@ -550,5 +572,12 @@ mod tests {
         let mut out = b"A".to_vec();
         append_match(&mut out, b"", 1, 0, 1).unwrap();
         assert_eq!(out, b"A");
+    }
+
+    #[test]
+    fn hash_matcher_handles_huge_max_dist_without_overflow_or_panic() {
+        let mut matcher = HashMatcher::new(usize::MAX);
+        let data = b"abcdefabcdef";
+        assert_eq!(matcher.find_longest_match(data, 6, 1, 3, 18), Some((6, 6)));
     }
 }

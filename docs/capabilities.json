@@ -305,10 +305,10 @@
     {
       "crate": "formatkit-layout",
       "module": "chunks",
-      "path": "formatkit_layout::chunks::{read_payload_chunk, read_header_inclusive_chunk, parse_chunk_stream, iter_chunk_stream, ChunkStreamSpec, ChunkSizeMode, ChunkEntry, PayloadChunkSpan, InclusiveChunkSpan}",
-      "summary": "Checked parsing for single payload-length/header-inclusive chunks and declarative sequential tagged chunk streams with alignment, terminator tags, and zero-advance protection.",
-      "domain_aliases": ["chunk", "chunk stream", "TLV", "tag-length-value", "framed chunk", "4CC stream"],
-      "use_when": "Iterating length-framed binary chunks whose size excludes or includes a configurable-size chunk header, with optional alignment and terminator tags.",
+      "path": "formatkit_layout::chunks::{read_payload_chunk, read_header_inclusive_chunk, parse_chunk_stream, parse_chunk_stream_with_alignment_base, iter_chunk_stream, iter_chunk_stream_with_alignment_base, pack_chunk_stream, pack_chunk_stream_with_alignment_base, ChunkStreamSpec, ChunkSizeMode, ChunkAlignmentBase, ChunkEntry, ChunkView, ChunkInput, PayloadChunkSpan, InclusiveChunkSpan}",
+      "summary": "Checked parsing, zero-allocation iteration, and symmetric packing for single payload-length/header-inclusive chunks and declarative sequential tagged or tagless chunk streams with configurable alignment base, terminator tags, and zero-advance protection.",
+      "domain_aliases": ["chunk", "chunk stream", "TLV", "tag-length-value", "framed chunk", "4CC stream", "chunk writer", "tagless chunk"],
+      "use_when": "Iterating or packing length-framed binary chunks whose size excludes or includes a configurable-size chunk header, with optional tags, alignment, header templates, and terminator tags.",
       "avoid_when": "Parsing standard IFF/RIFF FORM containers (use formatkit_layout::iff).",
       "feature_gate": null
     },
@@ -375,20 +375,20 @@
     {
       "crate": "formatkit-layout",
       "module": "tables::counted_offset_array",
-      "path": "formatkit_layout::tables::{CountedOffsetArraySpec, OffsetSpan, parse_counted_offset_array}",
-      "summary": "Const-constructible declarative parser for counted u16/u24/u32 LE/BE offset arrays with signed count adjustment, offset base/unit scaling, optional trailing-zero trimming, optional EOF sentinel, and monotonicity checks.",
-      "domain_aliases": ["counted offset array", "offset table", "boundary array", "sentinel offset table", "sector offset array"],
-      "use_when": "Decoding counted offset/boundary arrays across varying integer widths, endianness, count adjustments, base offsets, or trailing zero padding.",
+      "path": "formatkit_layout::tables::{CountedOffsetArraySpec, OffsetSpan, parse_counted_offset_array, parse_counted_offset_array_with_count, parse_counted_offset_array_metadata, parse_counted_offset_array_with_count_metadata, pack_counted_offset_array}",
+      "summary": "Const-constructible declarative single-pass parser, metadata-only carrier validator, and symmetric writer for counted u8/u16/u24/u32/u64 LE/BE offset arrays with signed count adjustment, offset base/unit scaling, optional trailing-zero trimming, optional EOF sentinel, and monotonicity checks.",
+      "domain_aliases": ["counted offset array", "offset table", "boundary array", "sentinel offset table", "sector offset array", "offset array writer"],
+      "use_when": "Decoding, metadata-validating, or packing counted offset/boundary arrays across varying integer widths, endianness, count adjustments, base offsets, or trailing zero padding.",
       "avoid_when": "A specialized table validator with fixed u32 alignment and directory-gap inspection is required (use CountedBoundaryTable).",
       "feature_gate": null
     },
     {
       "crate": "formatkit-layout",
       "module": "tables::fixed_record_table",
-      "path": "formatkit_layout::tables::{FixedRecordTableSpec, FixedRecordEntry, FixedRecordTableIter, NameFieldSpec, NameEncoding, SizeMode, TableTermination, parse_fixed_record_table, parse_fixed_record_table_bounded, iter_fixed_record_table}",
-      "summary": "Const-constructible declarative parser and zero-allocation iterator for fixed-stride record tables with optional embedded names, u16/u24/u32 LE/BE offset and size fields, offset base/unit scaling, size derivation modes, and multiple termination rules.",
-      "domain_aliases": ["fixed-stride record table", "directory table", "named archive table", "sector directory", "declarative table"],
-      "use_when": "Parsing fixed-stride directory tables with embedded names, u16/u24/u32 fields, sector units, or counted/zero-row/first-offset/EOF termination.",
+      "path": "formatkit_layout::tables::{FixedRecordTableSpec, FixedRecordEntry, FixedRecordView, FixedRecordInput, FixedRecordTableIter, NameFieldSpec, NameEncoding, SizeMode, TableTermination, parse_fixed_record_table, parse_fixed_record_table_bounded, parse_fixed_record_table_counted, parse_fixed_record_table_metadata, parse_fixed_record_table_counted_metadata, iter_fixed_record_table, iter_fixed_record_table_counted, iter_fixed_record_table_metadata, iter_fixed_record_table_counted_metadata, pack_fixed_record_table}",
+      "summary": "Const-constructible declarative parser, zero-allocation borrowed iterator, metadata-only carrier validator, and symmetric writer for fixed-stride record tables with optional embedded names, u8/u16/u24/u32/u64 LE/BE offset and size fields, offset base/unit scaling, size derivation modes, and multiple termination rules.",
+      "domain_aliases": ["fixed-stride record table", "directory table", "named archive table", "sector directory", "declarative table", "table writer"],
+      "use_when": "Parsing, iterating without allocation, metadata-validating, or packing fixed-stride directory tables with embedded names, u8/u16/u24/u32/u64 fields, sector units, record templates, or counted/zero-row/first-offset/EOF termination.",
       "avoid_when": "Records have variable lengths (use formatkit_core::Reader) or map directly to NamespaceEntry via FixedStrideOffsetTable.",
       "feature_gate": null
     },

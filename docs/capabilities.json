@@ -305,10 +305,10 @@
     {
       "crate": "formatkit-layout",
       "module": "chunks",
-      "path": "formatkit_layout::chunks::{read_payload_chunk, read_header_inclusive_chunk, PayloadChunkSpan, InclusiveChunkSpan}",
-      "summary": "Checked parsing for generic payload-length and header-inclusive binary chunk framing.",
-      "domain_aliases": ["chunk", "TLV", "tag-length-value", "framed chunk"],
-      "use_when": "Iterating length-framed binary chunks whose size excludes or includes the chunk header.",
+      "path": "formatkit_layout::chunks::{read_payload_chunk, read_header_inclusive_chunk, parse_chunk_stream, iter_chunk_stream, ChunkStreamSpec, ChunkSizeMode, ChunkEntry, PayloadChunkSpan, InclusiveChunkSpan}",
+      "summary": "Checked parsing for single payload-length/header-inclusive chunks and declarative sequential tagged chunk streams with alignment, terminator tags, and zero-advance protection.",
+      "domain_aliases": ["chunk", "chunk stream", "TLV", "tag-length-value", "framed chunk", "4CC stream"],
+      "use_when": "Iterating length-framed binary chunks whose size excludes or includes a configurable-size chunk header, with optional alignment and terminator tags.",
       "avoid_when": "Parsing standard IFF/RIFF FORM containers (use formatkit_layout::iff).",
       "feature_gate": null
     },
@@ -370,6 +370,26 @@
       "domain_aliases": ["first-word offset table", "self-delimiting offset table", "headerless offset table"],
       "use_when": "Table length is implied by its first u32 offset word and all subsequent offsets are strictly increasing.",
       "avoid_when": "A terminal EOF sentinel word is present and empty ranges are allowed (use TerminalOffsetTable).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "tables::counted_offset_array",
+      "path": "formatkit_layout::tables::{CountedOffsetArraySpec, OffsetSpan, parse_counted_offset_array}",
+      "summary": "Const-constructible declarative parser for counted u16/u24/u32 LE/BE offset arrays with signed count adjustment, offset base/unit scaling, optional trailing-zero trimming, optional EOF sentinel, and monotonicity checks.",
+      "domain_aliases": ["counted offset array", "offset table", "boundary array", "sentinel offset table", "sector offset array"],
+      "use_when": "Decoding counted offset/boundary arrays across varying integer widths, endianness, count adjustments, base offsets, or trailing zero padding.",
+      "avoid_when": "A specialized table validator with fixed u32 alignment and directory-gap inspection is required (use CountedBoundaryTable).",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "tables::fixed_record_table",
+      "path": "formatkit_layout::tables::{FixedRecordTableSpec, FixedRecordEntry, FixedRecordTableIter, NameFieldSpec, NameEncoding, SizeMode, TableTermination, parse_fixed_record_table, parse_fixed_record_table_bounded, iter_fixed_record_table}",
+      "summary": "Const-constructible declarative parser and zero-allocation iterator for fixed-stride record tables with optional embedded names, u16/u24/u32 LE/BE offset and size fields, offset base/unit scaling, size derivation modes, and multiple termination rules.",
+      "domain_aliases": ["fixed-stride record table", "directory table", "named archive table", "sector directory", "declarative table"],
+      "use_when": "Parsing fixed-stride directory tables with embedded names, u16/u24/u32 fields, sector units, or counted/zero-row/first-offset/EOF termination.",
+      "avoid_when": "Records have variable lengths (use formatkit_core::Reader) or map directly to NamespaceEntry via FixedStrideOffsetTable.",
       "feature_gate": null
     },
     {

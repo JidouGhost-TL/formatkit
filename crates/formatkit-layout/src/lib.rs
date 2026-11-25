@@ -29,14 +29,17 @@ pub mod offset_graph;
 pub mod ranges;
 /// Fixed-stride record views with checked bounds.
 pub mod records;
+/// Shared declarative field, offset-base, and error types for layout specs.
+pub mod spec;
 /// Offset tables, boundary tables, and aligned-size chains.
 pub mod tables;
 /// Fixed-width byte strings, hex formatting, and compiled multi-byte charmaps.
 pub mod text;
 
 pub use chunks::{
-    read_header_inclusive_chunk, read_payload_chunk, InclusiveChunkError, InclusiveChunkSpan,
-    PayloadChunkError, PayloadChunkSpan,
+    iter_chunk_stream, parse_chunk_stream, read_header_inclusive_chunk, read_payload_chunk,
+    ChunkEntry, ChunkSizeMode, ChunkStreamIter, ChunkStreamSpec, InclusiveChunkError,
+    InclusiveChunkSpan, PayloadChunkError, PayloadChunkSpan,
 };
 pub use edit::{patch_bytes, patched_bytes, same_size_splice, SameSizeSpliceError};
 pub use field::{
@@ -54,13 +57,18 @@ pub use ranges::{
     ChildRunError, NondecreasingSuccessorRangesError, OrderedExtentError, SuccessorRangesError,
 };
 pub use records::{FixedRecords, RecordOverflow};
+pub use spec::{IntFieldSpec, IntWidth, LayoutError, OffsetBase};
 pub use tables::{
-    AlignedSizeChain, AlignedSizeCursor, AlignedSizeError, AlignedSizeExtent, CountedBoundaryError,
-    CountedBoundaryTable, CountedU16BoundaryError, CountedU16BoundaryTable, DerivedAlignedSizes,
-    FirstWordOffsetError, FirstWordOffsetTable, FixedStrideOffsetTable, OffsetLengthRow,
-    OffsetLengthRows, PositiveSizeError, PositiveSizeExtent, PositiveSizeList, SizeAlignment,
-    TableSizeMode, TerminalOffsetError, TerminalOffsetTable, ValidatedCountedBoundaries,
-    ValidatedCountedU16Boundaries, ValidatedPositiveSizes, ValidatedTerminalOffsets,
+    iter_fixed_record_table, parse_counted_offset_array, parse_fixed_record_table,
+    parse_fixed_record_table_bounded, AlignedSizeChain, AlignedSizeCursor, AlignedSizeError,
+    AlignedSizeExtent, CountedBoundaryError, CountedBoundaryTable, CountedOffsetArraySpec,
+    CountedU16BoundaryError, CountedU16BoundaryTable, DerivedAlignedSizes, FirstWordOffsetError,
+    FirstWordOffsetTable, FixedRecordEntry, FixedRecordTableIter, FixedRecordTableSpec,
+    FixedStrideOffsetTable, NameEncoding, NameFieldSpec, OffsetLengthRow, OffsetLengthRows,
+    OffsetSpan, PositiveSizeError, PositiveSizeExtent, PositiveSizeList, SizeAlignment, SizeMode,
+    TableSizeMode, TableTermination, TerminalOffsetError, TerminalOffsetTable,
+    ValidatedCountedBoundaries, ValidatedCountedU16Boundaries, ValidatedPositiveSizes,
+    ValidatedTerminalOffsets,
 };
 pub use text::{
     format_hex_bytes, parse_hex_bytes, Charmap, CharmapControl, CharmapDecoded, CharmapEntry,

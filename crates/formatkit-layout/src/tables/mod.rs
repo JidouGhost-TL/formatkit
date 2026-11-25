@@ -29,10 +29,12 @@ pub use first_word_offsets::{FirstWordOffsetError, FirstWordOffsetTable};
 pub use fixed_record_table::{
     iter_fixed_record_table, iter_fixed_record_table_counted,
     iter_fixed_record_table_counted_metadata, iter_fixed_record_table_metadata,
-    pack_fixed_record_table, parse_fixed_record_table, parse_fixed_record_table_bounded,
-    parse_fixed_record_table_counted, parse_fixed_record_table_counted_metadata,
-    parse_fixed_record_table_metadata, FixedRecordEntry, FixedRecordInput, FixedRecordTableIter,
-    FixedRecordTableSpec, FixedRecordView, NameEncoding, NameFieldSpec, SizeMode, TableTermination,
+    iter_fixed_record_table_with_name_pool, pack_fixed_record_table, parse_fixed_record_table,
+    parse_fixed_record_table_bounded, parse_fixed_record_table_counted,
+    parse_fixed_record_table_counted_metadata, parse_fixed_record_table_metadata,
+    parse_fixed_record_table_with_name_pool, FixedRecordEntry, FixedRecordInput,
+    FixedRecordTableIter, FixedRecordTableSpec, FixedRecordView, NameEncoding, NameFieldSpec,
+    NamePoolSpec, SizeMode, TableTermination,
 };
 pub use fixed_stride_offset::{FixedStrideOffsetTable, TableSizeMode};
 pub use offset_length::{OffsetLengthRow, OffsetLengthRows};

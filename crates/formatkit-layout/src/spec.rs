@@ -32,6 +32,12 @@ impl IntWidth {
         }
     }
 
+    /// Return the encoded bit length of this integer width.
+    #[must_use]
+    pub const fn bit_len(self) -> u8 {
+        (self.byte_len() * 8) as u8
+    }
+
     /// Return the maximum unsigned value representable by this integer width.
     #[must_use]
     pub const fn max_value(self) -> u64 {
@@ -45,7 +51,8 @@ impl IntWidth {
     }
 }
 
-/// Declarative descriptor for an unsigned integer field inside a record or header.
+/// Declarative descriptor for an unsigned integer field (optionally bit-shifted
+/// and bit-masked) inside a record or header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IntFieldSpec {
     /// Byte offset of the field relative to the start of its record or header.
@@ -54,17 +61,36 @@ pub struct IntFieldSpec {
     pub width: IntWidth,
     /// Byte order of the encoded integer.
     pub endian: Endian,
+    /// Right-shift applied to the decoded integer before masking (default `0`).
+    pub bit_shift: u8,
+    /// Bit mask applied after shifting (default `u64::MAX`, meaning unmasked).
+    pub bit_mask: u64,
 }
 
 impl IntFieldSpec {
-    /// Construct a new integer field descriptor.
+    /// Construct a new unmasked integer field descriptor.
     #[must_use]
     pub const fn new(offset: usize, width: IntWidth, endian: Endian) -> Self {
         Self {
             offset,
             width,
             endian,
+            bit_shift: 0,
+            bit_mask: u64::MAX,
         }
+    }
+
+    /// Return a copy of this field descriptor with a bit-field right-shift and mask.
+    ///
+    /// Reading computes `(raw >> shift) & mask`. Writing validates that the value
+    /// fits within both `mask` and the remaining bits of [`IntFieldSpec::width`]
+    /// above `shift`, then performs a read-modify-write so unmasked bits in the
+    /// underlying word are preserved.
+    #[must_use]
+    pub const fn masked(mut self, shift: u8, mask: u64) -> Self {
+        self.bit_shift = shift;
+        self.bit_mask = mask;
+        self
     }
 
     /// Construct a single-byte `u8` field descriptor at `offset`.
@@ -127,15 +153,57 @@ impl IntFieldSpec {
         self.offset.checked_add(self.width.byte_len())
     }
 
-    /// Decode this unsigned integer field from `bytes`.
-    pub fn read(self, bytes: &[u8]) -> Result<u64, LayoutError> {
-        read_int_at(bytes, self.offset, self.width, self.endian)
+    #[inline]
+    const fn is_masked(self) -> bool {
+        self.bit_shift != 0 || self.bit_mask != u64::MAX
     }
 
-    /// Encode `value` into `bytes` at this field's offset, validating that
-    /// `value` fits in [`IntFieldSpec::width`].
+    pub(crate) fn validate(self) -> Result<(), LayoutError> {
+        if self.bit_shift >= self.width.bit_len() {
+            return Err(LayoutError::InvalidSpec {
+                field: "bit_shift",
+                reason: "must be less than integer bit width",
+            });
+        }
+        if self.bit_mask == 0 {
+            return Err(LayoutError::InvalidSpec {
+                field: "bit_mask",
+                reason: "must be nonzero",
+            });
+        }
+        Ok(())
+    }
+
+    /// Decode this unsigned integer field from `bytes`, applying any configured
+    /// [`IntFieldSpec::bit_shift`] and [`IntFieldSpec::bit_mask`].
+    pub fn read(self, bytes: &[u8]) -> Result<u64, LayoutError> {
+        self.validate()?;
+        let raw = read_int_at(bytes, self.offset, self.width, self.endian)?;
+        Ok((raw >> self.bit_shift) & self.bit_mask)
+    }
+
+    /// Encode `value` into `bytes` at this field's offset.
+    ///
+    /// Validates that `value` fits in [`IntFieldSpec::width`] and [`IntFieldSpec::bit_mask`]
+    /// at [`IntFieldSpec::bit_shift`]. When masked or shifted, performs a read-modify-write
+    /// so unmasked bits already present in `bytes` are preserved.
     pub fn write(self, bytes: &mut [u8], value: u64) -> Result<(), LayoutError> {
-        write_int_at(bytes, self.offset, self.width, self.endian, value)
+        self.validate()?;
+        if !self.is_masked() {
+            return write_int_at(bytes, self.offset, self.width, self.endian, value);
+        }
+        let max_in_width = self.width.max_value() >> self.bit_shift;
+        let effective_max = self.bit_mask.min(max_in_width);
+        if value > effective_max || (value & !self.bit_mask) != 0 {
+            return Err(LayoutError::ValueOutOfRange {
+                value,
+                max: effective_max,
+            });
+        }
+        let existing = read_int_at(bytes, self.offset, self.width, self.endian)?;
+        let field_mask = (self.bit_mask & max_in_width) << self.bit_shift;
+        let merged = (existing & !field_mask) | ((value & self.bit_mask) << self.bit_shift);
+        write_int_at(bytes, self.offset, self.width, self.endian, merged)
     }
 }
 
@@ -243,7 +311,7 @@ pub(crate) fn write_int_at(
     Ok(())
 }
 
-/// Base coordinate added to scaled offsets in declarative table and array specs.
+/// Base coordinate applied to scaled offsets in declarative table and array specs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OffsetBase {
     /// Offsets are absolute from byte 0 of the carrier.
@@ -254,18 +322,129 @@ pub enum OffsetBase {
     Fixed(u64),
     /// Offsets are relative to the start of the record or array entry containing them.
     RecordStart,
+    /// Offsets are bus/memory addresses relocated above a fixed base address;
+    /// parsing subtracts this base (`checked_sub`), and packing adds it (`checked_add`).
+    SubtractBase(u64),
 }
 
 impl OffsetBase {
-    /// Resolve the base byte offset for a record at `record_offset` inside a
-    /// table ending at `table_end`.
-    pub(crate) fn resolve(self, table_end: u64, record_offset: usize) -> u64 {
+    /// Apply this base coordinate to a scaled offset value.
+    pub(crate) fn apply(
+        self,
+        scaled: u64,
+        table_end: u64,
+        record_offset: usize,
+    ) -> Result<u64, LayoutError> {
         match self {
-            Self::Absolute => 0,
-            Self::TableEnd => table_end,
-            Self::Fixed(base) => base,
-            Self::RecordStart => record_offset as u64,
+            Self::Absolute => Ok(scaled),
+            Self::TableEnd => table_end
+                .checked_add(scaled)
+                .ok_or(LayoutError::Overflow { what: "offset" }),
+            Self::Fixed(base) => base
+                .checked_add(scaled)
+                .ok_or(LayoutError::Overflow { what: "offset" }),
+            Self::RecordStart => (record_offset as u64)
+                .checked_add(scaled)
+                .ok_or(LayoutError::Overflow { what: "offset" }),
+            Self::SubtractBase(base) => scaled.checked_sub(base).ok_or(LayoutError::Overflow {
+                what: "offset_subtract_base",
+            }),
         }
+    }
+
+    /// Encode an exact physical byte offset into a raw unscaled field value.
+    pub(crate) fn encode_exact(
+        self,
+        physical_offset: u64,
+        table_end: u64,
+        record_offset: usize,
+        offset_unit: u64,
+        index: usize,
+        reason: &'static str,
+    ) -> Result<u64, LayoutError> {
+        let scaled = match self {
+            Self::Absolute => physical_offset,
+            Self::TableEnd => physical_offset
+                .checked_sub(table_end)
+                .ok_or(LayoutError::InvalidInput { index, reason })?,
+            Self::Fixed(base) => physical_offset
+                .checked_sub(base)
+                .ok_or(LayoutError::InvalidInput { index, reason })?,
+            Self::RecordStart => physical_offset
+                .checked_sub(record_offset as u64)
+                .ok_or(LayoutError::InvalidInput { index, reason })?,
+            Self::SubtractBase(base) => {
+                physical_offset
+                    .checked_add(base)
+                    .ok_or(LayoutError::Overflow {
+                        what: "offset_add_base",
+                    })?
+            }
+        };
+        if !scaled.is_multiple_of(offset_unit) {
+            return Err(LayoutError::InvalidInput { index, reason });
+        }
+        Ok(scaled / offset_unit)
+    }
+
+    /// Align `cursor` upward to satisfy both `data_alignment` and encodability
+    /// under this base and `offset_unit`, returning `(physical_offset, raw_offset)`.
+    pub(crate) fn align_and_encode(
+        self,
+        cursor: u64,
+        table_end: u64,
+        record_offset: usize,
+        data_alignment: usize,
+        offset_unit: u64,
+    ) -> Result<(u64, u64), LayoutError> {
+        match self {
+            Self::Absolute | Self::TableEnd | Self::Fixed(_) | Self::RecordStart => {
+                let base = match self {
+                    Self::Absolute => 0,
+                    Self::TableEnd => table_end,
+                    Self::Fixed(b) => b,
+                    Self::RecordStart => record_offset as u64,
+                    Self::SubtractBase(_) => unreachable!(),
+                };
+                let pos = align_payload_offset(cursor, base, data_alignment, offset_unit)?;
+                Ok((pos, (pos - base) / offset_unit))
+            }
+            Self::SubtractBase(sub) => {
+                let mut pos = align_payload_offset(cursor, 0, data_alignment, 1)?;
+                let mut scaled = pos.checked_add(sub).ok_or(LayoutError::Overflow {
+                    what: "offset_add_base",
+                })?;
+                if offset_unit > 1 {
+                    let rem = scaled % offset_unit;
+                    if rem != 0 {
+                        let bump = offset_unit - rem;
+                        pos = pos.checked_add(bump).ok_or(LayoutError::Overflow {
+                            what: "offset_unit_alignment",
+                        })?;
+                        scaled = scaled.checked_add(bump).ok_or(LayoutError::Overflow {
+                            what: "offset_add_base",
+                        })?;
+                    }
+                }
+                Ok((pos, scaled / offset_unit))
+            }
+        }
+    }
+}
+
+/// Round `value` upward to the next multiple of `align` (which must be `>= 1`).
+pub(crate) fn checked_align_up_multiple_u64(value: u64, align: u64) -> Option<u64> {
+    if align == 0 {
+        return None;
+    }
+    if align == 1 {
+        return Some(value);
+    }
+    let rem = value % align;
+    if rem == 0 {
+        Some(value)
+    } else {
+        value.checked_add(align - rem)
     }
 }
 
@@ -629,6 +808,82 @@ mod tests {
             IntFieldSpec::u64_be(8).read(&buf).unwrap(),
             0x0123_4567_89AB_CDEF
         );
+    }
+
+    #[test]
+    fn int_field_spec_masked_read_modify_write_preserves_unmasked_bits() {
+        // High 4-bit flags + 28-bit size in one u32le
+        let size_field = IntFieldSpec::u32_le(0).masked(0, 0x0FFF_FFFF);
+        let flag_field = IntFieldSpec::u32_le(0).masked(28, 0x0F);
+
+        let mut word = 0xA000_0000u32.to_le_bytes();
+        size_field.write(&mut word, 0x0123_4567).unwrap();
+        assert_eq!(u32::from_le_bytes(word), 0xA123_4567);
+        assert_eq!(size_field.read(&word).unwrap(), 0x0123_4567);
+        assert_eq!(flag_field.read(&word).unwrap(), 0x0A);
+
+        // Update flags without clobbering size
+        flag_field.write(&mut word, 0x05).unwrap();
+        assert_eq!(u32::from_le_bytes(word), 0x5123_4567);
+        assert_eq!(size_field.read(&word).unwrap(), 0x0123_4567);
+        assert_eq!(flag_field.read(&word).unwrap(), 0x05);
+
+        // Packed 20-bit offset + 12-bit sector count in one u32le
+        let off_field = IntFieldSpec::u32_le(0).masked(0, 0x000F_FFFF);
+        let cnt_field = IntFieldSpec::u32_le(0).masked(20, 0x0FFF);
+        let mut packed = [0u8; 4];
+        off_field.write(&mut packed, 0x000A_BCDE).unwrap();
+        cnt_field.write(&mut packed, 0x0321).unwrap();
+        assert_eq!(off_field.read(&packed).unwrap(), 0x000A_BCDE);
+        assert_eq!(cnt_field.read(&packed).unwrap(), 0x0321);
+
+        // Reject values exceeding bit_mask or width
+        assert_eq!(
+            size_field.write(&mut word, 0x1000_0000),
+            Err(LayoutError::ValueOutOfRange {
+                value: 0x1000_0000,
+                max: 0x0FFF_FFFF,
+            })
+        );
+        assert_eq!(
+            cnt_field.write(&mut packed, 0x1000),
+            Err(LayoutError::ValueOutOfRange {
+                value: 0x1000,
+                max: 0x0FFF,
+            })
+        );
+
+        // Reject invalid shift or zero mask
+        assert!(matches!(
+            IntFieldSpec::u32_le(0).masked(32, 1).read(&packed),
+            Err(LayoutError::InvalidSpec {
+                field: "bit_shift",
+                ..
+            })
+        ));
+        assert!(matches!(
+            IntFieldSpec::u32_le(0).masked(0, 0).read(&packed),
+            Err(LayoutError::InvalidSpec {
+                field: "bit_mask",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn offset_base_subtract_base_round_trips_and_rejects_underflow() {
+        let base = OffsetBase::SubtractBase(0x0800_0000);
+        assert_eq!(base.apply(0x0800_0040, 0, 0).unwrap(), 0x40);
+        assert_eq!(
+            base.apply(0x07FF_FFFF, 0, 0),
+            Err(LayoutError::Overflow {
+                what: "offset_subtract_base"
+            })
+        );
+        let (phys, raw) = base.align_and_encode(0x31, 0, 0, 4, 1).unwrap();
+        assert_eq!(phys, 0x34);
+        assert_eq!(raw, 0x0800_0034);
+        assert_eq!(base.apply(raw, 0, 0).unwrap(), phys);
     }
 
     #[test]

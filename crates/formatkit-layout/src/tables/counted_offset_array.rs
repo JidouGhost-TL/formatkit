@@ -206,10 +206,7 @@ pub fn parse_counted_offset_array_with_count_metadata(
             .ok_or(LayoutError::Overflow {
                 what: "scaled_offset",
             })?;
-        let base = spec.offset_base.resolve(table_end, record_offset);
-        let offset = base
-            .checked_add(scaled)
-            .ok_or(LayoutError::Overflow { what: "offset" })?;
+        let offset = spec.offset_base.apply(scaled, table_end, record_offset)?;
         if offset > carrier_len {
             return Err(LayoutError::OutOfBounds {
                 index,
@@ -383,10 +380,13 @@ pub fn pack_counted_offset_array(
     let mut cursor = table_end;
     for (index, payload) in payloads.iter().enumerate() {
         let record_offset = spec.array_offset + index * elem_bytes;
-        let base = spec.offset_base.resolve(table_end, record_offset);
-        let offset_u64 =
-            align_payload_offset(cursor, base, policy.data_alignment, spec.offset_unit)?;
-        let raw_offset = (offset_u64 - base) / spec.offset_unit;
+        let (offset_u64, raw_offset) = spec.offset_base.align_and_encode(
+            cursor,
+            table_end,
+            record_offset,
+            policy.data_alignment,
+            spec.offset_unit,
+        )?;
         let payload_offset = usize::try_from(offset_u64).map_err(|_| LayoutError::Overflow {
             what: "payload_offset",
         })?;
@@ -400,15 +400,20 @@ pub fn pack_counted_offset_array(
 
     let sentinel_raw = if spec.has_eof_sentinel {
         let sentinel_record_offset = spec.array_offset + payloads.len() * elem_bytes;
-        let base = spec.offset_base.resolve(table_end, sentinel_record_offset);
         let sentinel_align = if policy.pad_final_entry {
             policy.data_alignment
         } else {
             1
         };
-        let end_u64 = align_payload_offset(cursor, base, sentinel_align, spec.offset_unit)?;
+        let (end_u64, raw_sentinel) = spec.offset_base.align_and_encode(
+            cursor,
+            table_end,
+            sentinel_record_offset,
+            sentinel_align,
+            spec.offset_unit,
+        )?;
         cursor = end_u64;
-        Some((end_u64 - base) / spec.offset_unit)
+        Some(raw_sentinel)
     } else {
         if policy.pad_final_entry && policy.data_alignment > 1 {
             cursor = align_payload_offset(cursor, 0, policy.data_alignment, 1)?;
@@ -733,6 +738,50 @@ mod tests {
             Err(LayoutError::ValueOutOfRange {
                 value: 302,
                 max: 255
+            })
+        );
+    }
+
+    #[test]
+    fn subtract_base_round_trips_and_rejects_underflow() {
+        const BUS_SPEC: CountedOffsetArraySpec = CountedOffsetArraySpec {
+            array_offset: 0,
+            count: 2,
+            count_adjust: 1,
+            entry_width: IntWidth::U32,
+            endian: Endian::Little,
+            offset_base: OffsetBase::SubtractBase(0x0800_0000),
+            offset_unit: 1,
+            trailing_zero_trim: false,
+            has_eof_sentinel: true,
+            require_monotonic: true,
+            max_entries: 16,
+        };
+        let packed =
+            pack_counted_offset_array(&BUS_SPEC, &PackPolicy::TIGHT, &[], &[b"ABCD", b"EF"])
+                .unwrap();
+        // Raw first offset must equal 0x0800_0000 + 12 (3 u32s)
+        assert_eq!(
+            u32::from_le_bytes(packed[0..4].try_into().unwrap()),
+            0x0800_000C
+        );
+        let spans = parse_counted_offset_array(&packed, &BUS_SPEC).unwrap();
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].slice(&packed), Some(&b"ABCD"[..]));
+        assert_eq!(spans[1].slice(&packed), Some(&b"EF"[..]));
+
+        // Underflow when raw address < base
+        let bad = 0x07FF_FFFFu32.to_le_bytes();
+        let bad_spec = CountedOffsetArraySpec {
+            count: 1,
+            count_adjust: 0,
+            has_eof_sentinel: false,
+            ..BUS_SPEC
+        };
+        assert_eq!(
+            parse_counted_offset_array(&bad, &bad_spec),
+            Err(LayoutError::Overflow {
+                what: "offset_subtract_base"
             })
         );
     }

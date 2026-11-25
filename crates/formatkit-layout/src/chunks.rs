@@ -401,6 +401,7 @@ fn validate_chunk_stream_spec(spec: &ChunkStreamSpec) -> Result<(), LayoutError>
             reason: "tag extends past header_size",
         });
     }
+    spec.size_field.validate()?;
     let size_end = spec
         .size_field
         .end_offset()

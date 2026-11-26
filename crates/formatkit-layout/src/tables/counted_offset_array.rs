@@ -110,6 +110,11 @@ pub struct CountedOffsetArraySpec {
     pub has_eof_sentinel: bool,
     /// Ordering and deduplication policy for resolved offsets.
     pub order_policy: OffsetOrderPolicy,
+    /// When `true` and the unadjusted `count == 0`, treat any non-empty payload remaining
+    /// after `array_offset` (`carrier_len > array_offset`) as a single implicit blob entry
+    /// `(index: 0, offset: array_offset, size: carrier_len - array_offset)` instead of an
+    /// empty table (default `false`).
+    pub zero_count_implicit_blob: bool,
     /// Maximum number of adjusted offset elements permitted.
     pub max_entries: usize,
 }
@@ -119,7 +124,8 @@ impl CountedOffsetArraySpec {
     /// (`count_adjust: 0`, `bit_shift: 0`, `bit_mask: u64::MAX`,
     /// `offset_base: OffsetBase::Absolute`, `offset_unit: 1`,
     /// `trailing_zero_trim: false`, `skip_zero_entries: false`, `skip_sentinel: None`,
-    /// `has_eof_sentinel: false`, `order_policy: OffsetOrderPolicy::RequireMonotonic`).
+    /// `has_eof_sentinel: false`, `order_policy: OffsetOrderPolicy::RequireMonotonic`,
+    /// `zero_count_implicit_blob: false`).
     #[must_use]
     pub const fn new(
         array_offset: usize,
@@ -143,6 +149,7 @@ impl CountedOffsetArraySpec {
             skip_sentinel: None,
             has_eof_sentinel: false,
             order_policy: OffsetOrderPolicy::RequireMonotonic,
+            zero_count_implicit_blob: false,
             max_entries,
         }
     }
@@ -208,6 +215,13 @@ impl CountedOffsetArraySpec {
     #[must_use]
     pub const fn with_order_policy(mut self, policy: OffsetOrderPolicy) -> Self {
         self.order_policy = policy;
+        self
+    }
+
+    /// Set [`CountedOffsetArraySpec::zero_count_implicit_blob`].
+    #[must_use]
+    pub const fn with_zero_count_implicit_blob(mut self, enabled: bool) -> Self {
+        self.zero_count_implicit_blob = enabled;
         self
     }
 
@@ -293,6 +307,41 @@ pub fn parse_counted_offset_array_with_count_metadata(
     carrier_len: u64,
 ) -> Result<Vec<OffsetSpan>, LayoutError> {
     validate_array_spec(spec)?;
+
+    if count == 0 && spec.zero_count_implicit_blob {
+        if spec.array_offset > table_data.len() {
+            return Err(LayoutError::Truncated {
+                offset: spec.array_offset,
+                needed: 0,
+                available: 0,
+            });
+        }
+        let start = spec.array_offset as u64;
+        if start > carrier_len {
+            return Err(LayoutError::Truncated {
+                offset: spec.array_offset,
+                needed: 0,
+                available: 0,
+            });
+        }
+        let remaining = carrier_len - start;
+        if remaining == 0 {
+            return Ok(Vec::new());
+        }
+        if spec.max_entries == 0 {
+            return Err(LayoutError::MaxEntriesExceeded { max: 0 });
+        }
+        let mut spans = Vec::new();
+        try_push(
+            &mut spans,
+            OffsetSpan {
+                index: 0,
+                offset: start,
+                size: remaining,
+            },
+        )?;
+        return Ok(spans);
+    }
 
     let adjusted_i128 = (count as i128) + i128::from(spec.count_adjust);
     if adjusted_i128 < 0 {
@@ -1191,5 +1240,50 @@ mod tests {
             pack_counted_offset_array(&COLLIDE_GUARD, &PackPolicy::TIGHT, &[], &[b"abc"]),
             Err(LayoutError::InvalidInput { index: 0, .. })
         ));
+    }
+
+    #[test]
+    fn zero_count_implicit_blob_emits_single_span_when_payload_present() {
+        const SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(8, 0, IntWidth::U32, Endian::Little, 16)
+                .with_zero_count_implicit_blob(true);
+
+        // Header (8 bytes) + non-empty implicit blob (6 bytes)
+        let data = b"HDR\0\0\0\0\0BLOB!!";
+        let spans = parse_counted_offset_array(data, &SPEC).unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].index, 0);
+        assert_eq!(spans[0].offset, 8);
+        assert_eq!(spans[0].size, 6);
+        assert_eq!(spans[0].slice(data), Some(&b"BLOB!!"[..]));
+
+        // Default (false) returns empty Vec for count == 0
+        const DEFAULT_SPEC: CountedOffsetArraySpec =
+            CountedOffsetArraySpec::new(8, 0, IntWidth::U32, Endian::Little, 16);
+        assert!(parse_counted_offset_array(data, &DEFAULT_SPEC)
+            .unwrap()
+            .is_empty());
+
+        // Header only (no remaining payload) returns empty Vec even when enabled
+        assert!(parse_counted_offset_array(b"HDR\0\0\0\0\0", &SPEC)
+            .unwrap()
+            .is_empty());
+
+        // Truncated header (< array_offset) returns Truncated
+        assert!(matches!(
+            parse_counted_offset_array(b"HDR", &SPEC),
+            Err(LayoutError::Truncated { offset: 8, .. })
+        ));
+
+        // Non-zero count behaves identically to normal counted offset array
+        let mut two = Vec::new();
+        two.extend_from_slice(b"HDR\0\x02\0\0\0");
+        two.extend_from_slice(&16u32.to_le_bytes());
+        two.extend_from_slice(&20u32.to_le_bytes());
+        two.extend_from_slice(b"ABCDxy");
+        let normal = parse_counted_offset_array_with_count(&two, &SPEC, 2).unwrap();
+        assert_eq!(normal.len(), 2);
+        assert_eq!(normal[0].slice(&two), Some(&b"ABCD"[..]));
+        assert_eq!(normal[1].slice(&two), Some(&b"xy"[..]));
     }
 }

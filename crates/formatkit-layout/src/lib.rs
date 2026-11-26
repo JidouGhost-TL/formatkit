@@ -50,10 +50,10 @@ pub mod tables;
 pub mod text;
 
 pub use chunks::{
-    iter_chunk_stream, pack_chunk_stream, parse_chunk_stream, read_header_inclusive_chunk,
-    read_payload_chunk, ChunkAlignmentBase, ChunkEntry, ChunkInput, ChunkSizeMode, ChunkStreamIter,
-    ChunkStreamSpec, ChunkView, InclusiveChunkError, InclusiveChunkSpan, PayloadChunkError,
-    PayloadChunkSpan,
+    iter_chunk_stream, pack_chunk_stream, parse_chunk_stream, parse_chunk_stream_with_extent,
+    read_header_inclusive_chunk, read_payload_chunk, ChunkAlignmentBase, ChunkEntry, ChunkInput,
+    ChunkSizeMode, ChunkStreamIter, ChunkStreamResult, ChunkStreamSpec, ChunkView,
+    InclusiveChunkError, InclusiveChunkSpan, PayloadChunkError, PayloadChunkSpan,
 };
 pub use edit::{patch_bytes, patched_bytes, same_size_splice, SameSizeSpliceError};
 pub use field::{
@@ -61,7 +61,10 @@ pub use field::{
     I32Field, I64Field, I8Field, ScaledU32Field, U16ArrayField, U16Field, U32ArrayField, U32Field,
     U64Field, U8Field,
 };
-pub use iff::{parse_iff_form, parse_riff_form, IffChunk, IffForm, IFF_FORM_MAGIC, RIFF_MAGIC};
+pub use iff::{
+    parse_iff_form, parse_iff_form_with_options, parse_riff_form, parse_riff_form_with_options,
+    IffChunk, IffForm, RiffParseOptions, RiffSizeMode, IFF_FORM_MAGIC, RIFF_MAGIC,
+};
 pub use marker_scan::{
     iter_marker_scan_stream, pack_marker_scan_stream, parse_marker_scan_stream, MarkerScanIter,
     MarkerScanStreamSpec,
@@ -96,7 +99,10 @@ pub use tables::{
     TerminalOffsetTable, ValidatedCountedBoundaries, ValidatedCountedU16Boundaries,
     ValidatedPositiveSizes, ValidatedTerminalOffsets,
 };
+pub use text::string_bank;
 pub use text::{
-    format_hex_bytes, parse_hex_bytes, Charmap, CharmapControl, CharmapDecoded, CharmapEntry,
-    CharmapLimits, CharmapToken, FixedByteStringField,
+    format_hex_bytes, pack_aligned_string_bank, parse_aligned_string_bank, parse_hex_bytes,
+    AlignedStringBankSpec, Charmap, CharmapControl, CharmapDecoded, CharmapEntry, CharmapLimits,
+    CharmapToken, FixedByteStringField, StringBankEncoding, StringBankEntry, StringBankLayout,
+    StringBankResult, StringBankTermination,
 };

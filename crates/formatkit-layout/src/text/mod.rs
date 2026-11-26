@@ -6,10 +6,15 @@
 //! byte and text tries for deterministic decoding and encoding.
 
 pub mod charmap;
+pub mod string_bank;
 
 pub use charmap::{
     format_hex_bytes, parse_hex_bytes, Charmap, CharmapControl, CharmapDecoded, CharmapEntry,
     CharmapLimits, CharmapToken,
+};
+pub use string_bank::{
+    pack_aligned_string_bank, parse_aligned_string_bank, AlignedStringBankSpec, StringBankEncoding,
+    StringBankEntry, StringBankLayout, StringBankResult, StringBankTermination,
 };
 
 use formatkit_core::{

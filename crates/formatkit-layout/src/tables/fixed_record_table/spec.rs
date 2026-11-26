@@ -424,6 +424,16 @@ pub enum TableTermination {
         /// Active value required for data rows; the first row where the field differs terminates the table.
         value: u64,
     },
+    /// Table terminates at the first record where `field.read(row)` matches any value in `values`.
+    ///
+    /// During symmetric packing, `values[0]` is written into the terminating sentinel row.
+    /// `values` must be non-empty.
+    FieldIn {
+        /// Integer field inspected in each record.
+        field: IntFieldSpec,
+        /// Non-empty set of sentinel values that terminate the table when matched.
+        values: &'static [u64],
+    },
     /// Table length is derived from the first record's resolved byte offset:
     /// `count = (first_offset - table_offset) / stride`.
     FirstOffsetDerived,
@@ -914,6 +924,10 @@ pub(super) fn matches_termination_sentinel(
         TableTermination::FirstByteZero => Ok(row[0] == 0),
         TableTermination::FieldEquals { field, value } => Ok(field.read(row)? == value),
         TableTermination::FieldNotEquals { field, value } => Ok(field.read(row)? != value),
+        TableTermination::FieldIn { field, values } => {
+            let value = field.read(row)?;
+            Ok(values.contains(&value))
+        }
         TableTermination::Counted(_)
         | TableTermination::FirstOffsetDerived
         | TableTermination::Eof => Ok(false),
@@ -1063,6 +1077,7 @@ pub(super) fn validate_spec(spec: &FixedRecordTableSpec) -> Result<(), LayoutErr
                 | TableTermination::FirstByteZero
                 | TableTermination::FieldEquals { .. }
                 | TableTermination::FieldNotEquals { .. }
+                | TableTermination::FieldIn { .. }
         ) {
             return Err(LayoutError::InvalidSpec {
                 field: "sentinel_closes_next_offset",
@@ -1132,6 +1147,15 @@ pub(super) fn validate_spec(spec: &FixedRecordTableSpec) -> Result<(), LayoutErr
         TableTermination::FieldEquals { field, .. }
         | TableTermination::FieldNotEquals { field, .. } => {
             validate_field_in_stride(field, spec.stride, "termination")?;
+        }
+        TableTermination::FieldIn { field, values } => {
+            validate_field_in_stride(field, spec.stride, "termination")?;
+            if values.is_empty() {
+                return Err(LayoutError::InvalidSpec {
+                    field: "termination",
+                    reason: "FieldIn values must be non-empty",
+                });
+            }
         }
         TableTermination::FirstOffsetDerived => {
             if matches!(spec.size_mode, SizeMode::Cumulative { .. }) {

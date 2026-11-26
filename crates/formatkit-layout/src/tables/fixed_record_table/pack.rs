@@ -117,7 +117,8 @@ pub fn pack_fixed_record_table_with_post_table(
         TableTermination::ZeroRow
         | TableTermination::FirstByteZero
         | TableTermination::FieldEquals { .. }
-        | TableTermination::FieldNotEquals { .. } => 1usize,
+        | TableTermination::FieldNotEquals { .. }
+        | TableTermination::FieldIn { .. } => 1usize,
         TableTermination::FirstOffsetDerived => {
             if entries.is_empty() {
                 return Err(LayoutError::InvalidInput {
@@ -563,6 +564,9 @@ pub fn pack_fixed_record_table_with_post_table(
                 TableTermination::FieldNotEquals { .. } => {
                     "encoded record does not match TableTermination::FieldNotEquals active value"
                 }
+                TableTermination::FieldIn { .. } => {
+                    "encoded record matches TableTermination::FieldIn sentinel"
+                }
                 _ => unreachable!(),
             };
             return Err(LayoutError::InvalidInput { index, reason });
@@ -603,6 +607,11 @@ pub fn pack_fixed_record_table_with_post_table(
                     1u64 << field.bit_mask.trailing_zeros()
                 };
                 field.write(sentinel_rec, sentinel_val)?;
+            }
+            TableTermination::FieldIn { field, values } => {
+                if let Some(&first) = values.first() {
+                    field.write(sentinel_rec, first)?;
+                }
             }
             _ => {}
         }

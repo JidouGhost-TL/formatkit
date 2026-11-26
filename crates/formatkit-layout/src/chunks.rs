@@ -280,19 +280,36 @@ pub struct ChunkStreamSpec {
     pub alignment_base: ChunkAlignmentBase,
     /// Fixed number of trailing bytes (e.g. checksum or footer) immediately following each chunk's payload before alignment (default `0`).
     pub trailer_size: usize,
-    /// Optional tag that terminates the stream cleanly without being emitted.
+    /// Optional tag that terminates the stream cleanly without being emitted
+    /// (unless [`ChunkStreamSpec::emit_terminator`] is `true`).
     /// Must be `None` when `tag_len == 0`.
     ///
-    /// Also recognized at EOF when fewer than `header_size` bytes remain,
-    /// provided at least `tag_offset + tag_len` bytes are available and (when
-    /// `require_eof_closure` is `true`) any trailing bytes after the tag are
-    /// zero padding.
+    /// Also recognized at EOF when fewer than `header_size` bytes remain
+    /// (and `emit_terminator` is `false`), provided at least `tag_offset + tag_len`
+    /// bytes are available and (when `require_eof_closure` is `true`) any trailing
+    /// bytes after the tag are zero padding.
     pub terminator_tag: Option<&'static [u8]>,
+    /// When `true` and [`ChunkStreamSpec::terminator_tag`] matches, parse and emit
+    /// the terminator chunk (including its payload/trailer) before stopping the stream
+    /// (default `false`).
+    pub emit_terminator: bool,
+    /// Optional allowlist of valid non-terminator chunk tags (each of length `tag_len`).
+    /// Must be `None` when `tag_len == 0`.
+    pub allowed_tags: Option<&'static [&'static [u8]]>,
+    /// When `true`, encountering a chunk whose tag is not permitted (neither
+    /// `terminator_tag` nor in `allowed_tags`, or containing non-printable ASCII
+    /// outside `0x20..=0x7E` when `allowed_tags` is `None`) stops the stream cleanly
+    /// without consuming that header (default `false`). Requires `tag_len > 0`.
+    pub stop_on_unknown_tag: bool,
     /// When `true`, a chunk whose raw `size_field` decodes to `0` terminates the stream cleanly
     /// without being emitted (default `false`).
     pub terminate_on_zero_size: bool,
     /// When `true`, reject trailing bytes shorter than `header_size` at stream end.
     pub require_eof_closure: bool,
+    /// When `true`, clamp a final chunk whose declared payload/trailer/alignment extends
+    /// past `data.len()` to the remaining bytes instead of returning [`LayoutError::OutOfBounds`]
+    /// (default `false`).
+    pub allow_truncated_final_chunk: bool,
     /// Maximum number of chunks accepted before returning [`LayoutError::MaxEntriesExceeded`].
     pub max_chunks: usize,
 }
@@ -301,7 +318,9 @@ impl ChunkStreamSpec {
     /// Construct a [`ChunkStreamSpec`] with sensible defaults
     /// (`tag_offset: 0`, `tag_len: 0`, `size_unit: 1`, `alignment: 1`,
     /// `alignment_base: ChunkAlignmentBase::CarrierStart`, `trailer_size: 0`,
-    /// `terminator_tag: None`, `terminate_on_zero_size: false`, `require_eof_closure: true`).
+    /// `terminator_tag: None`, `emit_terminator: false`, `allowed_tags: None`,
+    /// `stop_on_unknown_tag: false`, `terminate_on_zero_size: false`,
+    /// `require_eof_closure: true`, `allow_truncated_final_chunk: false`).
     #[must_use]
     pub const fn new(
         start_offset: usize,
@@ -322,8 +341,12 @@ impl ChunkStreamSpec {
             alignment_base: ChunkAlignmentBase::CarrierStart,
             trailer_size: 0,
             terminator_tag: None,
+            emit_terminator: false,
+            allowed_tags: None,
+            stop_on_unknown_tag: false,
             terminate_on_zero_size: false,
             require_eof_closure: true,
+            allow_truncated_final_chunk: false,
             max_chunks,
         }
     }
@@ -371,6 +394,27 @@ impl ChunkStreamSpec {
         self
     }
 
+    /// Set [`ChunkStreamSpec::emit_terminator`].
+    #[must_use]
+    pub const fn with_emit_terminator(mut self, emit: bool) -> Self {
+        self.emit_terminator = emit;
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::allowed_tags`].
+    #[must_use]
+    pub const fn with_allowed_tags(mut self, tags: &'static [&'static [u8]]) -> Self {
+        self.allowed_tags = Some(tags);
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::stop_on_unknown_tag`].
+    #[must_use]
+    pub const fn with_stop_on_unknown_tag(mut self, stop: bool) -> Self {
+        self.stop_on_unknown_tag = stop;
+        self
+    }
+
     /// Set [`ChunkStreamSpec::terminate_on_zero_size`].
     #[must_use]
     pub const fn with_terminate_on_zero_size(mut self, enabled: bool) -> Self {
@@ -382,6 +426,13 @@ impl ChunkStreamSpec {
     #[must_use]
     pub const fn with_require_eof_closure(mut self, require: bool) -> Self {
         self.require_eof_closure = require;
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::allow_truncated_final_chunk`].
+    #[must_use]
+    pub const fn with_allow_truncated_final_chunk(mut self, allow: bool) -> Self {
+        self.allow_truncated_final_chunk = allow;
         self
     }
 }
@@ -526,6 +577,19 @@ pub struct ChunkStreamIter<'a> {
     finished: bool,
 }
 
+impl<'a> ChunkStreamIter<'a> {
+    /// Return the current exclusive byte offset reached in the input slice.
+    ///
+    /// Once the iterator has finished, this is the exact `consumed_end` byte offset
+    /// immediately after the final consumed chunk or terminator header (or at the
+    /// start of the first unknown tag when [`ChunkStreamSpec::stop_on_unknown_tag`]
+    /// halted the stream).
+    #[must_use]
+    pub const fn consumed_end(&self) -> usize {
+        self.pos
+    }
+}
+
 fn validate_chunk_stream_spec(spec: &ChunkStreamSpec) -> Result<(), LayoutError> {
     if spec.header_size == 0 {
         return Err(LayoutError::InvalidSpec {
@@ -585,6 +649,33 @@ fn validate_chunk_stream_spec(spec: &ChunkStreamSpec) -> Result<(), LayoutError>
                 reason: "terminator_tag length must equal tag_len",
             });
         }
+    } else if spec.emit_terminator {
+        return Err(LayoutError::InvalidSpec {
+            field: "emit_terminator",
+            reason: "emit_terminator requires terminator_tag",
+        });
+    }
+    if let Some(allowed) = spec.allowed_tags {
+        if spec.tag_len == 0 {
+            return Err(LayoutError::InvalidSpec {
+                field: "allowed_tags",
+                reason: "allowed_tags requires nonzero tag_len",
+            });
+        }
+        for &tag in allowed {
+            if tag.len() != spec.tag_len {
+                return Err(LayoutError::InvalidSpec {
+                    field: "allowed_tags",
+                    reason: "every allowed tag length must equal tag_len",
+                });
+            }
+        }
+    }
+    if spec.stop_on_unknown_tag && spec.tag_len == 0 {
+        return Err(LayoutError::InvalidSpec {
+            field: "stop_on_unknown_tag",
+            reason: "stop_on_unknown_tag requires nonzero tag_len",
+        });
     }
     Ok(())
 }
@@ -644,14 +735,21 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
         let remaining = self.data.len() - self.pos;
         if remaining < self.spec.header_size {
             self.finished = true;
-            if let Some(term) = self.spec.terminator_tag {
-                let tag_end = self.spec.tag_offset + self.spec.tag_len;
-                if remaining >= tag_end
-                    && &self.data[self.pos + self.spec.tag_offset..self.pos + tag_end] == term
-                    && (!self.spec.require_eof_closure
-                        || self.data[self.pos + tag_end..].iter().all(|&b| b == 0))
-                {
-                    return None;
+            if !self.spec.emit_terminator {
+                if let Some(term) = self.spec.terminator_tag {
+                    let tag_end = self.spec.tag_offset + self.spec.tag_len;
+                    if remaining >= tag_end
+                        && &self.data[self.pos + self.spec.tag_offset..self.pos + tag_end] == term
+                        && (!self.spec.require_eof_closure
+                            || self.data[self.pos + tag_end..].iter().all(|&b| b == 0))
+                    {
+                        self.pos = if self.spec.require_eof_closure {
+                            self.data.len()
+                        } else {
+                            self.pos + tag_end
+                        };
+                        return None;
+                    }
                 }
             }
             if self.spec.require_eof_closure {
@@ -676,9 +774,31 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
         let header = &self.data[header_offset..payload_offset];
         let tag_slice = &header[self.spec.tag_offset..self.spec.tag_offset + self.spec.tag_len];
 
-        if self.spec.tag_len > 0 && self.spec.terminator_tag == Some(tag_slice) {
+        let is_terminator = self.spec.tag_len > 0 && self.spec.terminator_tag == Some(tag_slice);
+        if is_terminator && !self.spec.emit_terminator {
+            self.pos = payload_offset;
             self.finished = true;
             return None;
+        }
+
+        if !is_terminator && self.spec.tag_len > 0 {
+            let tag_allowed = if let Some(allowed) = self.spec.allowed_tags {
+                allowed.contains(&tag_slice)
+            } else if self.spec.stop_on_unknown_tag {
+                tag_slice.iter().all(|&b| (0x20..=0x7E).contains(&b))
+            } else {
+                true
+            };
+            if !tag_allowed {
+                self.finished = true;
+                if self.spec.stop_on_unknown_tag {
+                    return None;
+                }
+                return Some(Err(LayoutError::InvalidInput {
+                    index: self.emitted,
+                    reason: "chunk tag is not in allowed_tags",
+                }));
+            }
         }
 
         if self.emitted >= self.spec.max_chunks {
@@ -698,6 +818,7 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
         };
 
         if self.spec.terminate_on_zero_size && raw_size == 0 {
+            self.pos = payload_offset;
             self.finished = true;
             return None;
         }
@@ -747,6 +868,19 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
             }
         };
         if payload_end > self.data.len() {
+            if self.spec.allow_truncated_final_chunk {
+                let clamped_payload_size = self.data.len() - payload_offset;
+                self.pos = self.data.len();
+                self.finished = true;
+                self.emitted += 1;
+                return Some(Ok(ChunkView {
+                    tag: tag_slice,
+                    header_offset,
+                    payload_offset,
+                    payload_size: clamped_payload_size,
+                    trailer_size: 0,
+                }));
+            }
             self.finished = true;
             return Some(Err(LayoutError::OutOfBounds {
                 index,
@@ -766,6 +900,18 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
             }
         };
         if after_trailer > self.data.len() {
+            if self.spec.allow_truncated_final_chunk {
+                self.pos = self.data.len();
+                self.finished = true;
+                self.emitted += 1;
+                return Some(Ok(ChunkView {
+                    tag: tag_slice,
+                    header_offset,
+                    payload_offset,
+                    payload_size,
+                    trailer_size: 0,
+                }));
+            }
             self.finished = true;
             return Some(Err(LayoutError::OutOfBounds {
                 index,
@@ -775,6 +921,7 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
             }));
         }
 
+        let mut truncated_alignment = false;
         let next_pos = if self.spec.alignment == 1 {
             after_trailer
         } else {
@@ -796,6 +943,9 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
                 aligned
             } else if after_trailer == self.data.len() {
                 after_trailer
+            } else if self.spec.allow_truncated_final_chunk {
+                truncated_alignment = true;
+                self.data.len()
             } else {
                 self.finished = true;
                 return Some(Err(LayoutError::OutOfBounds {
@@ -817,6 +967,9 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
 
         self.pos = next_pos;
         self.emitted += 1;
+        if is_terminator || truncated_alignment {
+            self.finished = true;
+        }
 
         Some(Ok(ChunkView {
             tag: tag_slice,
@@ -828,18 +981,41 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
     }
 }
 
+/// Parsed chunks and exact consumed byte extent returned by [`parse_chunk_stream_with_extent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkStreamResult {
+    /// Validated chunks decoded in order.
+    pub chunks: Vec<ChunkEntry>,
+    /// Exclusive byte offset immediately after the final consumed chunk or terminator header
+    /// (or at the start of the first unknown tag when [`ChunkStreamSpec::stop_on_unknown_tag`]
+    /// halted the stream).
+    pub consumed_end: usize,
+}
+
+/// Parse all chunks in `data` described by `spec` and return both the decoded chunks
+/// and the exact `consumed_end` byte offset.
+pub fn parse_chunk_stream_with_extent(
+    data: &[u8],
+    spec: &ChunkStreamSpec,
+) -> Result<ChunkStreamResult, LayoutError> {
+    let mut iter = iter_chunk_stream(data, spec)?;
+    let mut chunks = Vec::new();
+    for item in &mut iter {
+        try_push(&mut chunks, item?.to_owned_entry())?;
+    }
+    Ok(ChunkStreamResult {
+        chunks,
+        consumed_end: iter.consumed_end(),
+    })
+}
+
 /// Parse all chunks in `data` described by `spec` with strict checked bounds
 /// and zero-advance protection.
 pub fn parse_chunk_stream(
     data: &[u8],
     spec: &ChunkStreamSpec,
 ) -> Result<Vec<ChunkEntry>, LayoutError> {
-    let iter = iter_chunk_stream(data, spec)?;
-    let mut chunks = Vec::new();
-    for item in iter {
-        try_push(&mut chunks, item?.to_owned_entry())?;
-    }
-    Ok(chunks)
+    Ok(parse_chunk_stream_with_extent(data, spec)?.chunks)
 }
 
 /// One chunk supplied to [`pack_chunk_stream`].
@@ -935,6 +1111,7 @@ pub fn pack_chunk_stream(
     header_buf.resize(spec.header_size, policy.record_fill_byte);
 
     let has_terminator = spec.terminator_tag.is_some() || spec.terminate_on_zero_size;
+    let mut packed_explicit_terminator = false;
 
     for (index, chunk) in chunks.iter().enumerate() {
         if chunk.tag.len() != spec.tag_len {
@@ -943,11 +1120,23 @@ pub fn pack_chunk_stream(
                 reason: "chunk tag length must equal tag_len",
             });
         }
-        if spec.tag_len > 0 && spec.terminator_tag == Some(chunk.tag) {
-            return Err(LayoutError::InvalidInput {
-                index,
-                reason: "chunk tag collides with terminator_tag",
-            });
+        let is_term_chunk = spec.tag_len > 0 && spec.terminator_tag == Some(chunk.tag);
+        if is_term_chunk {
+            if spec.emit_terminator && index + 1 == chunks.len() {
+                packed_explicit_terminator = true;
+            } else {
+                return Err(LayoutError::InvalidInput {
+                    index,
+                    reason: "chunk tag collides with terminator_tag",
+                });
+            }
+        } else if let Some(allowed) = spec.allowed_tags {
+            if !allowed.contains(&chunk.tag) {
+                return Err(LayoutError::InvalidInput {
+                    index,
+                    reason: "chunk tag is not in allowed_tags",
+                });
+            }
         }
         if let Some(trailer_bytes) = chunk.trailer {
             if trailer_bytes.len() != spec.trailer_size {
@@ -1020,7 +1209,9 @@ pub fn pack_chunk_stream(
             out.resize(new_len, policy.pad_byte);
         }
 
-        let needs_align = index + 1 < chunks.len() || has_terminator || policy.pad_final_entry;
+        let trailing_auto_term = has_terminator && !packed_explicit_terminator;
+        let needs_align =
+            index + 1 < chunks.len() || trailing_auto_term || policy.pad_final_entry;
         if needs_align && spec.alignment > 1 {
             let aligned = align_chunk_end(
                 out.len(),
@@ -1038,29 +1229,31 @@ pub fn pack_chunk_stream(
     }
 
     if let Some(term_tag) = spec.terminator_tag {
-        header_buf.fill(policy.record_fill_byte);
-        header_buf[spec.tag_offset..spec.tag_offset + spec.tag_len].copy_from_slice(term_tag);
-        let term_raw_size = if spec.terminate_on_zero_size {
-            0u64
-        } else {
-            let term_bytes = match spec.size_mode {
-                ChunkSizeMode::PayloadOnly => 0u64,
-                ChunkSizeMode::IncludesHeader => spec.header_size as u64,
+        if !packed_explicit_terminator {
+            header_buf.fill(policy.record_fill_byte);
+            header_buf[spec.tag_offset..spec.tag_offset + spec.tag_len].copy_from_slice(term_tag);
+            let term_raw_size = if spec.terminate_on_zero_size {
+                0u64
+            } else {
+                let term_bytes = match spec.size_mode {
+                    ChunkSizeMode::PayloadOnly => 0u64,
+                    ChunkSizeMode::IncludesHeader => spec.header_size as u64,
+                };
+                if !term_bytes.is_multiple_of(spec.size_unit) {
+                    return Err(LayoutError::InvalidInput {
+                        index: chunks.len(),
+                        reason: "terminator header_size is not a multiple of size_unit",
+                    });
+                }
+                term_bytes / spec.size_unit
             };
-            if !term_bytes.is_multiple_of(spec.size_unit) {
-                return Err(LayoutError::InvalidInput {
-                    index: chunks.len(),
-                    reason: "terminator header_size is not a multiple of size_unit",
-                });
-            }
-            term_bytes / spec.size_unit
-        };
-        spec.size_field.write(&mut header_buf, term_raw_size)?;
-        out.try_reserve(header_buf.len())
-            .map_err(|_| LayoutError::AllocationFailed {
-                requested: out.len().saturating_add(header_buf.len()),
-            })?;
-        out.extend_from_slice(&header_buf);
+            spec.size_field.write(&mut header_buf, term_raw_size)?;
+            out.try_reserve(header_buf.len())
+                .map_err(|_| LayoutError::AllocationFailed {
+                    requested: out.len().saturating_add(header_buf.len()),
+                })?;
+            out.extend_from_slice(&header_buf);
+        }
     } else if spec.terminate_on_zero_size {
         header_buf.fill(policy.record_fill_byte);
         spec.size_field.write(&mut header_buf, 0)?;
@@ -1688,5 +1881,197 @@ mod tests {
         assert_eq!(parsed_off.len(), 1);
         assert_eq!(parsed_off[0].tag, b"TAG0");
         assert_eq!(parsed_off[0].payload(&off_data), Some(&b"hi"[..]));
+    }
+
+    #[test]
+    fn allowed_tags_and_stop_on_unknown_tag_bound_flat_binary_slices() {
+        const ALLOWED: &[&[u8]] = &[b"HDR ", b"BODY"];
+        const STRICT_SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_allowed_tags(ALLOWED);
+
+        const STOP_SPEC: ChunkStreamSpec = STRICT_SPEC.with_stop_on_unknown_tag(true);
+
+        let mut data = Vec::new();
+        data.extend_from_slice(b"HDR ");
+        data.extend_from_slice(&4u32.to_le_bytes());
+        data.extend_from_slice(b"1234");
+        data.extend_from_slice(b"BODY");
+        data.extend_from_slice(&2u32.to_le_bytes());
+        data.extend_from_slice(b"XY");
+        let expected_end = data.len();
+        // Trailing unrelated flat-binary bytes
+        data.extend_from_slice(b"JUNK\xFF\xFF\xFF\xFFtrailing");
+
+        assert!(matches!(
+            parse_chunk_stream(&data, &STRICT_SPEC),
+            Err(LayoutError::InvalidInput { index: 2, .. })
+        ));
+
+        let res = parse_chunk_stream_with_extent(&data, &STOP_SPEC).unwrap();
+        assert_eq!(res.chunks.len(), 2);
+        assert_eq!(res.chunks[0].tag, b"HDR ");
+        assert_eq!(res.chunks[1].tag, b"BODY");
+        assert_eq!(res.consumed_end, expected_end);
+        assert_eq!(&data[res.consumed_end..], b"JUNK\xFF\xFF\xFF\xFFtrailing");
+
+        // Printable-ASCII stop_on_unknown_tag without explicit allowlist
+        const PRINTABLE_STOP: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_stop_on_unknown_tag(true);
+        let mut bin_tail = Vec::new();
+        bin_tail.extend_from_slice(b"DATA");
+        bin_tail.extend_from_slice(&3u32.to_le_bytes());
+        bin_tail.extend_from_slice(b"abc");
+        bin_tail.extend_from_slice(&[0x00, 0xFF, 0x10, 0x20, 0x99, 0x99, 0x99, 0x99]);
+        let res2 = parse_chunk_stream_with_extent(&bin_tail, &PRINTABLE_STOP).unwrap();
+        assert_eq!(res2.chunks.len(), 1);
+        assert_eq!(res2.consumed_end, 11);
+
+        // Pack rejects disallowed tag
+        let bad_inputs = [ChunkInput {
+            tag: b"NOPE",
+            payload: b"ab",
+            header_template: None,
+            trailer: None,
+        }];
+        assert!(matches!(
+            pack_chunk_stream(&STRICT_SPEC, &PackPolicy::TIGHT, &[], &bad_inputs),
+            Err(LayoutError::InvalidInput { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn emit_terminator_and_consumed_end_round_trip() {
+        const SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_terminator_tag(b"TERM")
+        .with_emit_terminator(true);
+
+        let inputs = [
+            ChunkInput {
+                tag: b"DATA",
+                payload: b"hello",
+                header_template: None,
+                trailer: None,
+            },
+            ChunkInput {
+                tag: b"TERM",
+                payload: b"manifest",
+                header_template: None,
+                trailer: None,
+            },
+        ];
+        let packed = pack_chunk_stream(&SPEC, &PackPolicy::TIGHT, &[], &inputs).unwrap();
+        let mut with_tail = packed.clone();
+        with_tail.extend_from_slice(b"OPAQUE_BODY_AFTER_TERM");
+
+        let res = parse_chunk_stream_with_extent(&with_tail, &SPEC).unwrap();
+        assert_eq!(res.chunks.len(), 2);
+        assert_eq!(res.chunks[0].tag, b"DATA");
+        assert_eq!(res.chunks[0].payload(&with_tail), Some(&b"hello"[..]));
+        assert_eq!(res.chunks[1].tag, b"TERM");
+        assert_eq!(res.chunks[1].payload(&with_tail), Some(&b"manifest"[..]));
+        assert_eq!(res.consumed_end, packed.len());
+        assert_eq!(&with_tail[res.consumed_end..], b"OPAQUE_BODY_AFTER_TERM");
+
+        // Exclusive terminator also reports exact consumed_end after the terminator header
+        const EXCL_SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_terminator_tag(b"END ");
+        let excl_packed = pack_chunk_stream(
+            &EXCL_SPEC,
+            &PackPolicy::TIGHT,
+            &[],
+            &[ChunkInput {
+                tag: b"META",
+                payload: b"ok",
+                header_template: None,
+                trailer: None,
+            }],
+        )
+        .unwrap();
+        let mut excl_with_body = excl_packed.clone();
+        excl_with_body.extend_from_slice(b"RAW_TRAILING_BODY");
+        let excl_res = parse_chunk_stream_with_extent(&excl_with_body, &EXCL_SPEC).unwrap();
+        assert_eq!(excl_res.chunks.len(), 1);
+        assert_eq!(excl_res.consumed_end, excl_packed.len());
+        assert_eq!(&excl_with_body[excl_res.consumed_end..], b"RAW_TRAILING_BODY");
+
+        // Invalid spec: emit_terminator without terminator_tag
+        const BAD_SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_emit_terminator(true);
+        assert!(matches!(
+            parse_chunk_stream(&[], &BAD_SPEC),
+            Err(LayoutError::InvalidSpec {
+                field: "emit_terminator",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn allow_truncated_final_chunk_clamps_bounded_window() {
+        const STRICT: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4);
+        const CLAMP: ChunkStreamSpec = STRICT.with_allow_truncated_final_chunk(true);
+
+        let mut data = Vec::new();
+        data.extend_from_slice(b"CHK0");
+        data.extend_from_slice(&4u32.to_le_bytes());
+        data.extend_from_slice(b"ABCD");
+        // Final chunk declares 100 bytes, only 3 bytes remain in bounded window
+        data.extend_from_slice(b"CHK1");
+        data.extend_from_slice(&100u32.to_le_bytes());
+        data.extend_from_slice(b"xyz");
+
+        assert!(matches!(
+            parse_chunk_stream(&data, &STRICT),
+            Err(LayoutError::OutOfBounds { index: 1, .. })
+        ));
+
+        let res = parse_chunk_stream_with_extent(&data, &CLAMP).unwrap();
+        assert_eq!(res.chunks.len(), 2);
+        assert_eq!(res.chunks[0].payload(&data), Some(&b"ABCD"[..]));
+        assert_eq!(res.chunks[1].tag, b"CHK1");
+        assert_eq!(res.chunks[1].payload(&data), Some(&b"xyz"[..]));
+        assert_eq!(res.consumed_end, data.len());
     }
 }

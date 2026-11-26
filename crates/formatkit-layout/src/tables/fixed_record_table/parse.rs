@@ -392,7 +392,8 @@ fn iter_fixed_record_table_inner<'a>(
         TableTermination::ZeroRow
         | TableTermination::FirstByteZero
         | TableTermination::FieldEquals { .. }
-        | TableTermination::FieldNotEquals { .. } => {
+        | TableTermination::FieldNotEquals { .. }
+        | TableTermination::FieldIn { .. } => {
             let mut pos = spec.table_offset;
             let mut count = 0usize;
             let mut sentinel_off = None;

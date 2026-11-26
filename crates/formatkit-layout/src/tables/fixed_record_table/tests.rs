@@ -1405,3 +1405,81 @@ fn knob8_printable_ascii_and_post_table_bytes() {
         Err(LayoutError::InvalidName { index: 0 })
     );
 }
+
+#[test]
+fn multi_sentinel_field_in_parses_all_sentinels_and_round_trips() {
+    const SENTINELS: &[u64] = &[0xFFFF_FFFF, 0xC030_0C03];
+    const SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+        12,
+        0,
+        16,
+        Some(IntFieldSpec::u32_le(4)),
+        SizeMode::Stored(IntFieldSpec::u32_le(8)),
+        TableTermination::FieldIn {
+            field: IntFieldSpec::u32_le(0),
+            values: SENTINELS,
+        },
+    )
+    .with_key_field(IntFieldSpec::u32_le(0));
+
+    // 1. Symmetric pack emits values[0] (0xFFFFFFFF) and round-trips
+    let inputs = [
+        FixedRecordInput {
+            name: None,
+            key: Some(0x1111_2222),
+            payload: b"AAAA",
+            record_template: None,
+        },
+        FixedRecordInput {
+            name: None,
+            key: Some(0x3333_4444),
+            payload: b"BB",
+            record_template: None,
+        },
+    ];
+    let packed = pack_fixed_record_table(&SPEC, &PackPolicy::TIGHT, &[], &inputs).unwrap();
+    let parsed = parse_fixed_record_table(&packed, &SPEC).unwrap();
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].key, Some(0x1111_2222));
+    assert_eq!(parsed[0].payload(&packed), Some(&b"AAAA"[..]));
+    assert_eq!(parsed[1].key, Some(0x3333_4444));
+    assert_eq!(parsed[1].payload(&packed), Some(&b"BB"[..]));
+
+    // 2. Patching the sentinel row to the second sentinel (0xC0300C03) also terminates cleanly
+    let mut alt_sentinel = packed.clone();
+    alt_sentinel[24..28].copy_from_slice(&0xC030_0C03u32.to_le_bytes());
+    let parsed_alt = parse_fixed_record_table(&alt_sentinel, &SPEC).unwrap();
+    assert_eq!(parsed_alt, parsed);
+
+    // 3. Packing an entry whose key collides with ANY sentinel in FieldIn is rejected
+    let colliding = [FixedRecordInput {
+        name: None,
+        key: Some(0xC030_0C03),
+        payload: b"X",
+        record_template: None,
+    }];
+    assert!(matches!(
+        pack_fixed_record_table(&SPEC, &PackPolicy::TIGHT, &[], &colliding),
+        Err(LayoutError::InvalidInput { index: 0, .. })
+    ));
+
+    // 4. Empty FieldIn values slice is rejected as InvalidSpec
+    const EMPTY_SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+        12,
+        0,
+        16,
+        Some(IntFieldSpec::u32_le(4)),
+        SizeMode::Stored(IntFieldSpec::u32_le(8)),
+        TableTermination::FieldIn {
+            field: IntFieldSpec::u32_le(0),
+            values: &[],
+        },
+    );
+    assert!(matches!(
+        parse_fixed_record_table(&packed, &EMPTY_SPEC),
+        Err(LayoutError::InvalidSpec {
+            field: "termination",
+            ..
+        })
+    ));
+}

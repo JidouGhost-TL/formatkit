@@ -315,10 +315,10 @@
     {
       "crate": "formatkit-layout",
       "module": "chunks",
-      "path": "formatkit_layout::chunks::{read_payload_chunk, read_header_inclusive_chunk, parse_chunk_stream, iter_chunk_stream, pack_chunk_stream, ChunkStreamSpec, ChunkSizeMode, ChunkAlignmentBase, ChunkEntry, ChunkView, ChunkInput, PayloadChunkSpan, InclusiveChunkSpan}",
-      "summary": "Checked parsing, zero-allocation iteration, and symmetric packing for single payload-length/header-inclusive chunks and declarative sequential tagged or tagless chunk streams with configurable per-chunk trailer_size, alignment base, terminator tags, and zero-advance protection.",
+      "path": "formatkit_layout::chunks::{read_payload_chunk, read_header_inclusive_chunk, parse_chunk_stream, parse_chunk_stream_with_extent, iter_chunk_stream, pack_chunk_stream, ChunkStreamSpec, ChunkStreamResult, ChunkSizeMode, ChunkAlignmentBase, ChunkEntry, ChunkView, ChunkInput, PayloadChunkSpan, InclusiveChunkSpan}",
+      "summary": "Checked parsing, zero-allocation iteration, exact consumed-extent reporting, and symmetric packing for single payload-length/header-inclusive chunks and declarative sequential tagged or tagless chunk streams with configurable per-chunk trailer_size, alignment base, allowed_tags/stop_on_unknown_tag, inclusive emit_terminator, allow_truncated_final_chunk, terminator tags, and zero-advance protection.",
       "domain_aliases": ["chunk", "chunk stream", "TLV", "tag-length-value", "framed chunk", "4CC stream", "chunk writer", "tagless chunk", "chunk trailer"],
-      "use_when": "Iterating or packing length-framed binary chunks whose size excludes or includes a configurable-size chunk header, with optional tags, per-chunk trailer bytes, alignment, header templates, and terminator tags.",
+      "use_when": "Iterating or packing length-framed binary chunks whose size excludes or includes a configurable-size chunk header, with optional tags, allowlists, bounded-slice unknown-tag stopping, inclusive terminators, truncated final chunk clamping, per-chunk trailer bytes, alignment, header templates, and exact consumed_end extent.",
       "avoid_when": "Parsing standard IFF/RIFF FORM containers (use formatkit_layout::iff).",
       "feature_gate": null
     },
@@ -335,10 +335,10 @@
     {
       "crate": "formatkit-layout",
       "module": "iff",
-      "path": "formatkit_layout::iff::{parse_iff_form, parse_riff_form, IffForm, IffChunk, IFF_FORM_MAGIC, RIFF_MAGIC}",
-      "summary": "Checked parsers for big-endian IFF FORM and little-endian RIFF chunk containers with even-byte pad handling.",
+      "path": "formatkit_layout::iff::{parse_iff_form, parse_iff_form_with_options, parse_riff_form, parse_riff_form_with_options, IffForm, IffChunk, RiffSizeMode, RiffParseOptions, IFF_FORM_MAGIC, RIFF_MAGIC}",
+      "summary": "Checked parsers for big-endian IFF FORM and little-endian RIFF chunk containers with even-byte pad handling, Exclusive/Inclusive/Auto size modes, and optional truncated final chunk clamping.",
       "domain_aliases": ["IFF", "RIFF", "FORM", "FourCC", "chunk container"],
-      "use_when": "Parsing IFF or RIFF container structures (e.g., WAV-like or FORM-based containers).",
+      "use_when": "Parsing IFF or RIFF container structures (including header-inclusive size variants or bounded-window slices).",
       "avoid_when": "Chunk framing does not follow IFF/RIFF 4-byte tag + 4-byte size + pad rules (use chunks).",
       "feature_gate": null
     },
@@ -350,6 +350,16 @@
       "domain_aliases": [".tbl", "charmap", "table file", "custom text encoding", "script decoder", "dialogue table"],
       "use_when": "Decoding or encoding custom binary text encodings defined by .tbl character maps.",
       "avoid_when": "Text is standard Shift-JIS/CP932/JIS X 0201 (use formatkit_core::text) or UTF-8.",
+      "feature_gate": null
+    },
+    {
+      "crate": "formatkit-layout",
+      "module": "text::string_bank",
+      "path": "formatkit_layout::string_bank::{AlignedStringBankSpec, StringBankLayout, StringBankEncoding, StringBankTermination, StringBankEntry, StringBankResult, parse_aligned_string_bank, pack_aligned_string_bank}",
+      "summary": "Const-constructible declarative reader and symmetric packer for 1/2/4-byte aligned or fixed-stride NUL-terminated string banks with configurable byte validation, termination rules, padding byte, and exact consumed_end extent.",
+      "domain_aliases": ["string bank", "aligned string table", "NUL-terminated strings", "fixed-stride strings", "message bank", "string pool"],
+      "use_when": "Parsing or symmetrically packing contiguous NUL-terminated string banks with 1/2/4-byte record alignment or fixed-width slots and exact consumed extent.",
+      "avoid_when": "Strings are indexed by an explicit pointer/offset array (use CountedOffsetArraySpec or NamePoolSpec).",
       "feature_gate": null
     },
     {
@@ -396,7 +406,7 @@
       "crate": "formatkit-layout",
       "module": "tables::counted_offset_array",
       "path": "formatkit_layout::tables::{CountedOffsetArraySpec, OffsetOrderPolicy, OffsetSpan, parse_counted_offset_array, parse_counted_offset_array_with_count, parse_counted_offset_array_metadata, parse_counted_offset_array_with_count_metadata, pack_counted_offset_array}",
-      "summary": "Const-constructible declarative single-pass parser, metadata-only carrier validator, and symmetric writer for counted u8/u16/u24/u32/u64 LE/BE offset arrays with optional entry bit-masking, signed count adjustment, offset base/unit scaling (including TableStart, TableEndPlus, and SubtractBase), optional trailing-zero trimming, interior skip_zero_entries and skip_sentinel, OffsetOrderPolicy (RequireMonotonic, AllowUnsorted, SortAndDeduplicate), and optional EOF sentinel.",
+      "summary": "Const-constructible declarative single-pass parser, metadata-only carrier validator, and symmetric writer for counted u8/u16/u24/u32/u64 LE/BE offset arrays with optional entry bit-masking, signed count adjustment, offset base/unit scaling (including TableStart, TableEndPlus, and SubtractBase), optional trailing-zero trimming, interior skip_zero_entries and skip_sentinel, zero_count_implicit_blob, OffsetOrderPolicy (RequireMonotonic, AllowUnsorted, SortAndDeduplicate), and optional EOF sentinel.",
       "domain_aliases": ["counted offset array", "offset table", "boundary array", "sentinel offset table", "sector offset array", "offset array writer", "deduplicated pointer table"],
       "use_when": "Decoding, metadata-validating, or packing counted offset/boundary arrays across varying integer widths, endianness, count adjustments, base offsets (including TableStart, TableEndPlus, and bus/RAM base subtraction), interior zero skipping, or sorted deduplication.",
       "avoid_when": "A specialized table validator with fixed u32 alignment and directory-gap inspection is required (use CountedBoundaryTable).",
@@ -406,7 +416,7 @@
       "crate": "formatkit-layout",
       "module": "tables::fixed_record_table",
       "path": "formatkit_layout::tables::{FixedRecordTableSpec, TableParseOptions, FixedRecordEntry, FixedRecordView, FixedRecordInput, FixedRecordTableIter, NameFieldSpec, NamePoolSpec, NamePoolFormat, NameEncoding, RowFieldPredicate, SizeMode, TableTermination, parse_fixed_record_table, parse_fixed_record_table_bounded, parse_fixed_record_table_counted, parse_fixed_record_table_metadata, parse_fixed_record_table_counted_metadata, parse_fixed_record_table_with_name_pool, iter_fixed_record_table, iter_fixed_record_table_counted, iter_fixed_record_table_metadata, iter_fixed_record_table_counted_metadata, iter_fixed_record_table_with_name_pool, pack_fixed_record_table, pack_fixed_record_table_with_post_table}",
-      "summary": "Const-constructible declarative parser, zero-allocation borrowed iterator, TableParseOptions builder, metadata-only carrier validator, and symmetric writer for fixed-stride record tables with optional embedded (incl. PrintableAscii) or string-pool (NulTerminated or LengthPrefixed) names, optional key/hash fields, bit-masked/shifted integer fields, u8/u16/u24/u32/u64 LE/BE fields, offset base/unit scaling (incl. TableStart, TableEndPlus, SubtractBase), size derivation modes (Stored, NextOffset with optional sentinel_closes_next_offset, Cumulative { start, align }, EndOffset, FixedSlot), empty-zero and RowFieldPredicate (Equals/NotEquals) tombstone skipping, inter-section post-table blocks, and multiple termination rules (Counted, ZeroRow, FirstByteZero, FieldEquals, FieldNotEquals, FirstOffsetDerived, Eof).",
+      "summary": "Const-constructible declarative parser, zero-allocation borrowed iterator, TableParseOptions builder, metadata-only carrier validator, and symmetric writer for fixed-stride record tables with optional embedded (incl. PrintableAscii) or string-pool (NulTerminated or LengthPrefixed) names, optional key/hash fields, bit-masked/shifted integer fields, u8/u16/u24/u32/u64 LE/BE fields, offset base/unit scaling (incl. TableStart, TableEndPlus, SubtractBase), size derivation modes (Stored, NextOffset with optional sentinel_closes_next_offset, Cumulative { start, align }, EndOffset, FixedSlot), empty-zero and RowFieldPredicate (Equals/NotEquals) tombstone skipping, inter-section post-table blocks, and multiple termination rules (Counted, ZeroRow, FirstByteZero, FieldEquals, FieldNotEquals, FieldIn, FirstOffsetDerived, Eof).",
       "domain_aliases": ["fixed-stride record table", "directory table", "named archive table", "sector directory", "declarative table", "table writer", "string pool directory", "hashed directory"],
       "use_when": "Parsing, iterating without allocation, metadata-validating, or packing fixed-stride directory tables with embedded or pooled names, key/hash fields, bit-packed fields, sector units, end offsets, aligned cumulative sizes, empty/predicate slot skipping, sentinel-closed NextOffset, inter-section post-table blocks, record templates, or counted/sentinel/first-offset/EOF termination.",
       "avoid_when": "Records have variable lengths (use formatkit_core::Reader) or map directly to NamespaceEntry via FixedStrideOffsetTable.",

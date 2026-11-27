@@ -14,17 +14,17 @@ You can consume FormatKit either through **individual crates** (recommended for 
 
 ```toml
 [workspace.dependencies]
-formatkit-core = "0.1.17"
-formatkit-layout = "0.1.17"
-formatkit-catalog = "0.1.17"
-formatkit-runtime = "0.1.17"
-formatkit-archive = "0.1.17"
-formatkit-pixel = "0.1.17"
-formatkit-codec = "0.1.17"
-formatkit-patch = "0.1.17"
-formatkit-gltf = "0.1.17"
-formatkit-corpus = "0.1.17"
-formatkit-corpus-test = "0.1.17"
+formatkit-core = "0.1.18"
+formatkit-layout = "0.1.18"
+formatkit-catalog = "0.1.18"
+formatkit-runtime = "0.1.18"
+formatkit-archive = "0.1.18"
+formatkit-pixel = "0.1.18"
+formatkit-codec = "0.1.18"
+formatkit-patch = "0.1.18"
+formatkit-gltf = "0.1.18"
+formatkit-corpus = "0.1.18"
+formatkit-corpus-test = "0.1.18"
 ```
 
 Keep `formatkit-corpus` and `formatkit-corpus-test` in `[dev-dependencies]` so production builds do not pull in test harness dependencies.
@@ -41,10 +41,10 @@ The umbrella crate re-exports `core`, `layout`, `catalog`, and `runtime` by defa
 
 ```toml
 [dependencies]
-formatkit = { version = "0.1.17", features = ["archive", "pixel", "codec"] }
+formatkit = { version = "0.1.18", features = ["archive", "pixel", "codec"] }
 
 [dev-dependencies]
-formatkit = { version = "0.1.17", features = ["corpus"] }
+formatkit = { version = "0.1.18", features = ["corpus"] }
 ```
 
 ---

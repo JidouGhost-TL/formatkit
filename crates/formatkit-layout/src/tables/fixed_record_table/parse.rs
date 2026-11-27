@@ -348,6 +348,36 @@ impl FixedRecordTableSpec {
     ) -> Result<Vec<FixedRecordEntry>, LayoutError> {
         collect_entries(self.iter_with(data, opts)?)
     }
+
+    /// Parse all entries from `data` using runtime [`TableParseOptions`] and return
+    /// both the decoded entries and the exact `consumed_end` byte offset of the table.
+    pub fn parse_with_extent<'a>(
+        &self,
+        data: &'a [u8],
+        opts: TableParseOptions<'a>,
+    ) -> Result<FixedRecordTableResult, LayoutError> {
+        let iter = self.iter_with(data, opts)?;
+        let consumed_end =
+            usize::try_from(iter.table_end()).map_err(|_| LayoutError::Overflow {
+                what: "table_end",
+            })?;
+        let entries = collect_entries(iter)?;
+        Ok(FixedRecordTableResult {
+            entries,
+            consumed_end,
+        })
+    }
+}
+
+/// Parsed entries and exact consumed table byte extent returned by
+/// [`parse_fixed_record_table_with_extent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedRecordTableResult {
+    /// Validated entries decoded in order.
+    pub entries: Vec<FixedRecordEntry>,
+    /// Exclusive byte offset immediately following the record table (including any
+    /// terminating sentinel row).
+    pub consumed_end: usize,
 }
 
 fn iter_fixed_record_table_inner<'a>(
@@ -406,6 +436,12 @@ fn iter_fixed_record_table_inner<'a>(
                 let row = &table_data[pos..end];
                 if matches_termination_sentinel(spec.termination, row)? {
                     sentinel_off = Some(pos);
+                    if spec.emit_terminator {
+                        if count >= effective_max {
+                            return Err(LayoutError::MaxEntriesExceeded { max: effective_max });
+                        }
+                        count += 1;
+                    }
                     pos = end;
                     break;
                 }
@@ -648,6 +684,16 @@ pub fn parse_fixed_record_table(
     spec: &FixedRecordTableSpec,
 ) -> Result<Vec<FixedRecordEntry>, LayoutError> {
     spec.parse_with(data, TableParseOptions::new())
+}
+
+/// Parse a fixed-stride record table according to `spec` and return both the
+/// decoded entries and the exact `consumed_end` byte offset immediately following
+/// the table (including any terminating sentinel row).
+pub fn parse_fixed_record_table_with_extent(
+    data: &[u8],
+    spec: &FixedRecordTableSpec,
+) -> Result<FixedRecordTableResult, LayoutError> {
+    spec.parse_with_extent(data, TableParseOptions::new())
 }
 
 /// Parse a fixed-stride record table with an explicit caller entry bound

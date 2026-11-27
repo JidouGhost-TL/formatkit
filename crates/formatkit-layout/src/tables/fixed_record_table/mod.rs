@@ -18,7 +18,8 @@ pub use parse::{
     iter_fixed_record_table_with_name_pool, parse_fixed_record_table,
     parse_fixed_record_table_bounded, parse_fixed_record_table_counted,
     parse_fixed_record_table_counted_metadata, parse_fixed_record_table_metadata,
-    parse_fixed_record_table_with_name_pool, FixedRecordTableIter,
+    parse_fixed_record_table_with_extent, parse_fixed_record_table_with_name_pool,
+    FixedRecordTableIter, FixedRecordTableResult,
 };
 pub use spec::{
     FixedRecordEntry, FixedRecordInput, FixedRecordTableSpec, FixedRecordView, NameEncoding,

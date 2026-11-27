@@ -40,9 +40,10 @@ pub use fixed_record_table::{
     pack_fixed_record_table_with_post_table, parse_fixed_record_table,
     parse_fixed_record_table_bounded, parse_fixed_record_table_counted,
     parse_fixed_record_table_counted_metadata, parse_fixed_record_table_metadata,
-    parse_fixed_record_table_with_name_pool, FixedRecordEntry, FixedRecordInput,
-    FixedRecordTableIter, FixedRecordTableSpec, FixedRecordView, NameEncoding, NameFieldSpec,
-    NamePoolFormat, NamePoolSpec, RowFieldPredicate, SizeMode, TableParseOptions, TableTermination,
+    parse_fixed_record_table_with_extent, parse_fixed_record_table_with_name_pool,
+    FixedRecordEntry, FixedRecordInput, FixedRecordTableIter, FixedRecordTableResult,
+    FixedRecordTableSpec, FixedRecordView, NameEncoding, NameFieldSpec, NamePoolFormat,
+    NamePoolSpec, RowFieldPredicate, SizeMode, TableParseOptions, TableTermination,
 };
 pub use fixed_stride_offset::{FixedStrideOffsetTable, TableSizeMode};
 pub use offset_length::{OffsetLengthRow, OffsetLengthRows};

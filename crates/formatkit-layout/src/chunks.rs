@@ -312,6 +312,20 @@ pub struct ChunkStreamSpec {
     /// past `data.len()` to the remaining bytes instead of returning [`LayoutError::OutOfBounds`]
     /// (default `false`).
     pub allow_truncated_final_chunk: bool,
+    /// Optional exact number of chunks expected in the stream (`None` reads until EOF or terminator).
+    ///
+    /// When `Some(n)`, iteration stops cleanly after emitting `n` chunks without scanning trailing
+    /// bytes, fails with [`LayoutError::TooFewEntries`] if the stream ends early, and
+    /// [`pack_chunk_stream`] requires `chunks.len() == n`.
+    pub exact_chunks: Option<usize>,
+    /// Optional per-tag `(tag, size_mode, payload_delta)` override table for containers where
+    /// individual chunk tags use a different size mode or signed byte bias than
+    /// [`ChunkStreamSpec::size_mode`].
+    ///
+    /// For a matching tag, `payload_size = base_size + payload_delta` where `base_size` is
+    /// `scaled_size` for [`ChunkSizeMode::PayloadOnly`] or `scaled_size - header_size` for
+    /// [`ChunkSizeMode::IncludesHeader`]. Must be `None` when `tag_len == 0`.
+    pub tag_size_modes: Option<&'static [(&'static [u8], ChunkSizeMode, i64)]>,
     /// Maximum number of chunks accepted before returning [`LayoutError::MaxEntriesExceeded`].
     pub max_chunks: usize,
 }
@@ -322,7 +336,8 @@ impl ChunkStreamSpec {
     /// `alignment_base: ChunkAlignmentBase::CarrierStart`, `trailer_size: 0`,
     /// `terminator_tag: None`, `emit_terminator: false`, `allowed_tags: None`,
     /// `stop_on_unknown_tag: false`, `terminate_on_zero_size: false`,
-    /// `require_eof_closure: true`, `allow_truncated_final_chunk: false`).
+    /// `require_eof_closure: true`, `allow_truncated_final_chunk: false`,
+    /// `exact_chunks: None`, `tag_size_modes: None`).
     #[must_use]
     pub const fn new(
         start_offset: usize,
@@ -349,6 +364,8 @@ impl ChunkStreamSpec {
             terminate_on_zero_size: false,
             require_eof_closure: true,
             allow_truncated_final_chunk: false,
+            exact_chunks: None,
+            tag_size_modes: None,
             max_chunks,
         }
     }
@@ -435,6 +452,23 @@ impl ChunkStreamSpec {
     #[must_use]
     pub const fn with_allow_truncated_final_chunk(mut self, allow: bool) -> Self {
         self.allow_truncated_final_chunk = allow;
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::exact_chunks`].
+    #[must_use]
+    pub const fn with_exact_chunks(mut self, count: usize) -> Self {
+        self.exact_chunks = Some(count);
+        self
+    }
+
+    /// Set [`ChunkStreamSpec::tag_size_modes`].
+    #[must_use]
+    pub const fn with_tag_size_modes(
+        mut self,
+        modes: &'static [(&'static [u8], ChunkSizeMode, i64)],
+    ) -> Self {
+        self.tag_size_modes = Some(modes);
         self
     }
 }
@@ -679,7 +713,42 @@ fn validate_chunk_stream_spec(spec: &ChunkStreamSpec) -> Result<(), LayoutError>
             reason: "stop_on_unknown_tag requires nonzero tag_len",
         });
     }
+    if let Some(exact) = spec.exact_chunks {
+        if exact > spec.max_chunks {
+            return Err(LayoutError::InvalidSpec {
+                field: "exact_chunks",
+                reason: "must not exceed max_chunks",
+            });
+        }
+    }
+    if let Some(overrides) = spec.tag_size_modes {
+        if spec.tag_len == 0 {
+            return Err(LayoutError::InvalidSpec {
+                field: "tag_size_modes",
+                reason: "tag_size_modes requires nonzero tag_len",
+            });
+        }
+        for &(tag, _, _) in overrides {
+            if tag.len() != spec.tag_len {
+                return Err(LayoutError::InvalidSpec {
+                    field: "tag_size_modes",
+                    reason: "every tag_size_modes tag length must equal tag_len",
+                });
+            }
+        }
+    }
     Ok(())
+}
+
+fn resolve_tag_size_mode(spec: &ChunkStreamSpec, tag: &[u8]) -> (ChunkSizeMode, i64) {
+    if let Some(overrides) = spec.tag_size_modes {
+        for &(override_tag, mode, delta) in overrides {
+            if override_tag == tag {
+                return (mode, delta);
+            }
+        }
+    }
+    (spec.size_mode, 0)
 }
 
 fn align_chunk_end(
@@ -730,8 +799,22 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
         if self.finished {
             return None;
         }
+        if let Some(exact) = self.spec.exact_chunks {
+            if self.emitted >= exact {
+                self.finished = true;
+                return None;
+            }
+        }
         if self.pos >= self.data.len() {
             self.finished = true;
+            if let Some(exact) = self.spec.exact_chunks {
+                if self.emitted < exact {
+                    return Some(Err(LayoutError::TooFewEntries {
+                        found: self.emitted,
+                        min: exact,
+                    }));
+                }
+            }
             return None;
         }
         let remaining = self.data.len() - self.pos;
@@ -750,8 +833,24 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
                         } else {
                             self.pos + tag_end
                         };
+                        if let Some(exact) = self.spec.exact_chunks {
+                            if self.emitted < exact {
+                                return Some(Err(LayoutError::TooFewEntries {
+                                    found: self.emitted,
+                                    min: exact,
+                                }));
+                            }
+                        }
                         return None;
                     }
+                }
+            }
+            if let Some(exact) = self.spec.exact_chunks {
+                if self.emitted < exact {
+                    return Some(Err(LayoutError::TooFewEntries {
+                        found: self.emitted,
+                        min: exact,
+                    }));
                 }
             }
             if self.spec.require_eof_closure {
@@ -780,6 +879,14 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
         if is_terminator && !self.spec.emit_terminator {
             self.pos = payload_offset;
             self.finished = true;
+            if let Some(exact) = self.spec.exact_chunks {
+                if self.emitted < exact {
+                    return Some(Err(LayoutError::TooFewEntries {
+                        found: self.emitted,
+                        min: exact,
+                    }));
+                }
+            }
             return None;
         }
 
@@ -794,6 +901,14 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
             if !tag_allowed {
                 self.finished = true;
                 if self.spec.stop_on_unknown_tag {
+                    if let Some(exact) = self.spec.exact_chunks {
+                        if self.emitted < exact {
+                            return Some(Err(LayoutError::TooFewEntries {
+                                found: self.emitted,
+                                min: exact,
+                            }));
+                        }
+                    }
                     return None;
                 }
                 return Some(Err(LayoutError::InvalidInput {
@@ -822,6 +937,14 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
         if self.spec.terminate_on_zero_size && raw_size == 0 {
             self.pos = payload_offset;
             self.finished = true;
+            if let Some(exact) = self.spec.exact_chunks {
+                if self.emitted < exact {
+                    return Some(Err(LayoutError::TooFewEntries {
+                        found: self.emitted,
+                        min: exact,
+                    }));
+                }
+            }
             return None;
         }
 
@@ -833,20 +956,30 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
             }
         };
 
-        let payload_size_u64 = match self.spec.size_mode {
-            ChunkSizeMode::PayloadOnly => scaled_size,
+        let (eff_size_mode, payload_delta) = resolve_tag_size_mode(&self.spec, tag_slice);
+        let base_i128: i128 = match eff_size_mode {
+            ChunkSizeMode::PayloadOnly => i128::from(scaled_size),
             ChunkSizeMode::IncludesHeader => {
-                let hdr_u64 = self.spec.header_size as u64;
-                if scaled_size < hdr_u64 {
-                    self.finished = true;
-                    return Some(Err(LayoutError::SizeSmallerThanHeader {
-                        index,
-                        offset: header_offset,
-                        declared: scaled_size,
-                        header_size: self.spec.header_size,
-                    }));
-                }
-                scaled_size - hdr_u64
+                i128::from(scaled_size) - i128::from(self.spec.header_size as u64)
+            }
+        };
+        let adjusted_i128 = base_i128 + i128::from(payload_delta);
+        if adjusted_i128 < 0 {
+            self.finished = true;
+            return Some(Err(LayoutError::SizeSmallerThanHeader {
+                index,
+                offset: header_offset,
+                declared: scaled_size,
+                header_size: self.spec.header_size,
+            }));
+        }
+        let payload_size_u64 = match u64::try_from(adjusted_i128) {
+            Ok(v) => v,
+            Err(_) => {
+                self.finished = true;
+                return Some(Err(LayoutError::Overflow {
+                    what: "payload_size",
+                }));
             }
         };
 
@@ -969,7 +1102,7 @@ impl<'a> Iterator for ChunkStreamIter<'a> {
 
         self.pos = next_pos;
         self.emitted += 1;
-        if is_terminator || truncated_alignment {
+        if is_terminator || truncated_alignment || self.spec.exact_chunks == Some(self.emitted) {
             self.finished = true;
         }
 
@@ -1089,6 +1222,14 @@ pub fn pack_chunk_stream(
             max: spec.max_chunks,
         });
     }
+    if let Some(exact) = spec.exact_chunks {
+        if chunks.len() != exact {
+            return Err(LayoutError::InvalidInput {
+                index: chunks.len(),
+                reason: "chunk count must equal exact_chunks",
+            });
+        }
+    }
     if header_prefix.len() > spec.start_offset {
         return Err(LayoutError::InvalidInput {
             index: 0,
@@ -1149,12 +1290,20 @@ pub fn pack_chunk_stream(
             }
         }
 
-        let declared_bytes = match spec.size_mode {
-            ChunkSizeMode::PayloadOnly => chunk.payload.len() as u64,
-            ChunkSizeMode::IncludesHeader => (spec.header_size as u64)
-                .checked_add(chunk.payload.len() as u64)
-                .ok_or(LayoutError::Overflow { what: "chunk_size" })?,
-        };
+        let (eff_size_mode, payload_delta) = resolve_tag_size_mode(spec, chunk.tag);
+        let declared_i128 = i128::from(chunk.payload.len() as u64) - i128::from(payload_delta)
+            + match eff_size_mode {
+                ChunkSizeMode::PayloadOnly => 0,
+                ChunkSizeMode::IncludesHeader => i128::from(spec.header_size as u64),
+            };
+        if declared_i128 < 0 {
+            return Err(LayoutError::InvalidInput {
+                index,
+                reason: "chunk payload size underflows tag_size_modes delta",
+            });
+        }
+        let declared_bytes =
+            u64::try_from(declared_i128).map_err(|_| LayoutError::Overflow { what: "chunk_size" })?;
         if !declared_bytes.is_multiple_of(spec.size_unit) {
             return Err(LayoutError::InvalidInput {
                 index,
@@ -2077,5 +2226,120 @@ mod tests {
         assert_eq!(res.chunks[1].tag, b"CHK1");
         assert_eq!(res.chunks[1].payload(&data), Some(&b"xyz"[..]));
         assert_eq!(res.consumed_end, data.len());
+    }
+
+    #[test]
+    fn exact_chunks_stops_before_trailing_bytes_and_enforces_count() {
+        const SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::IncludesHeader,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_alignment(4)
+        .with_exact_chunks(2);
+
+        let inputs = [
+            ChunkInput {
+                tag: b"BLK0",
+                payload: b"abcd",
+                header_template: None,
+                trailer: None,
+            },
+            ChunkInput {
+                tag: b"BLK1",
+                payload: b"efgh",
+                header_template: None,
+                trailer: None,
+            },
+        ];
+        let mut packed = pack_chunk_stream(&SPEC, &PackPolicy::TIGHT, &[], &inputs).unwrap();
+        let exact_end = packed.len();
+        // Append arbitrary trailing bytes (e.g., adjacent ROM data)
+        packed.extend_from_slice(b"GARBAGE_TRAILING_BYTES");
+
+        let res = parse_chunk_stream_with_extent(&packed, &SPEC).unwrap();
+        assert_eq!(res.chunks.len(), 2);
+        assert_eq!(res.chunks[0].tag, b"BLK0");
+        assert_eq!(res.chunks[1].tag, b"BLK1");
+        assert_eq!(res.consumed_end, exact_end);
+
+        // Fewer than exact_chunks fails with TooFewEntries
+        let short = &packed[..12];
+        assert_eq!(
+            parse_chunk_stream(short, &SPEC),
+            Err(LayoutError::TooFewEntries { found: 1, min: 2 })
+        );
+
+        // Packing wrong count fails
+        assert!(matches!(
+            pack_chunk_stream(&SPEC, &PackPolicy::TIGHT, &[], &inputs[..1]),
+            Err(LayoutError::InvalidInput { index: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn tag_size_modes_overrides_mode_and_signed_delta_symmetrically() {
+        const OVERRIDES: &[(&[u8], ChunkSizeMode, i64)] = &[
+            (b"INCL", ChunkSizeMode::IncludesHeader, 0),
+            (b"BIAS", ChunkSizeMode::PayloadOnly, -4),
+            (b"PLUS", ChunkSizeMode::IncludesHeader, 4),
+        ];
+        const SPEC: ChunkStreamSpec = ChunkStreamSpec::new(
+            0,
+            8,
+            IntFieldSpec::u32_le(4),
+            ChunkSizeMode::PayloadOnly,
+            16,
+        )
+        .with_tag(0, 4)
+        .with_tag_size_modes(OVERRIDES);
+
+        let inputs = [
+            ChunkInput {
+                tag: b"DFLT",
+                payload: b"1234",
+                header_template: None,
+                trailer: None,
+            },
+            ChunkInput {
+                tag: b"INCL",
+                payload: b"abcd",
+                header_template: None,
+                trailer: None,
+            },
+            ChunkInput {
+                tag: b"BIAS",
+                payload: b"WXYZ",
+                header_template: None,
+                trailer: None,
+            },
+            ChunkInput {
+                tag: b"PLUS",
+                payload: b"hello!",
+                header_template: None,
+                trailer: None,
+            },
+        ];
+
+        let packed = pack_chunk_stream(&SPEC, &PackPolicy::TIGHT, &[], &inputs).unwrap();
+        // Verify stored raw lengths:
+        // DFLT: PayloadOnly, delta 0 -> 4
+        assert_eq!(u32::from_le_bytes(packed[4..8].try_into().unwrap()), 4);
+        // INCL: IncludesHeader, delta 0 -> 8 + 4 = 12
+        assert_eq!(u32::from_le_bytes(packed[16..20].try_into().unwrap()), 12);
+        // BIAS: PayloadOnly, delta -4 -> stored = 4 - (-4) = 8
+        assert_eq!(u32::from_le_bytes(packed[28..32].try_into().unwrap()), 8);
+        // PLUS: IncludesHeader, delta +4 -> stored = 6 - 4 + 8 = 10
+        assert_eq!(u32::from_le_bytes(packed[40..44].try_into().unwrap()), 10);
+
+        let parsed = parse_chunk_stream(&packed, &SPEC).unwrap();
+        assert_eq!(parsed.len(), 4);
+        assert_eq!(parsed[0].payload(&packed), Some(&b"1234"[..]));
+        assert_eq!(parsed[1].payload(&packed), Some(&b"abcd"[..]));
+        assert_eq!(parsed[2].payload(&packed), Some(&b"WXYZ"[..]));
+        assert_eq!(parsed[3].payload(&packed), Some(&b"hello!"[..]));
     }
 }

@@ -115,12 +115,40 @@ pub fn pack_fixed_record_table_with_post_table(
         });
     }
 
+    let explicit_terminator_entry = if spec.emit_terminator {
+        if let Some(last) = entries.last() {
+            let mut probe = Vec::new();
+            probe
+                .try_reserve_exact(spec.stride)
+                .map_err(|_| LayoutError::AllocationFailed {
+                    requested: spec.stride,
+                })?;
+            if let Some(tmpl) = last.record_template {
+                if tmpl.len() == spec.stride {
+                    probe.extend_from_slice(tmpl);
+                } else {
+                    probe.resize(spec.stride, policy.record_fill_byte);
+                }
+            } else {
+                probe.resize(spec.stride, policy.record_fill_byte);
+            }
+            if let (Some(key_field), Some(key)) = (spec.key_field, last.key) {
+                let _ = key_field.write(&mut probe, key);
+            }
+            matches_termination_sentinel(spec.termination, &probe)?
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
     let sentinel_rows = match spec.termination {
         TableTermination::ZeroRow
         | TableTermination::FirstByteZero
         | TableTermination::FieldEquals { .. }
         | TableTermination::FieldNotEquals { .. }
-        | TableTermination::FieldIn { .. } => 1usize,
+        | TableTermination::FieldIn { .. } => usize::from(!explicit_terminator_entry),
         TableTermination::FirstOffsetDerived => {
             if entries.is_empty() {
                 return Err(LayoutError::InvalidInput {
@@ -553,25 +581,32 @@ pub fn pack_fixed_record_table_with_post_table(
         }
 
         if matches_termination_sentinel(spec.termination, rec)? {
-            let reason = match spec.termination {
-                TableTermination::ZeroRow => {
-                    "encoded record is all-zero under TableTermination::ZeroRow"
-                }
-                TableTermination::FirstByteZero => {
-                    "encoded record starts with 0x00 under TableTermination::FirstByteZero"
-                }
-                TableTermination::FieldEquals { .. } => {
-                    "encoded record matches TableTermination::FieldEquals sentinel"
-                }
-                TableTermination::FieldNotEquals { .. } => {
-                    "encoded record does not match TableTermination::FieldNotEquals active value"
-                }
-                TableTermination::FieldIn { .. } => {
-                    "encoded record matches TableTermination::FieldIn sentinel"
-                }
-                _ => unreachable!(),
-            };
-            return Err(LayoutError::InvalidInput { index, reason });
+            if !(explicit_terminator_entry && index + 1 == entries.len()) {
+                let reason = match spec.termination {
+                    TableTermination::ZeroRow => {
+                        "encoded record is all-zero under TableTermination::ZeroRow"
+                    }
+                    TableTermination::FirstByteZero => {
+                        "encoded record starts with 0x00 under TableTermination::FirstByteZero"
+                    }
+                    TableTermination::FieldEquals { .. } => {
+                        "encoded record matches TableTermination::FieldEquals sentinel"
+                    }
+                    TableTermination::FieldNotEquals { .. } => {
+                        "encoded record does not match TableTermination::FieldNotEquals active value"
+                    }
+                    TableTermination::FieldIn { .. } => {
+                        "encoded record matches TableTermination::FieldIn sentinel"
+                    }
+                    _ => unreachable!(),
+                };
+                return Err(LayoutError::InvalidInput { index, reason });
+            }
+        } else if explicit_terminator_entry && index + 1 == entries.len() {
+            return Err(LayoutError::InvalidInput {
+                index,
+                reason: "explicit terminator entry no longer matches sentinel after managed fields were written",
+            });
         }
         if spec.skip_empty_zero && is_empty_zero_row(spec, rec)? {
             return Err(LayoutError::InvalidInput {

@@ -52,6 +52,12 @@ pub struct MarkerScanStreamSpec {
     pub require_first_at_start: bool,
     /// Minimum number of matched entries required.
     pub min_entries: usize,
+    /// Minimum byte advance from an entry's start before scanning for the next marker
+    /// or `end_marker` (default `0`, meaning advance by `step_alignment`).
+    ///
+    /// When non-zero, scanning resumes at `start + align_up(min_entry_size, step_alignment)`
+    /// (at least `start + step_alignment`), preventing false intra-header marker resyncs.
+    pub min_entry_size: usize,
     /// Maximum number of matched entries permitted before returning [`LayoutError::MaxEntriesExceeded`].
     pub max_entries: usize,
 }
@@ -59,7 +65,7 @@ pub struct MarkerScanStreamSpec {
 impl MarkerScanStreamSpec {
     /// Construct a [`MarkerScanStreamSpec`] with sensible defaults
     /// (`marker_offset_in_step: 0`, `end_marker: None`, `require_first_at_start: false`,
-    /// `min_entries: 0`).
+    /// `min_entries: 0`, `min_entry_size: 0`).
     #[must_use]
     pub const fn new(
         start_offset: usize,
@@ -75,6 +81,7 @@ impl MarkerScanStreamSpec {
             end_marker: None,
             require_first_at_start: false,
             min_entries: 0,
+            min_entry_size: 0,
             max_entries,
         }
     }
@@ -104,6 +111,13 @@ impl MarkerScanStreamSpec {
     #[must_use]
     pub const fn with_min_entries(mut self, min_entries: usize) -> Self {
         self.min_entries = min_entries;
+        self
+    }
+
+    /// Set [`MarkerScanStreamSpec::min_entry_size`].
+    #[must_use]
+    pub const fn with_min_entry_size(mut self, min_entry_size: usize) -> Self {
+        self.min_entry_size = min_entry_size;
         self
     }
 }
@@ -276,7 +290,12 @@ impl Iterator for MarkerScanIter<'_> {
             }));
         }
 
-        let scan_from = start.checked_add(self.spec.step_alignment);
+        let min_advance = if self.spec.min_entry_size <= self.spec.step_alignment {
+            Some(self.spec.step_alignment)
+        } else {
+            checked_align_up_multiple(self.spec.min_entry_size, self.spec.step_alignment)
+        };
+        let scan_from = min_advance.and_then(|adv| start.checked_add(adv));
         let (end_offset, next_start) = match scan_from {
             Some(pos) => match scan_next_hit(self.data, &self.spec, pos) {
                 ScanHit::Entry(next_pos) => (next_pos as u64, Some(next_pos)),
@@ -355,6 +374,12 @@ pub fn pack_marker_scan_stream(
 
     let marker_end = spec.marker_offset_in_step + spec.marker.len();
     for (index, payload) in payloads.iter().enumerate() {
+        if payload.len() < spec.min_entry_size {
+            return Err(LayoutError::InvalidInput {
+                index,
+                reason: "payload shorter than min_entry_size",
+            });
+        }
         if payload.len() < marker_end
             || &payload[spec.marker_offset_in_step..marker_end] != spec.marker
         {
@@ -584,6 +609,30 @@ mod tests {
         assert!(matches!(
             parse_marker_scan_stream(b"short", &truncated),
             Err(LayoutError::Truncated { offset: 16, .. })
+        ));
+    }
+
+    #[test]
+    fn min_entry_size_skips_intra_header_marker_collisions_and_round_trips() {
+        const SPEC: MarkerScanStreamSpec = MarkerScanStreamSpec::new(0, 1, b"HDR!", 16)
+            .with_require_first_at_start(true)
+            .with_min_entry_size(16);
+
+        // Entry 0 contains a false "HDR!" inside its 16-byte header at +8
+        let entry0 = b"HDR!xxxxHDR!yyyyDATA0";
+        let entry1 = b"HDR!0123456789abcdefDATA1";
+        let payloads: &[&[u8]] = &[entry0, entry1];
+
+        let packed = pack_marker_scan_stream(&SPEC, &PackPolicy::TIGHT, &[], payloads).unwrap();
+        let spans = parse_marker_scan_stream(&packed, &SPEC).unwrap();
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].slice(&packed), Some(&entry0[..]));
+        assert_eq!(spans[1].slice(&packed), Some(&entry1[..]));
+
+        // Packing an entry shorter than min_entry_size is rejected
+        assert!(matches!(
+            pack_marker_scan_stream(&SPEC, &PackPolicy::TIGHT, &[], &[b"HDR!short"]),
+            Err(LayoutError::InvalidInput { index: 0, .. })
         ));
     }
 }

@@ -687,13 +687,18 @@ pub struct FixedRecordTableSpec {
     /// sentinel row's `offset_field` as the exclusive end offset for the final entry instead
     /// of `carrier_len`.
     pub sentinel_closes_next_offset: bool,
+    /// When `true` and a sentinel-based [`TableTermination`] matches (`ZeroRow`,
+    /// `FirstByteZero`, `FieldEquals`, `FieldNotEquals`, or `FieldIn`), include the
+    /// terminating sentinel record as the final emitted entry (default `false`).
+    pub emit_terminator: bool,
 }
 
 impl FixedRecordTableSpec {
     /// Construct a [`FixedRecordTableSpec`] with sensible defaults (`name_field: None`,
     /// `name_pool: None`, `key_field: None`, `offset_base: OffsetBase::Absolute`,
     /// `offset_unit: 1`, `size_unit: 1`, `skip_empty_zero: false`,
-    /// `skip_predicate: None`, `sentinel_closes_next_offset: false`).
+    /// `skip_predicate: None`, `sentinel_closes_next_offset: false`,
+    /// `emit_terminator: false`).
     #[must_use]
     pub const fn new(
         stride: usize,
@@ -719,6 +724,7 @@ impl FixedRecordTableSpec {
             skip_empty_zero: false,
             skip_predicate: None,
             sentinel_closes_next_offset: false,
+            emit_terminator: false,
         }
     }
 
@@ -797,6 +803,13 @@ impl FixedRecordTableSpec {
     #[must_use]
     pub const fn with_sentinel_closes_next_offset(mut self, enabled: bool) -> Self {
         self.sentinel_closes_next_offset = enabled;
+        self
+    }
+
+    /// Set [`FixedRecordTableSpec::emit_terminator`].
+    #[must_use]
+    pub const fn with_emit_terminator(mut self, emit: bool) -> Self {
+        self.emit_terminator = emit;
         self
     }
 }
@@ -1084,6 +1097,27 @@ pub(super) fn validate_spec(spec: &FixedRecordTableSpec) -> Result<(), LayoutErr
             return Err(LayoutError::InvalidSpec {
                 field: "sentinel_closes_next_offset",
                 reason: "requires sentinel-based TableTermination",
+            });
+        }
+    }
+    if spec.emit_terminator {
+        if !matches!(
+            spec.termination,
+            TableTermination::ZeroRow
+                | TableTermination::FirstByteZero
+                | TableTermination::FieldEquals { .. }
+                | TableTermination::FieldNotEquals { .. }
+                | TableTermination::FieldIn { .. }
+        ) {
+            return Err(LayoutError::InvalidSpec {
+                field: "emit_terminator",
+                reason: "requires sentinel-based TableTermination",
+            });
+        }
+        if spec.sentinel_closes_next_offset {
+            return Err(LayoutError::InvalidSpec {
+                field: "emit_terminator",
+                reason: "cannot be combined with sentinel_closes_next_offset",
             });
         }
     }

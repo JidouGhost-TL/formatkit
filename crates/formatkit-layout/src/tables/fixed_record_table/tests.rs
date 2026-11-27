@@ -1483,3 +1483,69 @@ fn multi_sentinel_field_in_parses_all_sentinels_and_round_trips() {
         })
     ));
 }
+
+#[test]
+fn emit_terminator_and_parse_with_extent_round_trip() {
+    const SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+        16,
+        0,
+        64,
+        None,
+        SizeMode::FixedSlot(0),
+        TableTermination::FieldEquals {
+            field: IntFieldSpec::u8(10),
+            value: 0x2F,
+        },
+    )
+    .with_offset_base(OffsetBase::TableEnd)
+    .with_emit_terminator(true);
+
+    let mut rec0 = [0xCCu8; 16];
+    rec0[10] = 0x10;
+    let mut rec_end = [0xCCu8; 16];
+    rec_end[10] = 0x2F;
+
+    let inputs = [
+        FixedRecordInput {
+            name: None,
+            key: None,
+            payload: &[],
+            record_template: Some(&rec0),
+        },
+        FixedRecordInput {
+            name: None,
+            key: None,
+            payload: &[],
+            record_template: Some(&rec_end),
+        },
+    ];
+    let mut packed = pack_fixed_record_table(&SPEC, &PackPolicy::TIGHT, &[], &inputs).unwrap();
+    assert_eq!(packed.len(), 32);
+    // Append an 8-byte trailer after the table
+    packed.extend_from_slice(&[0u8; 8]);
+
+    let res = parse_fixed_record_table_with_extent(&packed, &SPEC).unwrap();
+    assert_eq!(res.entries.len(), 2);
+    assert_eq!(res.entries[0].record_offset, 0);
+    assert_eq!(res.entries[1].record_offset, 16);
+    assert_eq!(res.consumed_end, 32);
+    assert_eq!(&packed[res.consumed_end..], &[0u8; 8]);
+
+    // Invalid: emit_terminator on Counted termination
+    const BAD_SPEC: FixedRecordTableSpec = FixedRecordTableSpec::new(
+        16,
+        0,
+        64,
+        None,
+        SizeMode::FixedSlot(0),
+        TableTermination::Counted(1),
+    )
+    .with_emit_terminator(true);
+    assert!(matches!(
+        parse_fixed_record_table(&packed, &BAD_SPEC),
+        Err(LayoutError::InvalidSpec {
+            field: "emit_terminator",
+            ..
+        })
+    ));
+}

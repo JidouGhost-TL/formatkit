@@ -26,6 +26,8 @@
 //! assert_eq!(layout.index(32, 32), Some(2048 + 256));
 //! ```
 
+use crate::prelude::*;
+
 use crate::PackError;
 
 /// One 16-bit text-mode tilemap entry.

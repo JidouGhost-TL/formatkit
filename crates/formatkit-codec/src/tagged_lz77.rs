@@ -36,6 +36,8 @@
 //! [`TAG_LZ77`]: crate::tagged_header::TAG_LZ77
 //! [`TAG_LZ77_EXTENDED`]: crate::tagged_header::TAG_LZ77_EXTENDED
 
+use crate::prelude::*;
+
 use formatkit_core::{bytes_at, Error, Result};
 
 use crate::flag_lzss::{
@@ -345,7 +347,7 @@ mod tests {
     fn compact_round_trips_with_exact_extent_and_min_distance() {
         let mut data = b"PATTERN_0123_".repeat(20);
         data.extend(lcg_bytes(7, 700, 5));
-        data.extend(std::iter::repeat_n(0x5A, 64));
+        data.extend(core::iter::repeat_n(0x5A, 64));
         for min_distance in [1, 2, 3, 4096] {
             let mut stream = encode_tagged_lz77_with_min_distance(&data, min_distance).unwrap();
             assert!(compact_distances(&stream)
@@ -387,7 +389,7 @@ mod tests {
             TAGGED_LZ77_EXTENDED_MAX_LEN + 5,
         ] {
             let mut data = vec![0x5Au8; 20];
-            data.extend(std::iter::repeat_n(0x7B, len));
+            data.extend(core::iter::repeat_n(0x7B, len));
             let stream = encode_tagged_lz77_extended(&data).unwrap();
             let dec = decode_tagged_lz77_extended(&stream, 1 << 20).unwrap();
             assert_eq!(dec.bytes, data, "length {len}");

@@ -2,14 +2,28 @@
 //!
 //! Format owners supply namespaces and resolution; callers supply destinations,
 //! policy, transfer buffers, and one shared work ledger.
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 
+extern crate alloc;
+
+/// `alloc` types the `std` prelude would otherwise supply, so module code reads
+/// the same with and without the `std` feature.
+#[allow(unused_imports)]
+mod prelude {
+    pub(crate) use alloc::borrow::ToOwned;
+    pub(crate) use alloc::boxed::Box;
+    pub(crate) use alloc::string::{String, ToString};
+    pub(crate) use alloc::vec::Vec;
+    pub(crate) use alloc::{format, vec};
+}
+
+#[cfg(feature = "std")]
 use std::io::Write;
 
-use formatkit_core::{
-    copy_source_range, IndexedNamespace, MemberLayout, MountedMember, SourceCopyError, SourceRange,
-    WorkBudget,
-};
+#[cfg(feature = "std")]
+use formatkit_core::{copy_source_range, MountedMember, SourceCopyError, SourceRange, WorkBudget};
+use formatkit_core::{IndexedNamespace, MemberLayout};
 
 /// Shared mounting sequence for paired directory-plus-content stored-range archives.
 pub mod paired_stored_mount;
@@ -86,6 +100,9 @@ pub struct ExtractionReceipt {
 /// Uses the canonical source-copy implementation, including source revalidation,
 /// cancellation and short-write handling. The caller's transfer buffer is not
 /// allocated or retained here. This function does not flush or publish output.
+///
+/// Requires the `std` feature.
+#[cfg(feature = "std")]
 pub fn extract(
     member: MountedMember<'_>,
     mode: ExtractionMode,

@@ -5,6 +5,8 @@
 //! strictly within `8 + body_len`, consuming an optional 1-byte even-alignment
 //! pad when `chunk_len` is odd.
 
+use crate::prelude::*;
+
 use formatkit_core::{Endian, Error, Result};
 
 /// Four-byte magic identifying a standard big-endian IFF-85 `FORM` container.

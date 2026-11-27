@@ -7,6 +7,8 @@
 //! contents remain available for an owner to inspect without requiring the
 //! complete carrier to be resident in this crate.
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, SourceRange};
 
 const WORD_BYTES: usize = 4;

@@ -4,6 +4,8 @@
 //! by a fixed byte magic marker occurring at `start_offset + k * step_alignment + marker_offset_in_step`,
 //! with optional aligned [`MarkerScanStreamSpec::end_marker`] termination.
 
+use crate::prelude::*;
+
 use formatkit_core::checked_align_up_multiple;
 
 use crate::spec::{try_push, LayoutError, PackPolicy};

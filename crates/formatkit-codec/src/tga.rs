@@ -7,6 +7,8 @@
 //! - Top-left and bottom-left vertical origins (plus right-to-left horizontal flip)
 //! - Optional 26-byte TGA 2.0 `TRUEVISION-XFILE.\0` footer
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, Image, Result};
 
 use crate::rle::{decode_high_bit_rle, encode_high_bit_rle, HighBitRleConfig};

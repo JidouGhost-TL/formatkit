@@ -2,8 +2,10 @@
 //! bounded LSB/MSB decoding, and deterministic frequency-to-code-lengths
 //! tree construction.
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use crate::prelude::*;
+
+use alloc::collections::BinaryHeap;
+use core::cmp::Reverse;
 
 use formatkit_core::{Error, LsbBitCursor, LsbBitWriter, MsbBitCursor, MsbBitWriter, Result};
 

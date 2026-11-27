@@ -5,6 +5,8 @@
 //! or fixed-width slots, with configurable byte validation, termination rules, and exact
 //! consumed-extent tracking.
 
+use crate::prelude::*;
+
 use core::ops::Range;
 
 use formatkit_core::checked_align_up_multiple;
@@ -279,15 +281,12 @@ fn align_relative(pos: usize, start_offset: usize, alignment: usize) -> Result<u
     if alignment <= 1 {
         return Ok(pos);
     }
-    let rel = pos
-        .checked_sub(start_offset)
-        .ok_or(LayoutError::Overflow {
-            what: "string_bank_alignment",
-        })?;
-    let aligned_rel =
-        checked_align_up_multiple(rel, alignment).ok_or(LayoutError::Overflow {
-            what: "string_bank_alignment",
-        })?;
+    let rel = pos.checked_sub(start_offset).ok_or(LayoutError::Overflow {
+        what: "string_bank_alignment",
+    })?;
+    let aligned_rel = checked_align_up_multiple(rel, alignment).ok_or(LayoutError::Overflow {
+        what: "string_bank_alignment",
+    })?;
     start_offset
         .checked_add(aligned_rel)
         .ok_or(LayoutError::Overflow {
@@ -366,11 +365,12 @@ pub fn parse_aligned_string_bank(
                     }
                     return Err(LayoutError::InvalidName { index });
                 }
-                let after_nul = pos.checked_add(nul_rel).and_then(|v| v.checked_add(1)).ok_or(
-                    LayoutError::Overflow {
+                let after_nul = pos
+                    .checked_add(nul_rel)
+                    .and_then(|v| v.checked_add(1))
+                    .ok_or(LayoutError::Overflow {
                         what: "string_bank_end",
-                    },
-                )?;
+                    })?;
                 let aligned_next = align_relative(after_nul, spec.start_offset, alignment)?;
                 let next_pos = if aligned_next <= data.len() {
                     aligned_next
@@ -559,9 +559,11 @@ pub fn pack_aligned_string_bank(
                 out.extend_from_slice(entry);
                 if entry.len() < stride {
                     out.push(0);
-                    let slot_end = slot_start.checked_add(stride).ok_or(LayoutError::Overflow {
-                        what: "string_bank_slot_end",
-                    })?;
+                    let slot_end = slot_start
+                        .checked_add(stride)
+                        .ok_or(LayoutError::Overflow {
+                            what: "string_bank_slot_end",
+                        })?;
                     out.resize(slot_end, spec.pad_byte);
                 }
             }
@@ -633,8 +635,8 @@ mod tests {
         const SPEC_1: AlignedStringBankSpec = AlignedStringBankSpec::aligned(0, 1, 8)
             .with_encoding(StringBankEncoding::Ascii)
             .with_termination(StringBankTermination::Eof);
-        let packed1 = pack_aligned_string_bank(&SPEC_1, &PackPolicy::TIGHT, &[], &[b"a", b"bc"])
-            .unwrap();
+        let packed1 =
+            pack_aligned_string_bank(&SPEC_1, &PackPolicy::TIGHT, &[], &[b"a", b"bc"]).unwrap();
         assert_eq!(packed1, b"a\0bc\0");
         let parsed1 = parse_aligned_string_bank(&packed1, &SPEC_1).unwrap();
         assert_eq!(parsed1.entries.len(), 2);
@@ -644,8 +646,8 @@ mod tests {
             .with_encoding(StringBankEncoding::PrintableAscii)
             .with_termination(StringBankTermination::Counted(2))
             .with_pad_byte(0xFF);
-        let packed2 = pack_aligned_string_bank(&SPEC_2, &PackPolicy::TIGHT, &[], &[b"ab", b"c"])
-            .unwrap();
+        let packed2 =
+            pack_aligned_string_bank(&SPEC_2, &PackPolicy::TIGHT, &[], &[b"ab", b"c"]).unwrap();
         assert_eq!(packed2, b"ab\0\xFFc\0");
         let parsed2 = parse_aligned_string_bank(&packed2, &SPEC_2).unwrap();
         assert_eq!(parsed2.entries.len(), 2);

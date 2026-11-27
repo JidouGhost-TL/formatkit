@@ -1,5 +1,7 @@
 //! Allocation-free cursors for contiguous byte-wise bitstreams.
 
+use crate::prelude::*;
+
 /// A byte-loaded, least-significant-bit-first cursor.
 ///
 /// Reads are checked and transactional on exhaustion. Widths through 32 bits

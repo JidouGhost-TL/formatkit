@@ -12,7 +12,9 @@
 //!   encoding (`text -> Vec<u8>`) with explicit resource limits and lossless
 //!   token round-tripping.
 
-use std::collections::{BTreeMap, BTreeSet};
+use crate::prelude::*;
+
+use alloc::collections::{BTreeMap, BTreeSet};
 
 use formatkit_core::{Error, Result};
 

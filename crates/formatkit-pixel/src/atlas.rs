@@ -1,5 +1,7 @@
 //! 2D RGBA8888 blitting and bounded grid atlas composition.
 
+use crate::prelude::*;
+
 use crate::PackError;
 
 fn checked_rgba_len(width: u32, height: u32) -> Result<usize, PackError> {

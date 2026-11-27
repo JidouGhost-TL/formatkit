@@ -1,6 +1,9 @@
 //! Pure-Rust Shift-JIS / CP932 (Windows-31J / WHATWG `shift_jis`) and
 //! JIS X 0201 byte classification, validation, and UTF-8 conversion helpers.
 
+use crate::prelude::*;
+
+#[cfg(feature = "std")]
 use std::sync::OnceLock;
 
 use super::shift_jis_table::{
@@ -455,6 +458,8 @@ pub fn decode_shift_jis_jis0208_lossy(bytes: &[u8]) -> String {
     out
 }
 
+/// Reverse CP932 table, built once per process.
+#[cfg(feature = "std")]
 fn cp932_encode_table() -> &'static [(u16, u16)] {
     static REVERSE: OnceLock<Vec<(u16, u16)>> = OnceLock::new();
     REVERSE.get_or_init(|| {
@@ -506,10 +511,38 @@ pub fn encode_cp932_char(ch: char) -> Option<([u8; 2], usize)> {
     } else {
         u16::try_from(cp).ok()?
     };
+    let bytes = cp932_encode_lookup(lookup)?.to_be_bytes();
+    Some((bytes, 2))
+}
+
+#[cfg(feature = "std")]
+fn cp932_encode_lookup(lookup: u16) -> Option<u16> {
     let table = cp932_encode_table();
     let idx = table.binary_search_by_key(&lookup, |&(c, _)| c).ok()?;
-    let bytes = table[idx].1.to_be_bytes();
-    Some((bytes, 2))
+    Some(table[idx].1)
+}
+
+/// Without `std` there is no process-wide cache, so scan the decode tables in
+/// ascending pointer order. The first hit is the lowest pointer, which is the
+/// entry the cached table keeps for a duplicated code point.
+#[cfg(not(feature = "std"))]
+fn cp932_encode_lookup(lookup: u16) -> Option<u16> {
+    cp932_encode_scan(lookup)
+}
+
+#[cfg(any(not(feature = "std"), test))]
+fn cp932_encode_scan(lookup: u16) -> Option<u16> {
+    let pointer = POINTER_LOW[..POINTER_NEC_IBM_START]
+        .iter()
+        .position(|&cp| cp != 0 && cp == lookup)
+        .or_else(|| {
+            POINTER_HIGH
+                .iter()
+                .position(|&cp| cp != 0 && cp == lookup)
+                .map(|offset| POINTER_HIGH_START + offset)
+        })?;
+    let [lead, trail] = pointer_to_pair(pointer);
+    Some(u16::from_be_bytes([lead, trail]))
 }
 
 /// Strictly encode UTF-8 text to CP932 / WHATWG `shift_jis`.
@@ -738,5 +771,16 @@ mod tests {
         assert!(!is_valid_shift_jis_syntax(b"\x82\x7F"));
         assert!(!is_valid_shift_jis_syntax(b"\x80"));
         assert!(!is_valid_shift_jis_syntax(b"\xA0"));
+    }
+
+    #[test]
+    fn uncached_cp932_scan_matches_the_cached_table_for_every_code_unit() {
+        for unit in 0..=u16::MAX {
+            assert_eq!(
+                cp932_encode_scan(unit),
+                cp932_encode_lookup(unit),
+                "U+{unit:04X}"
+            );
+        }
     }
 }

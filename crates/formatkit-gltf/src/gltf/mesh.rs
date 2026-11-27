@@ -1,3 +1,5 @@
+use crate::prelude::*;
+
 use super::{GltfBuilder, GltfError, Prim, PrimExtras, ARRAY_BUFFER};
 use crate::json::Json;
 

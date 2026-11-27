@@ -19,6 +19,8 @@
 //! [`TAG_DELTA_16BIT`]: crate::tagged_header::TAG_DELTA_16BIT
 //! [`TAG_DELTA_8BIT`]: crate::tagged_header::TAG_DELTA_8BIT
 
+use crate::prelude::*;
+
 use formatkit_core::{bytes_at, Error, Result};
 
 use crate::tagged_header::{

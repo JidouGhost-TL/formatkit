@@ -1,6 +1,8 @@
 //! Source topology, evidence contracts, and executable providers for indexed namespaces.
 
-use std::fmt;
+use crate::prelude::*;
+
+use core::fmt;
 
 use super::writer::valid_cargo_test_oracle;
 use super::{CargoTestOracle, DecoderRequirement, FormatCapabilities};
@@ -397,24 +399,24 @@ impl NamespaceMountContract {
 
 pub type SingleNamespaceMounter =
     fn(
-        std::sync::Arc<dyn formatkit_core::RangeSource>,
+        alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         &mut formatkit_core::ReadBudget,
     ) -> formatkit_core::Result<Box<dyn formatkit_core::IndexedNamespace>>;
 pub type SelectedSingleNamespaceMounter =
     fn(
-        std::sync::Arc<dyn formatkit_core::RangeSource>,
+        alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         &str,
         &mut formatkit_core::ReadBudget,
     ) -> formatkit_core::Result<Box<dyn formatkit_core::IndexedNamespace>>;
 pub type NamespaceSourceProbe =
     fn(
-        std::sync::Arc<dyn formatkit_core::RangeSource>,
+        alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         &[u8],
         &mut formatkit_core::ReadBudget,
     ) -> formatkit_core::Result<Option<Box<dyn formatkit_core::IndexedNamespace>>>;
 pub type WorkNamespaceSourceProbe =
     fn(
-        std::sync::Arc<dyn formatkit_core::RangeSource>,
+        alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         &[u8],
         &mut formatkit_core::WorkBudget,
     ) -> formatkit_core::Result<Option<Box<dyn formatkit_core::IndexedNamespace>>>;
@@ -463,7 +465,7 @@ pub type WorkRunnerUser<'user> = dyn FnMut(
 /// the scoped user returns. The caller declares `op` so the runner preflights
 /// the complete plan before mounting.
 pub type WorkSourceRunner = for<'budget, 'user> fn(
-    std::sync::Arc<dyn formatkit_core::RangeSource>,
+    alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     &'budget mut formatkit_core::WorkBudget,
     WorkRunnerOp,
     &'user mut WorkRunnerUser<'user>,
@@ -495,9 +497,9 @@ impl fmt::Debug for IdentifiedNamespace {
 #[derive(Clone)]
 pub struct PairedNamespaceSources {
     directory_role: &'static str,
-    directory: std::sync::Arc<dyn formatkit_core::RangeSource>,
+    directory: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     content_role: &'static str,
-    content: std::sync::Arc<dyn formatkit_core::RangeSource>,
+    content: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     selector: Option<(&'static str, String)>,
 }
 
@@ -520,8 +522,8 @@ impl PairedNamespaceSources {
     /// than matching [`NamespaceMountInput`] variants themselves.
     pub fn for_input_with_selector(
         input: NamespaceMountInput,
-        directory: std::sync::Arc<dyn formatkit_core::RangeSource>,
-        content: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        directory: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
+        content: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         selector: Option<&str>,
     ) -> formatkit_core::Result<Self> {
         match (input, selector) {
@@ -557,8 +559,8 @@ impl PairedNamespaceSources {
 
     pub fn for_input(
         input: NamespaceMountInput,
-        directory: std::sync::Arc<dyn formatkit_core::RangeSource>,
-        content: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        directory: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
+        content: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     ) -> formatkit_core::Result<Self> {
         let NamespaceMountInput::PairedSources {
             directory_role,
@@ -581,8 +583,8 @@ impl PairedNamespaceSources {
 
     pub fn for_selected_input(
         input: NamespaceMountInput,
-        directory: std::sync::Arc<dyn formatkit_core::RangeSource>,
-        content: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        directory: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
+        content: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         selector: impl Into<String>,
     ) -> formatkit_core::Result<Self> {
         let (directory_role, content_role, selector_role) = match input {
@@ -634,8 +636,8 @@ impl PairedNamespaceSources {
         directory_role: &'static str,
         content_role: &'static str,
     ) -> formatkit_core::Result<(
-        std::sync::Arc<dyn formatkit_core::RangeSource>,
-        std::sync::Arc<dyn formatkit_core::RangeSource>,
+        alloc::sync::Arc<dyn formatkit_core::RangeSource>,
+        alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     )> {
         if self.roles() != (directory_role, content_role) || self.selector.is_some() {
             return Err(formatkit_core::Error::Unsupported(format!(
@@ -653,8 +655,8 @@ impl PairedNamespaceSources {
         content_role: &'static str,
         selector_role: &'static str,
     ) -> formatkit_core::Result<(
-        std::sync::Arc<dyn formatkit_core::RangeSource>,
-        std::sync::Arc<dyn formatkit_core::RangeSource>,
+        alloc::sync::Arc<dyn formatkit_core::RangeSource>,
+        alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         String,
     )> {
         if self.roles() != (directory_role, content_role)
@@ -690,7 +692,7 @@ pub struct WorkMountedNamespace<'budget> {
 /// Single-source mount on the caller's native work ledger.
 pub type WorkSingleNamespaceMounter =
     for<'budget> fn(
-        std::sync::Arc<dyn formatkit_core::RangeSource>,
+        alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         &'budget mut formatkit_core::WorkBudget,
     ) -> formatkit_core::Result<WorkMountedNamespace<'budget>>;
 
@@ -803,7 +805,7 @@ pub struct NamespaceProvider {
 
 pub fn identify_and_mount_namespace_source_work(
     providers: impl IntoIterator<Item = NamespaceProvider>,
-    source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+    source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     prefix: &[u8],
     budget: &mut formatkit_core::WorkBudget,
 ) -> formatkit_core::Result<Option<IdentifiedNamespace>> {
@@ -839,7 +841,7 @@ pub fn identify_and_mount_namespace_source_work(
 
 pub fn identify_and_mount_namespace_source_early_work(
     providers: impl IntoIterator<Item = NamespaceProvider>,
-    source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+    source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     prefix: &[u8],
     budget: &mut formatkit_core::WorkBudget,
 ) -> formatkit_core::Result<Option<IdentifiedNamespace>> {
@@ -875,7 +877,7 @@ pub fn early_namespace_probe_len(providers: impl IntoIterator<Item = NamespacePr
 /// aggregate caller budget; multiple complete parses remain an ambiguity.
 pub fn identify_and_mount_namespace_source(
     providers: impl IntoIterator<Item = NamespaceProvider>,
-    source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+    source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     prefix: &[u8],
     budget: &mut formatkit_core::ReadBudget,
 ) -> formatkit_core::Result<Option<IdentifiedNamespace>> {
@@ -913,7 +915,7 @@ pub fn identify_and_mount_namespace_source(
 /// all matching probes run through the ordinary ambiguity and error rules.
 pub fn identify_and_mount_namespace_source_early(
     providers: impl IntoIterator<Item = NamespaceProvider>,
-    source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+    source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     prefix: &[u8],
     budget: &mut formatkit_core::ReadBudget,
 ) -> formatkit_core::Result<Option<IdentifiedNamespace>> {
@@ -1015,7 +1017,7 @@ impl NamespaceProvider {
 
     pub fn mount_single(
         self,
-        source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         budget: &mut formatkit_core::ReadBudget,
     ) -> formatkit_core::Result<Box<dyn formatkit_core::IndexedNamespace>> {
         match self.mount {
@@ -1051,7 +1053,7 @@ impl NamespaceProvider {
 
     pub fn mount_work_runner(
         self,
-        source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         budget: &mut formatkit_core::WorkBudget,
         op: WorkRunnerOp,
         user: &mut WorkRunnerUser<'_>,
@@ -1070,7 +1072,7 @@ impl NamespaceProvider {
     /// every other shape keeps its established legacy callback.
     pub fn mount_single_work<'budget>(
         self,
-        source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         budget: &'budget mut formatkit_core::WorkBudget,
     ) -> formatkit_core::Result<WorkMountedNamespace<'budget>> {
         match self.mount {
@@ -1084,7 +1086,7 @@ impl NamespaceProvider {
 
     pub fn mount_selected_single(
         self,
-        source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         selector: &str,
         budget: &mut formatkit_core::ReadBudget,
     ) -> formatkit_core::Result<Box<dyn formatkit_core::IndexedNamespace>> {
@@ -1141,9 +1143,12 @@ pub(super) enum NamespaceCompositionError {
     Provider(FormatId),
 }
 
-type NamespaceCollisionGroups = std::collections::HashMap<
+type NamespaceCollisionGroups = crate::collections::HashMap<
     &'static str,
-    (NamespaceCollisionKind, std::collections::HashSet<FormatId>),
+    (
+        NamespaceCollisionKind,
+        crate::collections::HashSet<FormatId>,
+    ),
 >;
 
 fn valid_namespace_contract(
@@ -1400,12 +1405,12 @@ pub(super) fn validate_namespace_operations_with_completeness<'a>(
 pub(super) fn validate_namespace_composition(
     contracts: impl IntoIterator<Item = NamespaceMountContract>,
     providers: impl IntoIterator<Item = NamespaceProvider>,
-    capabilities: &std::collections::HashMap<FormatId, FormatCapabilities>,
-    detectable_requirements: &std::collections::HashMap<FormatId, DecoderRequirement>,
-    detectable_decoders: &std::collections::HashMap<FormatId, Option<&'static str>>,
-    embedded_contexts: &std::collections::HashMap<FormatId, super::ContextRequirement>,
+    capabilities: &crate::collections::HashMap<FormatId, FormatCapabilities>,
+    detectable_requirements: &crate::collections::HashMap<FormatId, DecoderRequirement>,
+    detectable_decoders: &crate::collections::HashMap<FormatId, Option<&'static str>>,
+    embedded_contexts: &crate::collections::HashMap<FormatId, super::ContextRequirement>,
 ) -> Result<(Vec<NamespaceMountContract>, Vec<NamespaceProvider>), NamespaceCompositionError> {
-    use std::collections::{HashMap, HashSet};
+    use crate::collections::{HashMap, HashSet};
 
     let mut namespace_ids = HashSet::new();
     let mut collision_groups = NamespaceCollisionGroups::new();

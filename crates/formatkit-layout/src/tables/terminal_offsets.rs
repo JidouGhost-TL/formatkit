@@ -4,6 +4,8 @@
 //! first data offset. The final word is a terminal offset equal to carrier
 //! EOF, so adjacent equal offsets deliberately describe empty ranges.
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, SourceRange};
 
 /// Failure while decoding the terminal-offset-table language.

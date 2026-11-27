@@ -10,8 +10,14 @@ description = "Configured binary fields, records, tables, chunks, IFF/RIFF, char
 keywords = ["binary", "layout", "parsing", "iff", "charmap"]
 categories = ["parsing", "encoding"]
 
+[features]
+default = ["std"]
+# Host services (`std::io`, files, process-wide caches). Without it the crate
+# is `no_std` + `alloc`.
+std = ["formatkit-core/std"]
+
 [dependencies]
-formatkit-core.workspace = true
+formatkit-core = { workspace = true, features = ["shift-jis"] }
 
 [dev-dependencies]
 proptest = "1"

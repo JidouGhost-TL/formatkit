@@ -1,6 +1,8 @@
 //! Deterministic DEFLATE encoders for formats whose native member storage is
 //! an ordinary zlib stream.
 
+use crate::prelude::*;
+
 /// Compress `data` as a zlib-wrapped DEFLATE stream at the library's normal
 /// level 9 compression.
 ///

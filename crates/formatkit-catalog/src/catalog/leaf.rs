@@ -1,8 +1,10 @@
 //! Typed, owner-provided operations for decoded leaf formats.
 
-use std::collections::HashSet;
-use std::fmt;
-use std::sync::Arc;
+use crate::prelude::*;
+
+use crate::collections::HashSet;
+use alloc::sync::Arc;
+use core::fmt;
 
 use formatkit_core::{Error, Image, Pcm, RangeSource, Result};
 
@@ -194,7 +196,7 @@ pub type LeafDecodeHandlerBudgetedSource = fn(
 /// behavior match [`LeafDecodeHandlerBudgetedSource`] exactly; only the input
 /// binding differs.
 pub type LeafDecodeHandlerBudgetedFile = fn(
-    &std::path::Path,
+    &crate::HostPath,
     LeafDecodeRequest,
     &mut formatkit_core::WorkBudget,
 ) -> Result<BudgetedLeafOutput>;
@@ -226,8 +228,8 @@ impl BudgetedLeafOutput {
     }
 }
 
-impl std::fmt::Debug for BudgetedLeafOutput {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for BudgetedLeafOutput {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BudgetedLeafOutput")
             .field("outputs", &self.outputs.len())
@@ -284,7 +286,7 @@ impl fmt::Display for LeafOperationCatalogError {
     }
 }
 
-impl std::error::Error for LeafOperationCatalogError {}
+impl core::error::Error for LeafOperationCatalogError {}
 
 #[derive(Debug, Clone)]
 pub struct LeafOperationCatalog {
@@ -294,7 +296,7 @@ pub struct LeafOperationCatalog {
 impl LeafOperationCatalog {
     pub fn new(
         providers: impl IntoIterator<Item = LeafOperationProvider>,
-    ) -> std::result::Result<Self, LeafOperationCatalogError> {
+    ) -> core::result::Result<Self, LeafOperationCatalogError> {
         let mut ids = HashSet::new();
         let mut providers = providers.into_iter().collect::<Vec<_>>();
         for provider in &providers {
@@ -474,7 +476,7 @@ impl LeafOperationCatalog {
     pub fn decode_budgeted_file(
         &self,
         id: FormatId,
-        path: &std::path::Path,
+        path: &crate::HostPath,
         request: Option<LeafDecodeRequest>,
         budget: &mut formatkit_core::WorkBudget,
     ) -> Result<Option<BudgetedLeafOutput>> {

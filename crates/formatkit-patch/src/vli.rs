@@ -6,6 +6,8 @@
 //! - Non-final bytes shift left by 7 and bias by subtracting 1 during encoding
 //!   (adding `shift` during decoding).
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, Reader, Result};
 
 /// Decode a bijective base-128 variable-length integer from a [`Reader`].

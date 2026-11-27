@@ -11,9 +11,15 @@ keywords = ["gltf", "glb", "3d", "mesh", "interchange"]
 categories = ["encoding", "graphics", "parsing"]
 
 [features]
-default = ["png"]
+default = ["std", "png"]
+# Host services (`std::io`, files, process-wide caches). Without it the crate
+# is `no_std` + `alloc`.
+std = ["formatkit-core/std", "formatkit-codec?/std", "formatkit-codec?/lzma"]
 png = ["dep:formatkit-codec"]
+# `transform` without `std`, through the pure-Rust `libm`.
+libm = ["dep:libm"]
 
 [dependencies]
-formatkit-core.workspace = true
-formatkit-codec = { workspace = true, optional = true }
+formatkit-core = { workspace = true, features = ["shift-jis"] }
+formatkit-codec = { workspace = true, optional = true, features = ["dds"] }
+libm = { version = "0.2", optional = true }

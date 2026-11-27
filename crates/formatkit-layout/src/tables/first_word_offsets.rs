@@ -3,6 +3,8 @@
 //! The table describes byte ranges only. Owners retain carrier limits, child
 //! validation, member names, source verification and writer capabilities.
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, SourceRange};
 
 /// Failure while decoding the strict first-word offset-table language.

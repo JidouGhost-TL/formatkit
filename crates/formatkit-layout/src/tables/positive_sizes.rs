@@ -84,7 +84,7 @@ impl PositiveSizeList {
         count: usize,
         first_offset: u64,
         source_len: u64,
-    ) -> std::result::Result<ValidatedPositiveSizes<'a>, PositiveSizeError> {
+    ) -> core::result::Result<ValidatedPositiveSizes<'a>, PositiveSizeError> {
         let table_bytes = count
             .checked_mul(SIZE_BYTES)
             .ok_or(PositiveSizeError::TableExtentOverflow)?;
@@ -230,7 +230,7 @@ mod tests {
         first_offset: u64,
         source_len: u64,
         alignment: SizeAlignment,
-    ) -> std::result::Result<Vec<PositiveSizeExtent>, PositiveSizeError> {
+    ) -> core::result::Result<Vec<PositiveSizeExtent>, PositiveSizeError> {
         let table_bytes = count
             .checked_mul(SIZE_BYTES)
             .ok_or(PositiveSizeError::TableExtentOverflow)?;

@@ -1,5 +1,8 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Write as _};
+use crate::prelude::*;
+
+use crate::collections::HashMap;
+use core::fmt::{self, Write as _};
+#[cfg(feature = "std")]
 use std::path::Path;
 
 use super::{Confidence, DecoderRequirement, FormatDescriptor, Probe};
@@ -26,18 +29,33 @@ impl Probe {
             } => (context
                 .extension
                 .is_some_and(|actual| actual.eq_ignore_ascii_case(extension))
-                && context.path.and_then(Path::parent).is_some_and(|parent| {
-                    let mut components = parent.components().rev();
-                    parent_suffix.rsplit('/').all(|expected| {
-                        components
-                            .next()
-                            .and_then(|component| component.as_os_str().to_str())
-                            .is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
-                    })
-                })
+                && parent_suffix_matches(context.path, parent_suffix)
                 && check(context.bytes))
             .then_some(Evidence::Structural { name }),
         }
+    }
+}
+
+/// Whether the path's parent directories end with `parent_suffix`.
+#[cfg(feature = "std")]
+fn parent_suffix_matches(path: Option<&Path>, parent_suffix: &str) -> bool {
+    path.and_then(Path::parent).is_some_and(|parent| {
+        let mut components = parent.components().rev();
+        parent_suffix.rsplit('/').all(|expected| {
+            components
+                .next()
+                .and_then(|component| component.as_os_str().to_str())
+                .is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+        })
+    })
+}
+
+/// Without `std` no context carries a path, so contextual probes never match.
+#[cfg(not(feature = "std"))]
+fn parent_suffix_matches(path: Option<&crate::HostPath>, _parent_suffix: &str) -> bool {
+    match path {
+        None => false,
+        Some(never) => match *never {},
     }
 }
 
@@ -47,7 +65,7 @@ impl Probe {
 pub struct DetectionContext<'a> {
     pub bytes: &'a [u8],
     pub extension: Option<&'a str>,
-    pub path: Option<&'a Path>,
+    pub path: Option<&'a crate::HostPath>,
     pub has_paired_data: bool,
     pub has_parent_address_space: bool,
     pub has_parent_siblings: bool,
@@ -73,6 +91,9 @@ impl<'a> DetectionContext<'a> {
     }
 
     /// Attach a path and derive its extension for role-scoped probes.
+    ///
+    /// Requires the `std` feature.
+    #[cfg(feature = "std")]
     pub fn with_path(mut self, path: &'a Path) -> Self {
         self.path = Some(path);
         self.extension = path.extension().and_then(|extension| extension.to_str());
@@ -214,7 +235,7 @@ impl fmt::Display for CatalogError {
     }
 }
 
-impl std::error::Error for CatalogError {}
+impl core::error::Error for CatalogError {}
 
 /// A validated, explicitly composed set of format descriptors.
 pub struct FormatCatalog {
@@ -279,7 +300,7 @@ impl FormatCatalog {
         available_decoders: Option<&[&str]>,
     ) -> Result<Self, CatalogError> {
         let mut conflict_index = ProbeConflictIndex::default();
-        let mut identities = HashSet::with_capacity(descriptors.len());
+        let mut identities = crate::collections::set_with_capacity(descriptors.len());
         for (index, descriptor) in descriptors.iter().enumerate() {
             if !descriptor.id.is_valid() {
                 return Err(CatalogError::InvalidFormatId(descriptor.id));
@@ -541,7 +562,7 @@ impl ProbeConflictIndex {
             _ => None,
         };
         match self.by_precedence.entry(descriptor.precedence) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
+            crate::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(match simple_magic {
                     Some((offset, bytes)) => {
                         let mut signatures = HashMap::new();
@@ -556,7 +577,7 @@ impl ProbeConflictIndex {
                 });
                 None
             }
-            std::collections::hash_map::Entry::Occupied(mut entry) => match entry.get_mut() {
+            crate::collections::hash_map::Entry::Occupied(mut entry) => match entry.get_mut() {
                 ProbeConflictGroup::SimpleMagic {
                     offset,
                     length,

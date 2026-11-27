@@ -6,6 +6,8 @@
 //! zero/sentinel skipping, optional EOF sentinel, offset base/unit scaling, and
 //! [`OffsetOrderPolicy`]) into a single `const`-constructible descriptor.
 
+use crate::prelude::*;
+
 use formatkit_core::Endian;
 
 use crate::spec::{

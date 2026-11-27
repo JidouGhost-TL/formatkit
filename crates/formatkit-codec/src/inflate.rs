@@ -10,6 +10,8 @@
 //! every write is bounded by `max_output_len`, so a hostile declared length
 //! cannot force an allocation.
 
+use crate::prelude::*;
+
 use formatkit_core::checksum::adler32;
 
 use crate::sliding_window::append_match;

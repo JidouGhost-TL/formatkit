@@ -11,6 +11,8 @@
 //! Header parsing, match-token grammar, trailing-flag policy, and carrier
 //! framing remain with the caller.
 
+use crate::prelude::*;
+
 use formatkit_core::{u16_at, u16_at_endian, u32_at, u32_at_endian, u8_at, Endian, Error, Result};
 
 use crate::sliding_window::{self, MatchError, RingBuffer};

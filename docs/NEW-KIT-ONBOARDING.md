@@ -30,9 +30,10 @@ formatkit-corpus-test = "0.1.17"
 Keep `formatkit-corpus` and `formatkit-corpus-test` in `[dev-dependencies]` so production builds do not pull in test harness dependencies.
 
 Optional features on individual crates:
-- `formatkit-core`: `shift-jis` (enabled by default; disable with `default-features = false` if you do not need Shift-JIS/CP932 tables).
-- `formatkit-codec`: `dds` (enabled by default; pulls in `formatkit-pixel`).
-- `formatkit-gltf`: `png` (enabled by default; pulls in `formatkit-codec`).
+- every crate except the corpus pair: `std` (enabled by default). With `default-features = false` the crate is `no_std` + `alloc`; see the README's `no_std` section for what needs `std`.
+- `formatkit-core`: `shift-jis` (enabled by default; keep it with `default-features = false, features = ["shift-jis"]`) and `libm` (float `math` helpers without `std`).
+- `formatkit-codec`: `dds` (enabled by default; pulls in `formatkit-pixel`) and `lzma` (enabled by default; LZMA-alone decoding through `lzma-rs`, implies `std`).
+- `formatkit-gltf`: `png` (enabled by default; pulls in `formatkit-codec`) and `libm` (`transform` without `std`).
 
 ### Option B: Umbrella `formatkit` Crate
 

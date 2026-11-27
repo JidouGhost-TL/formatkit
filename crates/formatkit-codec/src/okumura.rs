@@ -1,5 +1,7 @@
 //! Okumura ring-buffer LZSS decompression and compression.
 
+use crate::prelude::*;
+
 use crate::DecodeOutcome;
 
 /// Okumura LZSS parameters shared by every variant.

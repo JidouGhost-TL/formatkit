@@ -14,6 +14,16 @@ jobs:
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: python3 tools/check-public.py
+  no-std:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.1
+          components: clippy
+          targets: thumbv7em-none-eabi
+      - run: tools/check-no-std.sh
   windows:
     runs-on: windows-latest
     steps:

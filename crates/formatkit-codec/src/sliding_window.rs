@@ -1,5 +1,7 @@
 //! Bounded overlapping copies for codecs with explicit linear history.
 
+use crate::prelude::*;
+
 /// Copy a bounded byte match from explicit history and overlapping output.
 /// The caller chooses the count and owns stream framing and final-token policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +21,7 @@ impl core::fmt::Display for MatchError {
     }
 }
 
-impl std::error::Error for MatchError {}
+impl core::error::Error for MatchError {}
 
 /// Append `count` bytes copied from `distance` bytes back in `history || out`,
 /// supporting overlapping copies (such as `distance == 1` RLE-like runs) while
@@ -533,7 +535,7 @@ mod tests {
     #[test]
     fn hash_matcher_matches_brute_force_exactly() {
         let mut data = b"abcXabcYabcZ_PATTERN_1234_".repeat(8);
-        data.extend(std::iter::repeat_n(0xAA, 40));
+        data.extend(core::iter::repeat_n(0xAA, 40));
         data.extend_from_slice(b"abababababababab");
         let mut state = 0x1234_5678u32;
         for _ in 0..512 {

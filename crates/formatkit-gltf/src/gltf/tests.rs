@@ -8,7 +8,7 @@ use formatkit_core::Image;
 
 fn glb_json(glb: &[u8]) -> &str {
     let (json, _) = read_glb(glb).unwrap();
-    std::str::from_utf8(json).unwrap()
+    core::str::from_utf8(json).unwrap()
 }
 
 fn glb_bin(glb: &[u8]) -> &[u8] {
@@ -38,7 +38,7 @@ fn triangle_glb_round_trips_through_read_glb() {
     let glb = builder.finish_glb(vec![node]);
 
     let (json_bytes, bin_bytes) = read_glb(&glb).unwrap();
-    let json = std::str::from_utf8(json_bytes).unwrap();
+    let json = core::str::from_utf8(json_bytes).unwrap();
     assert!(json.contains("\"version\":\"2.0\""));
     assert!(json.contains("\"generator\":\"formatkit-gltf\""));
     assert!(json.contains("\"name\":\"tri\""));

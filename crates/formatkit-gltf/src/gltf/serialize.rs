@@ -1,3 +1,5 @@
+use crate::prelude::*;
+
 use super::{f, GltfBuilder, ImageRecord, IDENTITY_MATRIX};
 use crate::glb::write_glb;
 use crate::json::Json;
@@ -91,36 +93,36 @@ impl GltfBuilder {
             ));
         }
         if !self.meshes.is_empty() {
-            root.push(("meshes", Json::Arr(std::mem::take(&mut self.meshes))));
+            root.push(("meshes", Json::Arr(core::mem::take(&mut self.meshes))));
         }
         if !self.materials.is_empty() {
-            root.push(("materials", Json::Arr(std::mem::take(&mut self.materials))));
+            root.push(("materials", Json::Arr(core::mem::take(&mut self.materials))));
         }
         if !self.textures.is_empty() {
-            root.push(("textures", Json::Arr(std::mem::take(&mut self.textures))));
+            root.push(("textures", Json::Arr(core::mem::take(&mut self.textures))));
         }
         if !images.is_empty() {
             root.push(("images", Json::Arr(images)));
         }
         if !self.samplers.is_empty() {
-            root.push(("samplers", Json::Arr(std::mem::take(&mut self.samplers))));
+            root.push(("samplers", Json::Arr(core::mem::take(&mut self.samplers))));
         }
         if !self.animations.is_empty() {
             root.push((
                 "animations",
-                Json::Arr(std::mem::take(&mut self.animations)),
+                Json::Arr(core::mem::take(&mut self.animations)),
             ));
         }
         if !self.skins.is_empty() {
-            root.push(("skins", Json::Arr(std::mem::take(&mut self.skins))));
+            root.push(("skins", Json::Arr(core::mem::take(&mut self.skins))));
         }
         if !self.accessors.is_empty() {
-            root.push(("accessors", Json::Arr(std::mem::take(&mut self.accessors))));
+            root.push(("accessors", Json::Arr(core::mem::take(&mut self.accessors))));
         }
         if !self.buffer_views.is_empty() {
             root.push((
                 "bufferViews",
-                Json::Arr(std::mem::take(&mut self.buffer_views)),
+                Json::Arr(core::mem::take(&mut self.buffer_views)),
             ));
         }
         let mut buffer_fields = Vec::new();
@@ -138,7 +140,7 @@ impl GltfBuilder {
     /// Returns an error instead of panicking if the serialized GLB exceeds the
     /// 4 GiB `u32` container length limit.
     pub fn try_finish_glb(mut self, scene_roots: Vec<usize>) -> formatkit_core::Result<Vec<u8>> {
-        let images = std::mem::take(&mut self.images);
+        let images = core::mem::take(&mut self.images);
         let json = self.build_document_json(scene_roots, images, None);
         write_glb(json.as_bytes(), Some(&self.buffer))
     }

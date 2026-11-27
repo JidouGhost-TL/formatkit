@@ -4,6 +4,8 @@
 //! module owns only role resolution, source verification, bounded index I/O,
 //! and construction of the content-backed namespace.
 
+use crate::prelude::*;
+
 use formatkit_core::NamespaceEntry as Entry;
 use formatkit_core::{Error, IndexedNamespace, ReadBudget, Result, StoredRangeNamespaceLimits};
 
@@ -81,8 +83,8 @@ pub fn mount_selected(
 }
 
 fn mount_sources(
-    directory: std::sync::Arc<dyn formatkit_core::RangeSource>,
-    content: std::sync::Arc<dyn formatkit_core::RangeSource>,
+    directory: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
+    content: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     max_directory_bytes: u64,
     directory_resource: &'static str,
     parse_index: impl FnOnce(&[u8], u64) -> Result<(Vec<Entry>, Vec<Vec<u8>>)>,

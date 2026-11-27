@@ -210,7 +210,7 @@
       "domain_aliases": ["stream copy", "extract bytes", "range copy"],
       "use_when": "Streaming raw byte ranges from a RangeSource to a caller sink without materializing the whole range.",
       "avoid_when": "Extracting an archive member through IndexedNamespace (use formatkit_archive::extract).",
-      "feature_gate": null
+      "feature_gate": "formatkit-core/std (default)"
     },
     {
       "crate": "formatkit-core",
@@ -620,7 +620,7 @@
       "domain_aliases": ["LZMA", "LZMA-Alone", "lzma1"],
       "use_when": "Decompressing LZMA-Alone streams with explicit output caps.",
       "avoid_when": "Container uses XZ or LZMA2 framing.",
-      "feature_gate": "formatkit/codec"
+      "feature_gate": "formatkit/codec; decompression needs formatkit-codec/lzma (default)"
     },
     {
       "crate": "formatkit-codec",
@@ -840,7 +840,7 @@
       "domain_aliases": ["archive extract", "member select", "stream extraction"],
       "use_when": "Selecting archive members by index or exact display name and streaming stored or decoded content to a Write sink.",
       "avoid_when": "You need recursive nested-archive traversal (use walk).",
-      "feature_gate": "formatkit/archive"
+      "feature_gate": "formatkit/archive; extract needs formatkit-archive/std (default)"
     },
     {
       "crate": "formatkit-archive",
@@ -1030,7 +1030,7 @@
       "domain_aliases": ["TRS decomposition", "basis normalization", "Shepperd quaternion", "matrix to quaternion"],
       "use_when": "Decomposing 3x3 linear transforms into glTF rotation quaternions and scales with caller-controlled degeneracy handling.",
       "avoid_when": "Basic fixed-point Q12 math or quaternion multiplication (use formatkit_core::math).",
-      "feature_gate": "formatkit/gltf"
+      "feature_gate": "formatkit/gltf; formatkit-gltf/std (default) or formatkit-gltf/libm"
     }
   ]
 }

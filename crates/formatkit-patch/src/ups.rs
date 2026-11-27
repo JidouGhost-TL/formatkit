@@ -10,6 +10,8 @@
 //!   - Target CRC-32 (ISO-HDLC)
 //!   - Patch CRC-32 (ISO-HDLC of all preceding patch bytes)
 
+use crate::prelude::*;
+
 use formatkit_core::{Crc32Params, Error, Reader, Result};
 
 use crate::vli::{decode_vli, encode_vli};

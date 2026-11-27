@@ -1,4 +1,15 @@
 //! Transform decomposition kernels shared by glTF exporters.
+//!
+//! These need the `std` or `libm` feature for `sqrt`; both give the correctly
+//! rounded IEEE result.
+
+#[cfg(feature = "std")]
+fn sqrtf(x: f32) -> f32 {
+    x.sqrt()
+}
+
+#[cfg(not(feature = "std"))]
+use libm::sqrtf;
 
 /// Caller policy for a zero or tiny basis-column length during TRS
 /// decomposition.
@@ -25,10 +36,11 @@ pub fn normalize_basis_columns(
     let mut scale = [0.0f32; 3];
     let mut rotation = [[0.0f32; 3]; 3];
     for column in 0..3 {
-        let length = (columns[column][0] * columns[column][0]
-            + columns[column][1] * columns[column][1]
-            + columns[column][2] * columns[column][2])
-            .sqrt();
+        let length = sqrtf(
+            columns[column][0] * columns[column][0]
+                + columns[column][1] * columns[column][1]
+                + columns[column][2] * columns[column][2],
+        );
         let (divisor, output_scale) = match policy {
             DegenerateColumnScale::PreserveExactZero => {
                 (if length == 0.0 { 1.0 } else { length }, length)
@@ -55,7 +67,7 @@ pub fn normalize_basis_columns(
 pub fn shepperd_quaternion_unnormalized(matrix: &[[f32; 3]; 3]) -> [f32; 4] {
     let trace = matrix[0][0] + matrix[1][1] + matrix[2][2];
     if trace > 0.0 {
-        let scale = 0.5 / (trace + 1.0).sqrt();
+        let scale = 0.5 / sqrtf(trace + 1.0);
         [
             (matrix[2][1] - matrix[1][2]) * scale,
             (matrix[0][2] - matrix[2][0]) * scale,
@@ -63,7 +75,7 @@ pub fn shepperd_quaternion_unnormalized(matrix: &[[f32; 3]; 3]) -> [f32; 4] {
             0.25 / scale,
         ]
     } else if matrix[0][0] > matrix[1][1] && matrix[0][0] > matrix[2][2] {
-        let scale = 2.0 * (1.0 + matrix[0][0] - matrix[1][1] - matrix[2][2]).sqrt();
+        let scale = 2.0 * sqrtf(1.0 + matrix[0][0] - matrix[1][1] - matrix[2][2]);
         [
             0.25 * scale,
             (matrix[0][1] + matrix[1][0]) / scale,
@@ -71,7 +83,7 @@ pub fn shepperd_quaternion_unnormalized(matrix: &[[f32; 3]; 3]) -> [f32; 4] {
             (matrix[2][1] - matrix[1][2]) / scale,
         ]
     } else if matrix[1][1] > matrix[2][2] {
-        let scale = 2.0 * (1.0 + matrix[1][1] - matrix[0][0] - matrix[2][2]).sqrt();
+        let scale = 2.0 * sqrtf(1.0 + matrix[1][1] - matrix[0][0] - matrix[2][2]);
         [
             (matrix[0][1] + matrix[1][0]) / scale,
             0.25 * scale,
@@ -79,7 +91,7 @@ pub fn shepperd_quaternion_unnormalized(matrix: &[[f32; 3]; 3]) -> [f32; 4] {
             (matrix[0][2] - matrix[2][0]) / scale,
         ]
     } else {
-        let scale = 2.0 * (1.0 + matrix[2][2] - matrix[0][0] - matrix[1][1]).sqrt();
+        let scale = 2.0 * sqrtf(1.0 + matrix[2][2] - matrix[0][0] - matrix[1][1]);
         [
             (matrix[0][2] + matrix[2][0]) / scale,
             (matrix[1][2] + matrix[2][1]) / scale,

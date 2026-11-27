@@ -10,8 +10,14 @@ description = "Format-neutral mounted namespace selection, extraction, traversal
 keywords = ["archive", "namespace", "extraction", "traversal", "binary"]
 categories = ["parsing", "filesystem"]
 
+[features]
+default = ["std"]
+# Host services (`std::io`, files, process-wide caches). Without it the crate
+# is `no_std` + `alloc`.
+std = ["formatkit-core/std", "formatkit-catalog/std", "thiserror/std"]
+
 [dependencies]
-formatkit-core.workspace = true
+formatkit-core = { workspace = true, features = ["shift-jis"] }
 formatkit-catalog.workspace = true
 thiserror.workspace = true
 

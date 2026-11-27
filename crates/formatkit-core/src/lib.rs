@@ -15,7 +15,61 @@
 //!   - [`text`]: fixed, prefixed, and NUL-terminated strings (plus optional Shift-JIS via `shift-jis`)
 //!   - [`topology`]: allocation-free triangle strip and fan iterators
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![deny(unsafe_code)]
+
+extern crate alloc;
+
+/// `alloc` types the `std` prelude would otherwise supply, so module code reads
+/// the same with and without the `std` feature.
+#[allow(unused_imports)]
+mod prelude {
+    pub(crate) use alloc::borrow::ToOwned;
+    pub(crate) use alloc::boxed::Box;
+    pub(crate) use alloc::string::{String, ToString};
+    pub(crate) use alloc::vec::Vec;
+    pub(crate) use alloc::{format, vec};
+}
+
+/// Hash collections with `std`; ordered `alloc` collections without it, so the
+/// crate needs no hashing dependency. Iteration order is never relied upon.
+#[allow(unused_imports)]
+mod collections {
+    #[cfg(not(feature = "std"))]
+    pub(crate) use alloc::collections::{
+        btree_map as hash_map, BTreeMap as HashMap, BTreeSet as HashSet,
+    };
+    #[cfg(feature = "std")]
+    pub(crate) use std::collections::{hash_map, HashMap, HashSet};
+
+    /// `HashMap::with_capacity`, or an empty ordered map without `std`.
+    #[cfg(feature = "std")]
+    #[allow(dead_code)]
+    pub(crate) fn map_with_capacity<K, V>(capacity: usize) -> HashMap<K, V> {
+        HashMap::with_capacity(capacity)
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[allow(dead_code)]
+    pub(crate) fn map_with_capacity<K, V>(_capacity: usize) -> HashMap<K, V> {
+        HashMap::new()
+    }
+
+    /// `HashSet::with_capacity`, or an empty ordered set without `std`.
+    #[cfg(feature = "std")]
+    #[allow(dead_code)]
+    pub(crate) fn set_with_capacity<T>(capacity: usize) -> HashSet<T> {
+        HashSet::with_capacity(capacity)
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[allow(dead_code)]
+    pub(crate) fn set_with_capacity<T>(_capacity: usize) -> HashSet<T> {
+        HashSet::new()
+    }
+}
+
+mod atomic_u64;
 
 mod error;
 pub use error::{Error, ErrorContext, Result, ResultExt};
@@ -65,26 +119,32 @@ pub use work_budget::{
 };
 
 mod resident_buffer;
+#[cfg(feature = "std")]
 mod source_copy;
 pub use resident_buffer::ResidentBuffer;
+#[cfg(feature = "std")]
 pub use source_copy::{copy_source_range, SourceCopyError};
 
 mod source_metadata;
 pub use source_metadata::{SourceMetadataReader, SourceMetadataWindow};
 
 mod range_source;
+#[cfg(feature = "std")]
+pub use range_source::FileRangeSource;
 pub use range_source::{
     read_exact_at, read_shared_exact_at, validate_exact_read_length, ArchiveMemberRangeSource,
     CompositeRangeSource, CompositeSegment, CoordinateMappingDescription,
     CoordinateSpaceDescription, ExactReadLengthMismatch, ExactReadLengthMismatchKind,
-    ExactReadRoute, FileRangeSource, MappingPrecision, MaterializationPolicy, MaterializedContent,
+    ExactReadRoute, MappingPrecision, MaterializationPolicy, MaterializedContent,
     MemoryRangeSource, ObjectPackRangeSource, RangeSource, ReadBudget,
     RevalidatedExactSliceErrorPolicy, RevalidatedExactSliceSource, SharedBytes, SliceRangeSource,
     SourceRange, StridedRangeSource, TransformedRangeSource,
 };
 
+#[cfg(feature = "std")]
 #[doc(hidden)]
 mod range_source_test_double;
+#[cfg(feature = "std")]
 #[doc(hidden)]
 pub use range_source_test_double::{InjectedError, RangeSourceTestDouble, ReadFault};
 

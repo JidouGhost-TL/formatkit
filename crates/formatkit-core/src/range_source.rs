@@ -5,10 +5,18 @@
 //! and can prove that both the held inode and its path still name the snapshot
 //! observed at open time.
 
+use crate::prelude::*;
+
+use alloc::sync::Arc;
+#[cfg(feature = "std")]
 use std::fs::{File, Metadata, OpenOptions};
+#[cfg(feature = "std")]
 use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(feature = "std")]
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+#[cfg(feature = "std")]
+use std::sync::Mutex;
+#[cfg(feature = "std")]
 use std::time::UNIX_EPOCH;
 
 use sha2::{Digest, Sha256};
@@ -27,8 +35,8 @@ pub struct SharedBytes {
     end: usize,
 }
 
-impl std::fmt::Debug for SharedBytes {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SharedBytes {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("SharedBytes")
             .field("range", &(self.start..self.end))
@@ -57,7 +65,7 @@ impl SharedBytes {
         }
     }
 
-    pub fn from_arc_range(storage: Arc<[u8]>, range: std::ops::Range<usize>) -> Result<Self> {
+    pub fn from_arc_range(storage: Arc<[u8]>, range: core::ops::Range<usize>) -> Result<Self> {
         if range.start > range.end || range.end > storage.len() {
             return Err(Error::Truncated {
                 offset: range.start,
@@ -96,7 +104,7 @@ impl SharedBytes {
         self.start == self.end
     }
 
-    pub fn slice(&self, range: std::ops::Range<usize>) -> Result<Self> {
+    pub fn slice(&self, range: core::ops::Range<usize>) -> Result<Self> {
         if range.start > range.end || range.end > self.len() {
             return Err(Error::Truncated {
                 offset: range.start,
@@ -123,7 +131,7 @@ impl AsRef<[u8]> for SharedBytes {
     }
 }
 
-impl std::ops::Deref for SharedBytes {
+impl core::ops::Deref for SharedBytes {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -236,8 +244,15 @@ pub struct CoordinateMappingDescription {
 /// Where a bounded materialization may be placed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaterializationPolicy {
-    Memory { max_bytes: u64 },
-    NewFile { path: PathBuf, max_bytes: u64 },
+    Memory {
+        max_bytes: u64,
+    },
+    /// A new host file (requires the `std` feature).
+    #[cfg(feature = "std")]
+    NewFile {
+        path: PathBuf,
+        max_bytes: u64,
+    },
 }
 
 /// A materialized snapshot and the digest that verifies its bytes.
@@ -247,6 +262,8 @@ pub enum MaterializedContent {
         bytes: Arc<[u8]>,
         sha256: String,
     },
+    /// A host file (requires the `std` feature).
+    #[cfg(feature = "std")]
     File {
         path: PathBuf,
         size: u64,
@@ -258,13 +275,16 @@ impl MaterializedContent {
     pub fn size(&self) -> u64 {
         match self {
             Self::Memory { bytes, .. } => bytes.len() as u64,
+            #[cfg(feature = "std")]
             Self::File { size, .. } => *size,
         }
     }
 
     pub fn sha256(&self) -> &str {
         match self {
-            Self::Memory { sha256, .. } | Self::File { sha256, .. } => sha256,
+            Self::Memory { sha256, .. } => sha256,
+            #[cfg(feature = "std")]
+            Self::File { sha256, .. } => sha256,
         }
     }
 }
@@ -274,7 +294,7 @@ impl MaterializedContent {
 pub struct ReadBudget {
     limit: Option<u64>,
     spent: u64,
-    bridge_identity: Option<std::sync::Arc<()>>,
+    bridge_identity: Option<alloc::sync::Arc<()>>,
 }
 
 impl Clone for ReadBudget {
@@ -307,7 +327,7 @@ impl ReadBudget {
         }
     }
 
-    pub(crate) fn bridged(limit: u64, identity: std::sync::Arc<()>) -> Self {
+    pub(crate) fn bridged(limit: u64, identity: alloc::sync::Arc<()>) -> Self {
         Self {
             limit: Some(limit),
             spent: 0,
@@ -315,10 +335,10 @@ impl ReadBudget {
         }
     }
 
-    pub(crate) fn has_bridge_identity(&self, identity: &std::sync::Arc<()>) -> bool {
+    pub(crate) fn has_bridge_identity(&self, identity: &alloc::sync::Arc<()>) -> bool {
         self.bridge_identity
             .as_ref()
-            .is_some_and(|current| std::sync::Arc::ptr_eq(current, identity))
+            .is_some_and(|current| alloc::sync::Arc::ptr_eq(current, identity))
     }
 
     pub const fn limit(&self) -> Option<u64> {
@@ -524,8 +544,9 @@ pub trait RangeSource: Send + Sync {
         budget: &mut ReadBudget,
     ) -> Result<MaterializedContent> {
         let limit = match policy {
-            MaterializationPolicy::Memory { max_bytes }
-            | MaterializationPolicy::NewFile { max_bytes, .. } => *max_bytes,
+            MaterializationPolicy::Memory { max_bytes } => *max_bytes,
+            #[cfg(feature = "std")]
+            MaterializationPolicy::NewFile { max_bytes, .. } => *max_bytes,
         };
         if self.size() > limit {
             return Err(Error::ResourceLimit {
@@ -545,6 +566,7 @@ pub trait RangeSource: Send + Sync {
                     sha256,
                 })
             }
+            #[cfg(feature = "std")]
             MaterializationPolicy::NewFile { path, .. } => {
                 let mut output = OpenOptions::new()
                     .create_new(true)
@@ -658,7 +680,7 @@ pub fn validate_exact_read_length(
     offset: u64,
     requested: u64,
     actual: usize,
-) -> std::result::Result<(), ExactReadLengthMismatch> {
+) -> core::result::Result<(), ExactReadLengthMismatch> {
     if (actual as u128) == u128::from(requested) {
         Ok(())
     } else {
@@ -877,8 +899,8 @@ pub struct TransformedRangeSource {
     recipe_identity: String,
 }
 
-impl std::fmt::Debug for TransformedRangeSource {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for TransformedRangeSource {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("TransformedRangeSource")
             .field("size", &self.bytes.len())
@@ -1046,6 +1068,7 @@ impl RangeSource for TransformedRangeSource {
     }
 }
 
+#[cfg(feature = "std")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileSignature {
     len: u64,
@@ -1067,11 +1090,12 @@ struct FileSignature {
 }
 
 // The only unsafe platform boundary is the audited Win32 identity query.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "std"))]
 #[allow(unsafe_code)]
 #[path = "windows_backing_identity.rs"]
 mod windows_backing_identity;
 
+#[cfg(feature = "std")]
 fn file_signature(file: &File, metadata: &Metadata) -> Result<FileSignature> {
     let modified_nanos = metadata
         .modified()
@@ -1118,6 +1142,9 @@ fn file_signature(file: &File, metadata: &Metadata) -> Result<FileSignature> {
 }
 
 /// One descriptor-pinned external file with path/inode revalidation.
+///
+/// Requires the `std` feature.
+#[cfg(feature = "std")]
 #[derive(Debug)]
 pub struct FileRangeSource {
     path: PathBuf,
@@ -1126,6 +1153,7 @@ pub struct FileRangeSource {
     coordinate_space: CoordinateSpaceDescription,
 }
 
+#[cfg(feature = "std")]
 impl FileRangeSource {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
@@ -1180,6 +1208,7 @@ impl FileRangeSource {
     }
 }
 
+#[cfg(feature = "std")]
 fn read_exact_instrumented(
     reader: &mut impl Read,
     mut output: &mut [u8],
@@ -1204,6 +1233,7 @@ fn read_exact_instrumented(
     Ok(())
 }
 
+#[cfg(feature = "std")]
 impl RangeSource for FileRangeSource {
     fn size(&self) -> u64 {
         self.signature.len
@@ -1304,8 +1334,8 @@ pub struct SliceRangeSource {
     coordinate_space: CoordinateSpaceDescription,
 }
 
-impl std::fmt::Debug for SliceRangeSource {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SliceRangeSource {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("SliceRangeSource")
             .field("source_start", &self.source_start)
@@ -1481,12 +1511,12 @@ pub struct RevalidatedExactSliceSource<P = ()> {
     policy: P,
 }
 
-impl<P> std::fmt::Debug for RevalidatedExactSliceSource<P> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<P> core::fmt::Debug for RevalidatedExactSliceSource<P> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("RevalidatedExactSliceSource")
             .field("slice", &self.slice)
-            .field("policy", &std::any::type_name::<P>())
+            .field("policy", &core::any::type_name::<P>())
             .finish_non_exhaustive()
     }
 }
@@ -1601,8 +1631,8 @@ pub struct CompositeSegment {
     length: u64,
 }
 
-impl std::fmt::Debug for CompositeSegment {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for CompositeSegment {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("CompositeSegment")
             .field("mapped", &self.source.is_some())
@@ -1658,8 +1688,8 @@ pub struct CompositeRangeSource {
     coordinate_space: CoordinateSpaceDescription,
 }
 
-impl std::fmt::Debug for CompositeRangeSource {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for CompositeRangeSource {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("CompositeRangeSource")
             .field("segments", &self.segments)
@@ -1827,8 +1857,8 @@ pub struct StridedRangeSource {
     recipe_identity: String,
 }
 
-impl std::fmt::Debug for StridedRangeSource {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for StridedRangeSource {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("StridedRangeSource")
             .field("source_start", &self.source_start)
@@ -1999,8 +2029,8 @@ mod work_tests;
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::{AtomicU64, Ordering};
     use std::fs;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
     use crate::ErrorContext;
@@ -2061,7 +2091,7 @@ mod tests {
             requested: u64,
             behavior: ExactReadBehavior,
             budget: &mut ReadBudget,
-        ) -> Result<std::ops::Range<usize>> {
+        ) -> Result<core::ops::Range<usize>> {
             self.requested_bytes.fetch_add(requested, Ordering::SeqCst);
             budget.charge(requested)?;
             let returned = Self::returned_length(behavior, requested)?;

@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+use crate::prelude::*;
+
 use crate::{RangeSource, Result, WorkBudget};
 
 /// Bounded streaming chunk size (64 KiB, aligned to 4 bytes).

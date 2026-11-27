@@ -11,15 +11,15 @@ repository = "https://github.com/JidouGhost-TL/formatkit"
 readme = "README.md"
 
 [workspace.dependencies]
-thiserror = "1"
-formatkit-core = { path = "crates/formatkit-core", version = "=0.1.17" }
-formatkit-layout = { path = "crates/formatkit-layout", version = "=0.1.17" }
-formatkit-runtime = { path = "crates/formatkit-runtime", version = "=0.1.17" }
-formatkit-corpus = { path = "crates/formatkit-corpus", version = "=0.1.17" }
-formatkit-corpus-test = { path = "crates/formatkit-corpus-test", version = "=0.1.17" }
-formatkit-catalog = { path = "crates/formatkit-catalog", version = "=0.1.17" }
-formatkit-pixel = { path = "crates/formatkit-pixel", version = "=0.1.17" }
-formatkit-codec = { path = "crates/formatkit-codec", version = "=0.1.17" }
-formatkit-archive = { path = "crates/formatkit-archive", version = "=0.1.17" }
-formatkit-patch = { path = "crates/formatkit-patch", version = "=0.1.17" }
-formatkit-gltf = { path = "crates/formatkit-gltf", version = "=0.1.17" }
+thiserror = { version = "2", default-features = false }
+formatkit-core = { path = "crates/formatkit-core", version = "=0.1.17", default-features = false }
+formatkit-layout = { path = "crates/formatkit-layout", version = "=0.1.17", default-features = false }
+formatkit-runtime = { path = "crates/formatkit-runtime", version = "=0.1.17", default-features = false }
+formatkit-corpus = { path = "crates/formatkit-corpus", version = "=0.1.17", default-features = false }
+formatkit-corpus-test = { path = "crates/formatkit-corpus-test", version = "=0.1.17", default-features = false }
+formatkit-catalog = { path = "crates/formatkit-catalog", version = "=0.1.17", default-features = false }
+formatkit-pixel = { path = "crates/formatkit-pixel", version = "=0.1.17", default-features = false }
+formatkit-codec = { path = "crates/formatkit-codec", version = "=0.1.17", default-features = false }
+formatkit-archive = { path = "crates/formatkit-archive", version = "=0.1.17", default-features = false }
+formatkit-patch = { path = "crates/formatkit-patch", version = "=0.1.17", default-features = false }
+formatkit-gltf = { path = "crates/formatkit-gltf", version = "=0.1.17", default-features = false }

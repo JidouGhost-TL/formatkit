@@ -103,8 +103,8 @@ fn three_provider() -> RoleBoundNamespaceProvider {
     }
 }
 
-fn memory_source(byte: u8) -> std::sync::Arc<dyn formatkit_core::RangeSource> {
-    std::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
+fn memory_source(byte: u8) -> alloc::sync::Arc<dyn formatkit_core::RangeSource> {
+    alloc::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
         vec![byte; 16],
         "role",
     ))

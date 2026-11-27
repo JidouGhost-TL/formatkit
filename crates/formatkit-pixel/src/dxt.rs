@@ -1,4 +1,6 @@
 //! S3TC blocks and contiguous channel-mask decoding, independent of containers.
+use crate::prelude::*;
+
 use formatkit_core::{Error, Result};
 
 #[cfg(test)]

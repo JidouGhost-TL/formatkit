@@ -7,6 +7,8 @@
 //! CRC-16 checks for both sides, so malformed streams can be rejected without
 //! accepting a magic-only guess.
 
+use crate::prelude::*;
+
 use formatkit_core::MsbInterleavedBitReader;
 
 const HEADER_LEN: usize = 18;

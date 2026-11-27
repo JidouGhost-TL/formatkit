@@ -1,3 +1,5 @@
+use crate::prelude::*;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
     pub width: u32,

@@ -179,6 +179,9 @@ impl Matrix {
     /// floating sine and rounded to the `4096` fixed-point grid — exact for the
     /// axis-aligned angles the golden tests assert (0°, 90°) and a close
     /// approximation elsewhere; translation and scale are exact integers.
+    ///
+    /// Requires the `std` or `libm` feature.
+    #[cfg(any(feature = "std", feature = "libm"))]
     #[allow(clippy::needless_range_loop)] // fixed-size matrix index math
     pub fn from_trs(rot: [i32; 3], scale: [i16; 3], trans: [i32; 3]) -> Matrix {
         let (sx, cx) = fixed_turn_sin_cos(rot[0]);
@@ -223,11 +226,14 @@ impl Matrix {
 /// Evaluation remains in `f64` and each component is rounded independently to
 /// the fixed grid. This is the shared console-animation convention, not a
 /// general radians API or a lookup-table approximation.
+///
+/// Requires the `std` or `libm` feature.
+#[cfg(any(feature = "std", feature = "libm"))]
 pub fn fixed_turn_sin_cos(angle: i32) -> (i32, i32) {
     let turns = angle as f64 / ONE as f64;
     let rad = turns * core::f64::consts::TAU;
-    let s = (rad.sin() * ONE as f64).round() as i32;
-    let c = (rad.cos() * ONE as f64).round() as i32;
+    let s = float::round(float::sin(rad) * ONE as f64) as i32;
+    let c = float::round(float::cos(rad) * ONE as f64) as i32;
     (s, c)
 }
 
@@ -254,16 +260,20 @@ pub fn quaternion_multiply(left: [f32; 4], right: [f32; 4]) -> [f32; 4] {
 /// console runtimes disagree on whether tiny but nonzero quaternions survive.
 /// Non-finite lengths take the fallback because the comparison is false,
 /// matching both adopted owners.
+///
+/// Requires the `std` or `libm` feature.
+#[cfg(any(feature = "std", feature = "libm"))]
 pub fn normalize_quaternion(
     quaternion: [f32; 4],
     minimum_length: f32,
     fallback: [f32; 4],
 ) -> [f32; 4] {
-    let length = (quaternion[0] * quaternion[0]
-        + quaternion[1] * quaternion[1]
-        + quaternion[2] * quaternion[2]
-        + quaternion[3] * quaternion[3])
-        .sqrt();
+    let length = float::sqrtf(
+        quaternion[0] * quaternion[0]
+            + quaternion[1] * quaternion[1]
+            + quaternion[2] * quaternion[2]
+            + quaternion[3] * quaternion[3],
+    );
     if length > minimum_length {
         [
             quaternion[0] / length,
@@ -276,9 +286,46 @@ pub fn normalize_quaternion(
     }
 }
 
+/// Float functions from `std` when it is enabled, otherwise from `libm`.
+#[cfg(any(feature = "std", feature = "libm"))]
+mod float {
+    #[cfg(feature = "std")]
+    pub(super) fn sin(x: f64) -> f64 {
+        x.sin()
+    }
+    #[cfg(feature = "std")]
+    pub(super) fn cos(x: f64) -> f64 {
+        x.cos()
+    }
+    #[cfg(feature = "std")]
+    pub(super) fn round(x: f64) -> f64 {
+        x.round()
+    }
+    #[cfg(feature = "std")]
+    pub(super) fn sqrtf(x: f32) -> f32 {
+        x.sqrt()
+    }
+    #[cfg(not(feature = "std"))]
+    pub(super) use libm::{cos, round, sin, sqrtf};
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `libm` route used without `std` gives the same fixed-point table.
+    #[cfg(feature = "libm")]
+    #[test]
+    fn libm_sin_cos_matches_std_for_every_turn_fraction() {
+        for angle in -8192..=8192 {
+            let rad = angle as f64 / ONE as f64 * core::f64::consts::TAU;
+            let libm = (
+                libm::round(libm::sin(rad) * ONE as f64) as i32,
+                libm::round(libm::cos(rad) * ONE as f64) as i32,
+            );
+            assert_eq!(fixed_turn_sin_cos(angle), libm, "angle {angle}");
+        }
+    }
 
     #[test]
     fn q12_i16_float_conversion_matches_the_owner_expression_exhaustively() {

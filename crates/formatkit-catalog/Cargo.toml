@@ -10,8 +10,14 @@ description = "Open format identities, detection catalogs and executable operati
 keywords = ["format", "catalog", "detection", "registry", "binary"]
 categories = ["parsing", "data-structures"]
 
+[features]
+default = ["std"]
+# Host services (`std::io`, files, process-wide caches). Without it the crate
+# is `no_std` + `alloc`.
+std = ["formatkit-core/std"]
+
 [dependencies]
-formatkit-core.workspace = true
+formatkit-core = { workspace = true, features = ["shift-jis"] }
 
 [dev-dependencies]
 proptest = "1"

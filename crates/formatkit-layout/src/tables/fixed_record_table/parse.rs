@@ -1,5 +1,7 @@
 //! Checked zero-allocation iterator and parsers for fixed-stride record tables.
 
+use crate::prelude::*;
+
 use crate::spec::{checked_align_up_multiple_u64, IntFieldSpec, LayoutError};
 
 use super::spec::{

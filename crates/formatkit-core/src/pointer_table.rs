@@ -1,5 +1,7 @@
 //! Platform-neutral scanner for contiguous aligned 32-bit address tables.
 
+use crate::prelude::*;
+
 use crate::Endian;
 
 /// A contiguous, 4-byte-aligned run of 32-bit pointers into a bounded address space.

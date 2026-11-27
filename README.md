@@ -7,7 +7,9 @@ source access, mounted archive services, format catalogs, runtime composition,
 pixel mechanics, selected compression codecs, binary patches and specification-driven corpus testing. Format owners retain
 their grammars, validation policies, diagnostics and read/write capabilities.
 
-The libraries use the Rust standard library and require Rust 1.94.1 or newer.
+The libraries require Rust 1.94.1 or newer. By default they use the Rust standard
+library; every crate except the corpus pair also builds `no_std` + `alloc` (see
+[`no_std`](#no_std)).
 No platform catalog, game assets or implicit corpus location is included.
 
 ```rust
@@ -18,7 +20,7 @@ fn read_tag(bytes: &[u8]) -> Result<u32> {
 }
 ```
 
-The umbrella package enables `core`, `layout`, `catalog` and `runtime` with `default = []`
+The umbrella package enables `core`, `layout`, `catalog` and `runtime` with `default = ["std"]`
 (no optional crates enabled by default). Archive, pixel, codec, patch, gltf and corpus re-exports
 are opt-in via the `archive`, `pixel`, `codec`, `patch`, `gltf` and `corpus` features. Individual
 packages can also be consumed directly without the umbrella.
@@ -34,7 +36,7 @@ packages can also be consumed directly without the umbrella.
 
 | Package | Responsibility |
 | --- | --- |
-| `formatkit` | Umbrella re-export crate (`default = []`; optional `archive`, `pixel`, `codec`, `patch`, `gltf`, `corpus` features) |
+| `formatkit` | Umbrella re-export crate (`default = ["std"]`; optional `archive`, `pixel`, `codec`, `patch`, `gltf`, `corpus` features) |
 | `formatkit-core` | Checked bytes/bits, sources, budgets, errors, images, PCM/WAV reader & writer (with `fact` and `smpl` loops), `checksum`, `bcd`, `math`, `topology`, `pointer_table`, `padding`, and optional Shift-JIS text |
 | `formatkit-layout` | Configured fields, records, declarative `spec` (`IntFieldSpec`, `OffsetBase`, `PackPolicy`), `tables`, `chunks`, `marker_scan`, `iff`, `charmap`, ranges, resident edits, symmetric `pack_*` writers, and `offset_graph` exact rewrites |
 | `formatkit-catalog` | Open typed identities, detection catalogs and executable operation contracts |
@@ -53,6 +55,46 @@ archive and runtime depend on catalog and core. `formatkit-core` also gates its
 Shift-JIS/CP932 conversion tables behind a default-enabled `shift-jis` feature.
 Corpus discovery has no dependencies, and the golden-test harness is opt-in.
 
+## `no_std`
+
+Every library crate except `formatkit-corpus` and `formatkit-corpus-test` has a
+default `std` feature. With `default-features = false` it is `no_std` + `alloc`
+and builds for bare-metal targets such as `thumbv7em-none-eabi`. Enabling `std`
+adds API and never changes the behaviour of the rest. What needs `std`:
+
+- `formatkit-core`: `FileRangeSource`, `MaterializationPolicy::NewFile` /
+  `MaterializedContent::File`, `copy_source_range` / `SourceCopyError`,
+  `Pcm::write_wav`, `WorkBudget::read_external_exact_into` and the
+  `RangeSourceTestDouble` test helpers. Without `std`, Shift-JIS encoding scans
+  the decode tables instead of caching a reverse table (same results), and
+  `math::{fixed_turn_sin_cos, normalize_quaternion, Matrix::from_trs}` need the
+  `libm` feature.
+- `formatkit-catalog`: `DetectionContext::with_path`. `HostPath` is
+  `std::path::Path` with `std` and an uninhabited stand-in without it, so path
+  fields keep their shape but can only be `None`.
+- `formatkit-runtime`: `ResidentWriteOutput::write_to` and `ResidentWriteError`.
+- `formatkit-archive`: `extract`.
+- `formatkit-codec`: `lzma_alone_decompress_with_limit`, behind the default `lzma`
+  feature (it uses `lzma-rs`, which needs `std`).
+- `formatkit-gltf`: `transform` needs `std` or the `libm` feature.
+
+Hash maps and sets are `std`'s with `std` and `alloc`'s B-tree collections without
+it; no result depends on their iteration order. Forward `std` to the formatkit
+crates you depend on:
+
+```toml
+[features]
+default = ["std"]
+std = ["formatkit-core/std", "formatkit-layout/std"]
+
+[dependencies]
+formatkit-core = { version = "0.1", default-features = false, features = ["shift-jis"] }
+formatkit-layout = { version = "0.1", default-features = false }
+```
+
+`tools/check-no-std.sh` builds each crate, with every combination of its other
+features, for `thumbv7em-none-eabi`.
+
 ## Verification
 
 Ordinary tests use synthetic data and temporary files:
@@ -60,6 +102,7 @@ Ordinary tests use synthetic data and temporary files:
 ```sh
 cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+tools/check-no-std.sh
 ```
 
 Real corpus data remains external. Configure `FORMATKIT_CORPUS_DIR` explicitly

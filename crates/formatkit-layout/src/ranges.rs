@@ -1,6 +1,8 @@
 //! Checked arithmetic for relationships among layout ranges.
 
-use std::ops::Range;
+use crate::prelude::*;
+
+use core::ops::Range;
 
 use formatkit_core::SourceRange;
 

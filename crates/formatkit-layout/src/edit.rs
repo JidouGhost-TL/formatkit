@@ -1,5 +1,7 @@
 //! Bounded byte replacement mechanics for resident layouts.
 
+use crate::prelude::*;
+
 use formatkit_core::{bytes_at, bytes_at_mut, Error, Result, SourceRange};
 
 /// Failure while applying already-authorized same-size replacements.
@@ -38,7 +40,7 @@ pub enum SameSizeSpliceError {
 pub fn same_size_splice<'a>(
     bytes: &[u8],
     edits: impl IntoIterator<Item = (SourceRange, &'a [u8])>,
-) -> std::result::Result<Vec<u8>, SameSizeSpliceError> {
+) -> core::result::Result<Vec<u8>, SameSizeSpliceError> {
     let mut validated = Vec::new();
     for (edit, (extent, replacement)) in edits.into_iter().enumerate() {
         let actual = replacement.len() as u64;

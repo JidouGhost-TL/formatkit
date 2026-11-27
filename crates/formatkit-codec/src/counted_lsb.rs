@@ -10,6 +10,8 @@
 //! Explicit history contains known bytes immediately preceding output; no
 //! initialized ring or implicit fill is assumed. Copies can overlap output.
 //! Scanning validates the same commands without allocating decoded output.
+use crate::prelude::*;
+
 use formatkit_core::{
     u8_at, Error, LsbInterleavedBitReader, Result, RetainedResidentPermit, WorkBudget,
     WorkResource as R,

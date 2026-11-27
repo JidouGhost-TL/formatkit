@@ -5,6 +5,8 @@
 //! chain. Within a chain each level halves both extents (flooring at 1), and
 //! block-compressed levels never shrink below one 4×4 block.
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, Image, Result};
 use formatkit_pixel::{
     decode_dxt, decode_masked, is_contiguous, mip_extent, rgb565_to_rgba, ChannelMasks, DxtFormat,
@@ -843,11 +845,11 @@ fn encode_color_block(pixels: &[[u8; 4]; 16], punchthrough: bool) -> [u8; 8] {
 fn order_color_endpoints(mut a: u16, mut b: u16, transparent: bool) -> (u16, u16) {
     if transparent {
         if a > b {
-            std::mem::swap(&mut a, &mut b);
+            core::mem::swap(&mut a, &mut b);
         }
     } else {
         if a < b {
-            std::mem::swap(&mut a, &mut b);
+            core::mem::swap(&mut a, &mut b);
         }
         if a == b {
             if a < u16::MAX {
@@ -1016,7 +1018,7 @@ mod tests {
 
         let mut payload = Vec::new();
         for face in 0..6u8 {
-            payload.extend(std::iter::repeat_n(face, 16));
+            payload.extend(core::iter::repeat_n(face, 16));
         }
         let mut f = file(4, 4, 2, b"DXT1", &payload);
         f[0x70..0x74].copy_from_slice(&(DDSCAPS2_CUBEMAP | DDSCAPS2_CUBEMAP_FACES).to_le_bytes());

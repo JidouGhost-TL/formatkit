@@ -30,13 +30,67 @@
 //! - [`ModuleState::Legacy`] rows preserve older compatibility projections during
 //!   migration without contributing operations to strict lookup.
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 
-use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::fmt;
+extern crate alloc;
+
+/// `alloc` types the `std` prelude would otherwise supply, so module code reads
+/// the same with and without the `std` feature.
+#[allow(unused_imports)]
+mod prelude {
+    pub(crate) use alloc::borrow::ToOwned;
+    pub(crate) use alloc::boxed::Box;
+    pub(crate) use alloc::string::{String, ToString};
+    pub(crate) use alloc::vec::Vec;
+    pub(crate) use alloc::{format, vec};
+}
+
+/// Hash collections with `std`; ordered `alloc` collections without it, so the
+/// crate needs no hashing dependency. Iteration order is never relied upon.
+#[allow(unused_imports)]
+mod collections {
+    #[cfg(not(feature = "std"))]
+    pub(crate) use alloc::collections::{
+        btree_map as hash_map, BTreeMap as HashMap, BTreeSet as HashSet,
+    };
+    #[cfg(feature = "std")]
+    pub(crate) use std::collections::{hash_map, HashMap, HashSet};
+
+    /// `HashMap::with_capacity`, or an empty ordered map without `std`.
+    #[cfg(feature = "std")]
+    #[allow(dead_code)]
+    pub(crate) fn map_with_capacity<K, V>(capacity: usize) -> HashMap<K, V> {
+        HashMap::with_capacity(capacity)
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[allow(dead_code)]
+    pub(crate) fn map_with_capacity<K, V>(_capacity: usize) -> HashMap<K, V> {
+        HashMap::new()
+    }
+
+    /// `HashSet::with_capacity`, or an empty ordered set without `std`.
+    #[cfg(feature = "std")]
+    #[allow(dead_code)]
+    pub(crate) fn set_with_capacity<T>(capacity: usize) -> HashSet<T> {
+        HashSet::with_capacity(capacity)
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[allow(dead_code)]
+    pub(crate) fn set_with_capacity<T>(_capacity: usize) -> HashSet<T> {
+        HashSet::new()
+    }
+}
+
+use crate::collections::HashSet;
+use crate::prelude::*;
+use alloc::sync::Arc;
+use core::cmp::Ordering;
+use core::fmt;
+#[cfg(feature = "std")]
 use std::io::Write;
-use std::sync::Arc;
 
 use formatkit_catalog::catalog::{
     BoundInputs, CatalogError, EditMode, EmbeddedFormatSupport, FormatCatalog, FormatDescriptor,
@@ -89,7 +143,7 @@ pub type BoundNamespaceWorkAdapter = for<'budget> fn(
 ///
 /// Proof oracles deliberately do not appear here: composition resolves this
 /// selector against the contract and the contract remains their sole authority.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WriterProofSelector {
     Reproduction {
         scope: OperationScope,
@@ -171,12 +225,16 @@ pub struct ResidentWriteOutput<'budget> {
 }
 
 /// Failure while publishing a resident writer result.
+///
+/// Requires the `std` feature.
+#[cfg(feature = "std")]
 #[derive(Debug)]
 pub enum ResidentWriteError {
     Work(formatkit_core::Error),
     Write(std::io::Error),
 }
 
+#[cfg(feature = "std")]
 impl fmt::Display for ResidentWriteError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -186,8 +244,9 @@ impl fmt::Display for ResidentWriteError {
     }
 }
 
-impl std::error::Error for ResidentWriteError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+#[cfg(feature = "std")]
+impl core::error::Error for ResidentWriteError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Work(error) => Some(error),
             Self::Write(error) => Some(error),
@@ -195,6 +254,7 @@ impl std::error::Error for ResidentWriteError {
     }
 }
 
+#[cfg(feature = "std")]
 impl From<formatkit_core::Error> for ResidentWriteError {
     fn from(error: formatkit_core::Error) -> Self {
         Self::Work(error)
@@ -263,10 +323,13 @@ impl<'budget> ResidentWriteOutput<'budget> {
     /// can therefore leave both a partial destination and the same exact partial
     /// cumulative output spend. Interrupted writes are retried. This method does
     /// not flush, sync, hash, or otherwise publish the destination atomically.
+    ///
+    /// Requires the `std` feature.
+    #[cfg(feature = "std")]
     pub fn write_to(
         &mut self,
         output: &mut impl Write,
-    ) -> std::result::Result<(), ResidentWriteError> {
+    ) -> core::result::Result<(), ResidentWriteError> {
         self.resident.with_budget_typed(|budget| {
             budget.check_cancelled()?;
             let amount = self.bytes.len() as u64;
@@ -313,8 +376,8 @@ impl<'budget> ResidentWriteOutput<'budget> {
         operation: impl for<'operation> FnOnce(
             &'operation [u8],
             &'operation mut formatkit_core::WorkBudget,
-        ) -> std::result::Result<T, E>,
-    ) -> std::result::Result<T, E>
+        ) -> core::result::Result<T, E>,
+    ) -> core::result::Result<T, E>
     where
         E: From<formatkit_core::Error>,
     {
@@ -819,7 +882,7 @@ impl fmt::Display for ModuleCatalogError {
     }
 }
 
-impl std::error::Error for ModuleCatalogError {}
+impl core::error::Error for ModuleCatalogError {}
 
 impl From<CatalogError> for ModuleCatalogError {
     fn from(_: CatalogError) -> Self {
@@ -916,7 +979,7 @@ impl ModuleCatalog {
         for row in &rows {
             if !authority
                 .module(row.format)
-                .is_some_and(|canonical| std::ptr::eq(canonical, *row))
+                .is_some_and(|canonical| core::ptr::eq(canonical, *row))
             {
                 return Err(ModuleCatalogError::InvalidSupportCatalog);
             }

@@ -11,12 +11,18 @@ keywords = ["binary", "parsing", "checksum", "crc", "io"]
 categories = ["parsing", "encoding"]
 
 [features]
-default = ["shift-jis"]
+default = ["std", "shift-jis"]
+# Host services: files, `std::io` adapters, process-wide caches and `std` error
+# integration. Without it the crate is `no_std` + `alloc`.
+std = ["sha2/std", "thiserror/std"]
 shift-jis = []
+# Float helpers in `math` without `std`, through the pure-Rust `libm`.
+libm = ["dep:libm"]
 
 [dependencies]
 thiserror.workspace = true
-sha2 = "0.10"
+sha2 = { version = "0.10", default-features = false }
+libm = { version = "0.2", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

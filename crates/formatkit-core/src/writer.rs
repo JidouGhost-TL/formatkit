@@ -1,3 +1,5 @@
+use crate::prelude::*;
+
 #[derive(Default)]
 pub struct Writer {
     buf: Vec<u8>,

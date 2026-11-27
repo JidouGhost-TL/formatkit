@@ -1,3 +1,4 @@
+use core::sync::atomic::{AtomicUsize, Ordering};
 use formatkit_catalog::catalog::{
     ByteRole, CargoTestOracle, Confidence, ContextRequirement, DecoderRequirement,
     EmbeddedFormatSupport, FormatCapabilities, FormatDescriptor, FormatFamilyId, InputForm,
@@ -8,7 +9,6 @@ use formatkit_catalog::catalog::{
 };
 use formatkit_catalog::{Category, FormatId};
 use formatkit_core::{Error, IndexedNamespace, RangeSource, ReadBudget, Result};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 
@@ -1337,7 +1337,7 @@ fn descriptor_and_embedded_capabilities_must_agree() {
 }
 
 fn mount(
-    _source: std::sync::Arc<dyn RangeSource>,
+    _source: alloc::sync::Arc<dyn RangeSource>,
     _budget: &mut ReadBudget,
 ) -> Result<Box<dyn IndexedNamespace>> {
     Err(Error::Unsupported("test mount".into()))
@@ -1496,7 +1496,7 @@ fn namespace_read_bridge_is_a_selected_namespace_and_preserves_finite_io_refusal
         .is_some());
 
     let mut sources = SourceBindings::new();
-    let handle = sources.register(std::sync::Arc::new(MemoryRangeSource::new(
+    let handle = sources.register(alloc::sync::Arc::new(MemoryRangeSource::new(
         b"BRDG".to_vec(),
         "synthetic bridge source",
     )));

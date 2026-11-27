@@ -2,14 +2,14 @@ use super::super::*;
 use crate::{Category, FormatId};
 
 pub(super) fn rejecting_source_mounter(
-    _source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+    _source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     _budget: &mut formatkit_core::ReadBudget,
 ) -> formatkit_core::Result<Box<dyn formatkit_core::IndexedNamespace>> {
     Err(formatkit_core::Error::Unsupported("test provider".into()))
 }
 
 pub(super) fn rejecting_source_probe(
-    _source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+    _source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     _prefix: &[u8],
     _budget: &mut formatkit_core::ReadBudget,
 ) -> formatkit_core::Result<Option<Box<dyn formatkit_core::IndexedNamespace>>> {
@@ -24,7 +24,7 @@ pub(super) fn rejecting_pair_mounter(
 }
 
 pub(super) fn rejecting_selected_single_mounter(
-    _source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+    _source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
     _selector: &str,
     _budget: &mut formatkit_core::ReadBudget,
 ) -> formatkit_core::Result<Box<dyn formatkit_core::IndexedNamespace>> {

@@ -4,6 +4,8 @@
 //! complete member, including optional header fields, CRC-32 and ISIZE, while
 //! delegating the compressed body to the bounded raw DEFLATE decoder.
 
+use crate::prelude::*;
+
 use formatkit_core::checksum::crc32_iso_hdlc;
 
 use crate::{inflate_one_with_limit, DecodeOutcome};

@@ -48,6 +48,8 @@
 //! assert_eq!(summary.sample_count, 1);
 //! ```
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, Result};
 
 /// SoundFont 2.04 specification major version.

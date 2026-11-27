@@ -2,6 +2,8 @@
 //! are outside the nominal resident model. Allocators may over-reserve, so
 //! capacity is reconciled after allocation and before storage is published.
 
+use crate::prelude::*;
+
 use crate::{Error, Result, RetainedResidentPermit, WorkBudget, WorkResource};
 
 /// An initialized fixed-length byte buffer owning its resident reservation.

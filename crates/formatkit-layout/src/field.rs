@@ -856,7 +856,7 @@ impl<const N: usize> U16ArrayField<N> {
     /// Read the array from an arbitrary resident carrier.
     pub fn read(self, bytes: &[u8]) -> Result<[u16; N]> {
         let field = bytes_at(bytes, self.offset, self.width()?)?;
-        Ok(std::array::from_fn(|index| {
+        Ok(core::array::from_fn(|index| {
             let encoded = field[index * 2..index * 2 + 2].try_into().unwrap();
             match self.endian {
                 Endian::Little => u16::from_le_bytes(encoded),
@@ -877,7 +877,7 @@ impl<const N: usize> U16ArrayField<N> {
             .checked_add(width)
             .expect("u16 array end overflow");
         assert!(end <= WIDTH, "u16 array field exceeds record");
-        std::array::from_fn(|index| {
+        core::array::from_fn(|index| {
             let offset = self.offset + index * 2;
             let encoded = bytes[offset..offset + 2].try_into().unwrap();
             match self.endian {
@@ -944,7 +944,7 @@ impl<const N: usize> I16ArrayField<N> {
     /// Read the array from an arbitrary resident carrier.
     pub fn read(self, bytes: &[u8]) -> Result<[i16; N]> {
         let field = bytes_at(bytes, self.offset, self.width()?)?;
-        Ok(std::array::from_fn(|index| {
+        Ok(core::array::from_fn(|index| {
             let encoded = field[index * 2..index * 2 + 2].try_into().unwrap();
             match self.endian {
                 Endian::Little => i16::from_le_bytes(encoded),
@@ -965,7 +965,7 @@ impl<const N: usize> I16ArrayField<N> {
             .checked_add(width)
             .expect("i16 array end overflow");
         assert!(end <= WIDTH, "i16 array field exceeds record");
-        std::array::from_fn(|index| {
+        core::array::from_fn(|index| {
             let offset = self.offset + index * 2;
             let encoded = bytes[offset..offset + 2].try_into().unwrap();
             match self.endian {
@@ -1032,7 +1032,7 @@ impl<const N: usize> U32ArrayField<N> {
     /// Read the array from an arbitrary resident carrier.
     pub fn read(self, bytes: &[u8]) -> Result<[u32; N]> {
         let field = bytes_at(bytes, self.offset, self.width()?)?;
-        Ok(std::array::from_fn(|index| {
+        Ok(core::array::from_fn(|index| {
             let encoded = field[index * 4..index * 4 + 4].try_into().unwrap();
             match self.endian {
                 Endian::Little => u32::from_le_bytes(encoded),
@@ -1053,7 +1053,7 @@ impl<const N: usize> U32ArrayField<N> {
             .checked_add(width)
             .expect("u32 array end overflow");
         assert!(end <= WIDTH, "u32 array field exceeds record");
-        std::array::from_fn(|index| {
+        core::array::from_fn(|index| {
             let offset = self.offset + index * 4;
             let encoded = bytes[offset..offset + 4].try_into().unwrap();
             match self.endian {
@@ -1120,7 +1120,7 @@ impl<const N: usize> I32ArrayField<N> {
     /// Read the array from an arbitrary resident carrier.
     pub fn read(self, bytes: &[u8]) -> Result<[i32; N]> {
         let field = bytes_at(bytes, self.offset, self.width()?)?;
-        Ok(std::array::from_fn(|index| {
+        Ok(core::array::from_fn(|index| {
             let encoded = field[index * 4..index * 4 + 4].try_into().unwrap();
             match self.endian {
                 Endian::Little => i32::from_le_bytes(encoded),
@@ -1141,7 +1141,7 @@ impl<const N: usize> I32ArrayField<N> {
             .checked_add(width)
             .expect("i32 array end overflow");
         assert!(end <= WIDTH, "i32 array field exceeds record");
-        std::array::from_fn(|index| {
+        core::array::from_fn(|index| {
             let offset = self.offset + index * 4;
             let encoded = bytes[offset..offset + 4].try_into().unwrap();
             match self.endian {
@@ -1211,7 +1211,7 @@ impl<const N: usize> F32ArrayField<N> {
     /// Read the array from an arbitrary resident carrier.
     pub fn read(self, bytes: &[u8]) -> Result<[f32; N]> {
         let field = bytes_at(bytes, self.offset, self.width()?)?;
-        Ok(std::array::from_fn(|index| {
+        Ok(core::array::from_fn(|index| {
             let encoded = field[index * 4..index * 4 + 4].try_into().unwrap();
             match self.endian {
                 Endian::Little => f32::from_le_bytes(encoded),
@@ -1232,7 +1232,7 @@ impl<const N: usize> F32ArrayField<N> {
             .checked_add(width)
             .expect("float array end overflow");
         assert!(end <= WIDTH, "float array field exceeds record");
-        std::array::from_fn(|index| {
+        core::array::from_fn(|index| {
             let offset = self.offset + index * 4;
             let encoded = bytes[offset..offset + 4].try_into().unwrap();
             match self.endian {

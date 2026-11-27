@@ -1,5 +1,5 @@
-use std::mem::size_of;
-use std::sync::Arc;
+use alloc::sync::Arc;
+use core::mem::size_of;
 
 use formatkit_catalog::catalog::{
     BoundInputs, ByteInput, ByteRole, CargoTestOracle, FormatCapabilities, FormatDescriptor,
@@ -415,7 +415,7 @@ fn role_bound_operations_remain_strict_only_with_selective_projection() {
     let catalog = ModuleCatalog::with_namespace_projection([&THREE_MODULE], []).unwrap();
     assert!(catalog.operation(id).is_some());
     assert!(catalog.support().namespace_provider(id.format).is_none());
-    assert!(std::ptr::eq(
+    assert!(core::ptr::eq(
         catalog.operation(id).unwrap().input_schema,
         &THREE_SCHEMA
     ));

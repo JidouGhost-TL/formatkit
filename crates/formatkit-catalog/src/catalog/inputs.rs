@@ -1,10 +1,12 @@
 //! Finite input forms. Binding proves shape and operation identity, not owner semantics.
 
+use crate::prelude::*;
+
+use core::ops::Range;
 use formatkit_core::{
     Error, Result, RetainedResidentPermit, SourceBindings, SourceViewHandle, WorkBudget,
     WorkResource,
 };
-use std::ops::Range;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputCardinality {
@@ -446,7 +448,7 @@ impl RetainedSourceEvidence {
         resident: RetainedResidentPermit,
     ) -> Result<Self> {
         let capacity_bytes = (evidence.capacity() as u64)
-            .checked_mul(std::mem::size_of::<SourceEvidenceRange>() as u64)
+            .checked_mul(core::mem::size_of::<SourceEvidenceRange>() as u64)
             .ok_or_else(|| invalid("source evidence capacity overflows"))?;
         if resident.amount() != capacity_bytes {
             return Err(invalid(
@@ -465,7 +467,7 @@ impl RetainedSourceEvidence {
     }
 }
 
-impl std::ops::Deref for RetainedSourceEvidence {
+impl core::ops::Deref for RetainedSourceEvidence {
     type Target = [SourceEvidenceRange];
 
     fn deref(&self) -> &Self::Target {
@@ -561,7 +563,7 @@ impl<T> SourceProbeOutcome<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use alloc::sync::Arc;
 
     #[test]
     fn alternatives_reject_mixtures_ambiguity_and_foreign_handles() {

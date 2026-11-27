@@ -14,6 +14,8 @@
 //! 24-bit RGB ([`encode_pcx_rgba`]) and 256-color indexed
 //! ([`encode_pcx_indexed`]) images while enforcing `max_bytes`.
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, Image, Result};
 
 const PCX_HEADER_LEN: usize = 128;
@@ -609,7 +611,7 @@ mod tests {
 
         // 70x2 image exercises RLE runs longer than 63 and indices >= 0xC0.
         let mut indices = Vec::with_capacity(140);
-        indices.extend(std::iter::repeat_n(0xC0u8, 68));
+        indices.extend(core::iter::repeat_n(0xC0u8, 68));
         indices.push(0x01);
         indices.push(0xFF);
         for x in 0..70u8 {

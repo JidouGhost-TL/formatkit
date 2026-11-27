@@ -1,5 +1,7 @@
 //! IPS grammar and explicit patch application policy, using Formatkit readers.
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, ErrorContext, Reader, Result, Writer};
 
 /// Largest encodable offset or EOF size.

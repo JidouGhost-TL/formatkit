@@ -1,3 +1,5 @@
+use crate::prelude::*;
+
 use thiserror::Error;
 
 /// One structured frame describing where a leaf parse/decode error occurred.
@@ -18,8 +20,8 @@ pub enum ErrorContext {
     SourceRange { offset: u64, length: u64 },
 }
 
-impl std::fmt::Display for ErrorContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for ErrorContext {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Format(format) | Self::Component(format) => f.write_str(format),
             Self::ArchiveMember {
@@ -98,7 +100,7 @@ pub enum Error {
     Malformed(String),
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;
 
 impl Error {
     /// Attach one outer structured context frame while preserving the typed
@@ -121,7 +123,7 @@ impl Error {
 
     /// Structured frames from outermost to innermost.
     pub fn contexts(&self) -> impl Iterator<Item = &ErrorContext> {
-        std::iter::successors(Some(self), |error| match error {
+        core::iter::successors(Some(self), |error| match error {
             Self::Context { source, .. } => Some(source.as_ref()),
             _ => None,
         })

@@ -3,7 +3,7 @@
 /// An owner or caller declares its own static ID beside its registration. The
 /// catalog validates IDs when registrations are composed; it does not maintain
 /// a central list of format identities.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FormatId(&'static str);
 
 impl FormatId {
@@ -51,8 +51,8 @@ impl FormatId {
     }
 }
 
-impl std::fmt::Display for FormatId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for FormatId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(self.0)
     }
 }

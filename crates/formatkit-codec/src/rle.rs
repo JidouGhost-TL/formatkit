@@ -27,6 +27,8 @@
 //!
 //! [`TAG_RLE`]: crate::tagged_header::TAG_RLE
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, Result};
 
 pub use crate::tagged_header::TAG_RLE;
@@ -284,7 +286,7 @@ mod tests {
     fn tagged_rle_round_trips_with_exact_extent() {
         let mut data = vec![0xAA; 300];
         data.extend_from_slice(b"literal-run");
-        data.extend(std::iter::repeat_n(0x00, 2));
+        data.extend(core::iter::repeat_n(0x00, 2));
         data.extend((0..=255u8).cycle().take(400));
         let mut stream = encode_tagged_rle(&data).unwrap();
         assert_eq!(stream[0], TAG_RLE);
@@ -333,9 +335,9 @@ mod tests {
     fn byte_run3_round_trips_mixed_runs_and_literals() {
         let mut data = Vec::new();
         data.extend_from_slice(b"AB");
-        data.extend(std::iter::repeat_n(b'X', 150));
+        data.extend(core::iter::repeat_n(b'X', 150));
         data.extend_from_slice(b"CD");
-        data.extend(std::iter::repeat_n(b'Y', 3));
+        data.extend(core::iter::repeat_n(b'Y', 3));
         data.extend_from_slice(&(0u8..200).collect::<Vec<_>>());
 
         let encoded = encode_high_bit_rle(&data, HighBitRleConfig::BYTE_RUN3).unwrap();

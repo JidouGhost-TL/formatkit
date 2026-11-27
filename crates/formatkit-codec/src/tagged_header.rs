@@ -23,6 +23,8 @@
 //! assert_eq!((header.tag, header.decoded_size, header.header_len), (0x30, 0x01_2345, 4));
 //! ```
 
+use crate::prelude::*;
+
 use formatkit_core::{bytes_at, u32_at, Error, Result};
 
 /// Byte length of the compact tagged header (tag + 24-bit size).

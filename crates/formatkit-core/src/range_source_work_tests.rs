@@ -1,8 +1,8 @@
 use super::*;
 use crate::{WorkLimits, WorkResource};
-use std::collections::VecDeque;
+use alloc::collections::VecDeque;
+use core::sync::atomic::{AtomicU64, Ordering};
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 fn job() -> WorkBudget {
     WorkBudget::new(WorkLimits::unlimited())

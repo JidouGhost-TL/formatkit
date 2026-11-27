@@ -15,6 +15,8 @@
 //! `IDAT` payloads, and standard scanline filter types `0..=4`, returning an
 //! RGBA8 [`formatkit_core::Image`].
 
+use crate::prelude::*;
+
 use formatkit_core::checksum::Crc32IsoHdlc;
 use formatkit_core::{Error, Image, Result};
 
@@ -367,7 +369,7 @@ pub fn encode_rgba_png_with(
                     let sum = filter_scanline_into(filter_type, row, prev, 4, &mut candidate);
                     if sum < best_sum {
                         best_sum = sum;
-                        std::mem::swap(&mut best, &mut candidate);
+                        core::mem::swap(&mut best, &mut candidate);
                     }
                 }
                 raw.extend_from_slice(&best);
@@ -512,7 +514,7 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
     let mut seen_iend = false;
     let mut plte: Option<&[u8]> = None;
     let mut trns: Option<&[u8]> = None;
-    let mut idat_data: Option<std::borrow::Cow<'_, [u8]>> = None;
+    let mut idat_data: Option<alloc::borrow::Cow<'_, [u8]>> = None;
 
     while pos < bytes.len() {
         if bytes.len() - pos < 12 {
@@ -693,7 +695,7 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
                 }
                 seen_idat = true;
                 match &mut idat_data {
-                    None => idat_data = Some(std::borrow::Cow::Borrowed(data)),
+                    None => idat_data = Some(alloc::borrow::Cow::Borrowed(data)),
                     Some(existing) => existing.to_mut().extend_from_slice(data),
                 }
             }
@@ -887,7 +889,7 @@ pub fn decode_png_rgba(bytes: &[u8], max_pixels: u64) -> Result<Image> {
             }
             _ => unreachable!(),
         }
-        std::mem::swap(&mut prev_row, &mut cur_row);
+        core::mem::swap(&mut prev_row, &mut cur_row);
     }
 
     Image::try_new(width, height, rgba)

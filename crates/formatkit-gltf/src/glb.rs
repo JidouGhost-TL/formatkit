@@ -5,6 +5,8 @@
 //! ASCII spaces `0x20`), and an optional 4-byte-aligned `BIN\0` chunk (padded
 //! with zero bytes `0x00`).
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, Result};
 
 /// GLB magic header (`b"glTF"`, `0x46546C67` little-endian).

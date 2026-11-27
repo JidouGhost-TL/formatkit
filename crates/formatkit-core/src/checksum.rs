@@ -324,7 +324,7 @@ impl Crc32Params {
     pub fn compute_with_zeroed_range(
         self,
         bytes: &[u8],
-        zero_range: std::ops::Range<usize>,
+        zero_range: core::ops::Range<usize>,
     ) -> crate::Result<u32> {
         if zero_range.start > zero_range.end {
             return Err(crate::Error::InvalidField {
@@ -1132,7 +1132,7 @@ impl FoldChecksum {
 /// otherwise `f` is invoked on a temporary copy with `zero_range` filled with `0x00`.
 pub fn compute_with_zeroed_range<T, F>(
     bytes: &[u8],
-    zero_range: std::ops::Range<usize>,
+    zero_range: core::ops::Range<usize>,
     f: F,
 ) -> crate::Result<T>
 where
@@ -1300,7 +1300,7 @@ mod crc16_tests {
             Crc32Params::CRC32C.compute(&buf)
         );
         assert!(Crc32Params::ISO_HDLC
-            .compute_with_zeroed_range(&buf, std::ops::Range { start: 5, end: 3 })
+            .compute_with_zeroed_range(&buf, core::ops::Range { start: 5, end: 3 })
             .is_err());
         assert!(Crc32Params::ISO_HDLC
             .compute_with_zeroed_range(&buf, 0..9)
@@ -1588,7 +1588,7 @@ mod arithmetic_checksum_tests {
 
         // Reversed range is rejected.
         assert!(matches!(
-            compute_with_zeroed_range(&data, std::ops::Range { start: 4, end: 2 }, |_| Ok(())),
+            compute_with_zeroed_range(&data, core::ops::Range { start: 4, end: 2 }, |_| Ok(())),
             Err(Error::InvalidField {
                 what: "checksum zero range start",
                 value: 4

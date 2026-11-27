@@ -6,6 +6,8 @@
 //! is identical to interleaving the low `log2(short)` bits of `x` and `y` and
 //! placing the remaining high bits of the longer axis above them.
 
+use crate::prelude::*;
+
 use crate::PackError;
 
 /// Which coordinate supplies bit 0 of the interleaved Morton index.

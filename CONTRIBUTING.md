@@ -16,6 +16,11 @@ submitting a change, run:
 cargo fmt --all -- --check
 cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+tools/check-no-std.sh   # needs `rustup target add thumbv7em-none-eabi`
 ```
+
+Library code must build without `std`: use `core::`/`alloc::` paths, import
+`crate::prelude::*` for `Vec`, `String`, `Box`, `format!` and `vec!`, and put
+host I/O behind `#[cfg(feature = "std")]`.
 
 Contributions are licensed under MIT OR Apache-2.0, like the rest of the project.

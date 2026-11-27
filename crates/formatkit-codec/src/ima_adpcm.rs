@@ -44,6 +44,8 @@
 //! assert_eq!(again, block);
 //! ```
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, Result};
 
 /// IMA ADPCM step sizes, indexed by the step index `0..=88`.
@@ -391,7 +393,7 @@ pub fn encode_ima_adpcm_codes_exact(
 }
 
 fn set_bits(mut mask: u128) -> impl Iterator<Item = u8> {
-    std::iter::from_fn(move || {
+    core::iter::from_fn(move || {
         if mask == 0 {
             return None;
         }

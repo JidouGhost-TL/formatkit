@@ -6,6 +6,8 @@
 //! helpers provide strict byte classification, validation, and UTF-8 <->
 //! Shift-JIS / CP932 / JIS X 0201 conversion without external dependencies.
 
+use crate::prelude::*;
+
 use crate::{Error, Result};
 
 #[cfg(feature = "shift-jis")]

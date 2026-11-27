@@ -171,10 +171,10 @@ fn namespace_contracts_enforce_source_shape_and_executable_collision_evidence() 
             .strategy,
         NamespaceMountStrategy::MetadataOnly
     );
-    let directory: std::sync::Arc<dyn formatkit_core::RangeSource> = std::sync::Arc::new(
+    let directory: alloc::sync::Arc<dyn formatkit_core::RangeSource> = alloc::sync::Arc::new(
         formatkit_core::MemoryRangeSource::new(Vec::new(), "directory"),
     );
-    let content: std::sync::Arc<dyn formatkit_core::RangeSource> = std::sync::Arc::new(
+    let content: alloc::sync::Arc<dyn formatkit_core::RangeSource> = alloc::sync::Arc::new(
         formatkit_core::MemoryRangeSource::new(Vec::new(), "content"),
     );
     let reversed = PairedNamespaceSources::for_input(
@@ -217,11 +217,11 @@ fn namespace_contracts_enforce_source_shape_and_executable_collision_evidence() 
     assert!(selected_catalog
         .capability_markdown()
         .contains("verified@selected-paired-sources(index,pack;pack-path);metadata-only"));
-    let directory = std::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
+    let directory = alloc::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
         Vec::new(),
         "directory",
     ));
-    let content = std::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
+    let content = alloc::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
         Vec::new(),
         "content",
     ));
@@ -303,7 +303,7 @@ fn namespace_contracts_enforce_source_shape_and_executable_collision_evidence() 
     assert!(hybrid_catalog.capability_markdown().contains(
         "verified@single-or-selected-paired-sources(pack|index,physical-pack;pack-path);metadata-only"
     ));
-    let source = std::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
+    let source = alloc::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
         Vec::new(),
         "synthetic-id-2e6a2810b7c3",
     ));
@@ -318,11 +318,11 @@ fn namespace_contracts_enforce_source_shape_and_executable_collision_evidence() 
         .expect("hybrid single source unexpectedly succeeded")
         .to_string()
         .contains("test provider"));
-    let directory = std::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
+    let directory = alloc::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
         Vec::new(),
         "directory",
     ));
-    let content = std::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
+    let content = alloc::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
         Vec::new(),
         "content",
     ));
@@ -548,10 +548,9 @@ fn selected_single_source_requires_its_selector_on_every_mount_route() {
     );
 
     let mut sources = formatkit_core::SourceBindings::new();
-    let handle = sources.register(std::sync::Arc::new(formatkit_core::MemoryRangeSource::new(
-        vec![0u8; 4],
-        "carrier",
-    )));
+    let handle = sources.register(alloc::sync::Arc::new(
+        formatkit_core::MemoryRangeSource::new(vec![0u8; 4], "carrier"),
+    ));
     let bytes = [ByteInput {
         role: "carrier",
         source: &handle,
@@ -639,10 +638,10 @@ fn selected_single_source_requires_its_selector_on_every_mount_route() {
             &mut formatkit_core::ReadBudget::unlimited()
         )
         .is_err());
-    let directory: std::sync::Arc<dyn formatkit_core::RangeSource> = std::sync::Arc::new(
+    let directory: alloc::sync::Arc<dyn formatkit_core::RangeSource> = alloc::sync::Arc::new(
         formatkit_core::MemoryRangeSource::new(Vec::new(), "directory"),
     );
-    let content: std::sync::Arc<dyn formatkit_core::RangeSource> = std::sync::Arc::new(
+    let content: alloc::sync::Arc<dyn formatkit_core::RangeSource> = alloc::sync::Arc::new(
         formatkit_core::MemoryRangeSource::new(Vec::new(), "content"),
     );
     assert!(
@@ -719,7 +718,7 @@ fn operation_local_archive_metadata_validates_namespace_without_global_admission
         catalog.operation_local_descriptor(id).map(|row| row.id),
         Some(id)
     );
-    assert!(std::ptr::eq(
+    assert!(core::ptr::eq(
         catalog.operation_local_descriptor(id).unwrap().probes,
         MAGIC,
     ));

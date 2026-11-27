@@ -6,9 +6,11 @@
 //! capacity fit, no overlaps) and the output is diff-checked so undeclared
 //! bytes are provably identical. Length is always preserved.
 
+use crate::prelude::*;
+
+use crate::collections::HashSet;
 use crate::{Error, Result};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 
 /// One bounded overwrite: `target + NUL + zeros` fills `[offset,
 /// offset+capacity)` after `source` is verified in place.

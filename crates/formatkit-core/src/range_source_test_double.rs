@@ -1,7 +1,9 @@
 //! Deterministic `RangeSource` instrumentation shared by owner tests.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use crate::prelude::*;
+
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{CoordinateSpaceDescription, Error, RangeSource, ReadBudget, Result};
 

@@ -20,8 +20,22 @@
 //! layout relationships. It is not a runtime schema language and performs no
 //! source I/O.
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
+extern crate alloc;
+
+/// `alloc` types the `std` prelude would otherwise supply, so module code reads
+/// the same with and without the `std` feature.
+#[allow(unused_imports)]
+mod prelude {
+    pub(crate) use alloc::borrow::ToOwned;
+    pub(crate) use alloc::boxed::Box;
+    pub(crate) use alloc::string::{String, ToString};
+    pub(crate) use alloc::vec::Vec;
+    pub(crate) use alloc::{format, vec};
+}
 
 /// Header-inclusive and payload-sized tagged or tagless chunk spans and streams.
 pub mod chunks;

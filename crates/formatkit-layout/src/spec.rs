@@ -1,5 +1,7 @@
 //! Shared declarative field, offset-base, pack-policy, and error types for layout specs.
 
+use crate::prelude::*;
+
 use core::fmt;
 
 use formatkit_core::{Endian, Error as CoreError};

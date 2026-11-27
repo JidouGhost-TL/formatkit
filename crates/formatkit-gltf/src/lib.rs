@@ -23,8 +23,60 @@
 //! assert!(core::str::from_utf8(json).unwrap().contains("\"version\":\"2.0\""));
 //! ```
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
+extern crate alloc;
+
+/// `alloc` types the `std` prelude would otherwise supply, so module code reads
+/// the same with and without the `std` feature.
+#[allow(unused_imports)]
+mod prelude {
+    pub(crate) use alloc::borrow::ToOwned;
+    pub(crate) use alloc::boxed::Box;
+    pub(crate) use alloc::string::{String, ToString};
+    pub(crate) use alloc::vec::Vec;
+    pub(crate) use alloc::{format, vec};
+}
+
+/// Hash collections with `std`; ordered `alloc` collections without it, so the
+/// crate needs no hashing dependency. Iteration order is never relied upon.
+#[allow(unused_imports)]
+mod collections {
+    #[cfg(not(feature = "std"))]
+    pub(crate) use alloc::collections::{
+        btree_map as hash_map, BTreeMap as HashMap, BTreeSet as HashSet,
+    };
+    #[cfg(feature = "std")]
+    pub(crate) use std::collections::{hash_map, HashMap, HashSet};
+
+    /// `HashMap::with_capacity`, or an empty ordered map without `std`.
+    #[cfg(feature = "std")]
+    #[allow(dead_code)]
+    pub(crate) fn map_with_capacity<K, V>(capacity: usize) -> HashMap<K, V> {
+        HashMap::with_capacity(capacity)
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[allow(dead_code)]
+    pub(crate) fn map_with_capacity<K, V>(_capacity: usize) -> HashMap<K, V> {
+        HashMap::new()
+    }
+
+    /// `HashSet::with_capacity`, or an empty ordered set without `std`.
+    #[cfg(feature = "std")]
+    #[allow(dead_code)]
+    pub(crate) fn set_with_capacity<T>(capacity: usize) -> HashSet<T> {
+        HashSet::with_capacity(capacity)
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[allow(dead_code)]
+    pub(crate) fn set_with_capacity<T>(_capacity: usize) -> HashSet<T> {
+        HashSet::new()
+    }
+}
 
 /// Strict GLB 2.0 binary container reader and writer.
 pub mod glb;
@@ -34,7 +86,9 @@ pub mod gltf;
 pub mod json;
 /// Triangle strip and triangle fan topology iterators.
 pub mod topology;
-/// Basis-column normalization and quaternion extraction helpers.
+/// Basis-column normalization and quaternion extraction helpers (needs the
+/// `std` or `libm` feature).
+#[cfg(any(feature = "std", feature = "libm"))]
 pub mod transform;
 
 pub use glb::{read_glb, write_glb};
@@ -43,6 +97,7 @@ pub use gltf::{
     PrimExtras,
 };
 pub use topology::{triangle_fan, triangle_strip};
+#[cfg(any(feature = "std", feature = "libm"))]
 pub use transform::{
     normalize_basis_columns, shepperd_quaternion_unnormalized, DegenerateColumnScale,
 };

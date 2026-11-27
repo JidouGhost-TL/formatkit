@@ -10,5 +10,11 @@ description = "Bounded, platform-neutral IPS, BPS, UPS and VLI binary patch pars
 keywords = ["patch", "ips", "bps", "ups", "binary"]
 categories = ["encoding", "parsing"]
 
+[features]
+default = ["std"]
+# Host services (`std::io`, files, process-wide caches). Without it the crate
+# is `no_std` + `alloc`.
+std = ["formatkit-core/std"]
+
 [dependencies]
-formatkit-core.workspace = true
+formatkit-core = { workspace = true, features = ["shift-jis"] }

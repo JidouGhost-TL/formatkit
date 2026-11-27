@@ -10,5 +10,11 @@ description = "Generic packed pixels, palettes, planar tiles, glyphs, Morton swi
 keywords = ["pixel", "palette", "swizzle", "morton", "dxt"]
 categories = ["graphics", "encoding"]
 
+[features]
+default = ["std"]
+# Host services (`std::io`, files, process-wide caches). Without it the crate
+# is `no_std` + `alloc`.
+std = ["formatkit-core/std"]
+
 [dependencies]
-formatkit-core.workspace = true
+formatkit-core = { workspace = true, features = ["shift-jis"] }

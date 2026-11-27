@@ -1,3 +1,5 @@
+use crate::prelude::*;
+
 use super::{f, AlphaMode, GltfBuilder, GltfError, ImageRecord, MaterialKey, MaterialOptions};
 use crate::json::Json;
 #[cfg(feature = "png")]

@@ -36,6 +36,8 @@
 //! assert_eq!(canvas.into_bytes(), region);
 //! ```
 
+use crate::prelude::*;
+
 use formatkit_core::{Endian, Error, ErrorContext, Result};
 
 fn field_error(what: &'static str, at: usize, error: Error) -> Error {

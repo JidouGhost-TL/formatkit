@@ -13,6 +13,8 @@
 //! every buffer view starts at a 4-byte-aligned buffer offset, so accessor
 //! component alignment is satisfied without per-accessor offset math.
 
+use crate::prelude::*;
+
 mod accessor;
 mod animation;
 mod material;
@@ -23,9 +25,9 @@ mod serialize;
 pub use animation::push_animation_channel;
 pub use serialize::GltfSplitOutput;
 
+use crate::collections::HashMap;
 use crate::json::Json;
-use std::collections::HashMap;
-use std::fmt;
+use core::fmt;
 
 const FLOAT: u64 = 5126;
 const UNSIGNED_INT: u64 = 5125;
@@ -85,7 +87,7 @@ pub struct MorphTarget {
 }
 
 /// The alpha behavior of a glTF material.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AlphaMode {
     /// Fully opaque (`"OPAQUE"`).
     Opaque,
@@ -220,7 +222,7 @@ impl fmt::Display for GltfError {
     }
 }
 
-impl std::error::Error for GltfError {}
+impl core::error::Error for GltfError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrsPath {
@@ -289,7 +291,7 @@ pub struct GltfBuilder {
     sampler: Option<usize>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct MaterialKey {
     double_sided: bool,
     alpha_mode: AlphaMode,

@@ -2,7 +2,7 @@
 
 Umbrella re-export crate for the Formatkit platform-neutral binary data toolkit.
 
-With `default = []`, `formatkit` re-exports the four core foundation crates:
+With `default = ["std"]`, `formatkit` re-exports the four core foundation crates:
 
 - `formatkit::core` (`formatkit-core`) — checked bytes/bits, sources, work budgets, checksums, and shared values
 - `formatkit::layout` (`formatkit-layout`) — configured fields, records, tables, chunks, IFF/RIFF, charmaps, and edits
@@ -10,6 +10,9 @@ With `default = []`, `formatkit` re-exports the four core foundation crates:
 - `formatkit::runtime` (`formatkit-runtime`) — explicit owner-module composition and dispatch
 
 ## Optional features
+
+`std` (default) enables the standard-library services of every enabled crate.
+Without it the facade is `no_std` + `alloc`; `corpus` turns it back on.
 
 Enable additional crates as needed:
 

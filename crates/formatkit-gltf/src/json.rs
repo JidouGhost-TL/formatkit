@@ -6,6 +6,8 @@
 //! `count` is an integer, a bounding-box coordinate is a float), and strings are
 //! escaped for all JSON control characters and quotes.
 
+use crate::prelude::*;
+
 use core::fmt::Write as _;
 
 /// A JSON value. `Int`/`UInt` serialize without a decimal point; `Num`

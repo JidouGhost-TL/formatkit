@@ -1,5 +1,7 @@
 //! Declarative specification types, validation, and shared helpers for fixed-stride record tables.
 
+use crate::prelude::*;
+
 use formatkit_core::Endian;
 
 use crate::spec::{read_int_at, write_int_at, IntFieldSpec, IntWidth, LayoutError, OffsetBase};

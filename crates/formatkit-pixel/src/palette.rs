@@ -1,7 +1,10 @@
 //! Deterministic palette lookup, ramp generation, and median-cut quantization.
 
-use std::cmp::{Ordering, Reverse};
-use std::collections::{BinaryHeap, HashMap};
+use crate::prelude::*;
+
+use crate::collections::HashMap;
+use alloc::collections::BinaryHeap;
+use core::cmp::{Ordering, Reverse};
 
 use crate::PackError;
 
@@ -211,7 +214,8 @@ pub fn quantize_rgba(
         let mut indices = Vec::with_capacity(pixel_count);
         match metric {
             PaletteDistanceMetric::Rgba => {
-                let mut color_to_idx: HashMap<[u8; 4], u8> = HashMap::with_capacity(palette.len());
+                let mut color_to_idx: HashMap<[u8; 4], u8> =
+                    crate::collections::map_with_capacity(palette.len());
                 for (idx, &c) in palette.iter().enumerate() {
                     color_to_idx.insert(c, idx as u8);
                 }
@@ -220,7 +224,8 @@ pub fn quantize_rgba(
                 }
             }
             PaletteDistanceMetric::Rgb => {
-                let mut rgb_to_idx: HashMap<[u8; 3], u8> = HashMap::with_capacity(palette.len());
+                let mut rgb_to_idx: HashMap<[u8; 3], u8> =
+                    crate::collections::map_with_capacity(palette.len());
                 for (idx, &c) in palette.iter().enumerate() {
                     rgb_to_idx.entry([c[0], c[1], c[2]]).or_insert(idx as u8);
                 }
@@ -289,7 +294,8 @@ pub fn quantize_rgba(
     palette.sort_unstable();
     palette.dedup();
 
-    let mut color_to_idx: HashMap<[u8; 4], u8> = HashMap::with_capacity(unique_count);
+    let mut color_to_idx: HashMap<[u8; 4], u8> =
+        crate::collections::map_with_capacity(unique_count);
     for b in done {
         for (color, _) in b.entries {
             let idx = nearest_palette_index(color, &palette, metric).unwrap_or(0) as u8;

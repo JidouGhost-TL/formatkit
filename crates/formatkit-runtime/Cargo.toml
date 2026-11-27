@@ -10,6 +10,12 @@ description = "Explicit composition, resident writers and dispatch for owner-def
 keywords = ["format", "runtime", "dispatch", "modules", "binary"]
 categories = ["parsing", "data-structures"]
 
+[features]
+default = ["std"]
+# Host services (`std::io`, files, process-wide caches). Without it the crate
+# is `no_std` + `alloc`.
+std = ["formatkit-core/std", "formatkit-catalog/std"]
+
 [dependencies]
-formatkit-core.workspace = true
+formatkit-core = { workspace = true, features = ["shift-jis"] }
 formatkit-catalog.workspace = true

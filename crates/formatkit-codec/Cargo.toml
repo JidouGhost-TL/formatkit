@@ -11,11 +11,16 @@ keywords = ["compression", "lzss", "codec", "png", "dds"]
 categories = ["compression", "encoding", "graphics"]
 
 [features]
-default = ["dds"]
+default = ["std", "dds", "lzma"]
+# Host services (`std::io`, files, process-wide caches). Without it the crate
+# is `no_std` + `alloc`.
+std = ["formatkit-core/std", "formatkit-pixel?/std"]
 dds = ["dep:formatkit-pixel"]
+# `.lzma`/LZMA-alone decoding through `lzma-rs`, which needs `std::io`.
+lzma = ["std", "dep:lzma-rs"]
 
 [dependencies]
-formatkit-core.workspace = true
+formatkit-core = { workspace = true, features = ["shift-jis"] }
 formatkit-pixel = { workspace = true, optional = true }
-lzma-rs = "0.3"
+lzma-rs = { version = "0.3", optional = true }
 miniz_oxide = "0.8"

@@ -1,5 +1,7 @@
 //! Fixed-stride offset tables producing validated [`NamespaceEntry`] rows.
 
+use crate::prelude::*;
+
 use formatkit_core::{u32_at_endian, Endian, Error, NamespaceEntry, Result};
 
 /// How each entry's byte size is determined in a [`FixedStrideOffsetTable`].

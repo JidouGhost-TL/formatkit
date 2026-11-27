@@ -1,4 +1,6 @@
-use std::fmt::{self, Write as _};
+use crate::prelude::*;
+
+use core::fmt::{self, Write as _};
 
 use super::namespace::{validate_namespace_composition, NamespaceCompositionError};
 use super::{
@@ -214,7 +216,7 @@ impl fmt::Display for SupportCatalogError {
     }
 }
 
-impl std::error::Error for SupportCatalogError {}
+impl core::error::Error for SupportCatalogError {}
 
 impl SupportCatalog {
     pub(super) fn namespace_support_metadata(
@@ -352,7 +354,7 @@ impl SupportCatalog {
                 role_bound,
             )?;
         }
-        let mut ids = std::collections::HashSet::new();
+        let mut ids = crate::collections::HashSet::new();
         let mut contracts = Vec::new();
         let mut providers = Vec::new();
         for index in selected {
@@ -484,7 +486,7 @@ impl SupportCatalog {
         namespace_providers: impl IntoIterator<Item = NamespaceProvider>,
         require_archive_semantics: bool,
     ) -> Result<Self, SupportCatalogError> {
-        use std::collections::{HashMap, HashSet};
+        use crate::collections::{HashMap, HashSet};
 
         let writer_contracts = writer_contracts.into_iter().collect::<Vec<_>>();
         let namespace_semantics = namespace_semantics.into_iter().collect::<Vec<_>>();
@@ -792,7 +794,7 @@ impl SupportCatalog {
     pub fn mount_namespace_single(
         &self,
         id: FormatId,
-        source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         maximum_strategy: NamespaceMountStrategy,
         budget: &mut formatkit_core::ReadBudget,
     ) -> formatkit_core::Result<Box<dyn formatkit_core::IndexedNamespace>> {
@@ -810,7 +812,7 @@ impl SupportCatalog {
     pub fn mount_namespace_single_work_runner(
         &self,
         id: FormatId,
-        source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         maximum_strategy: NamespaceMountStrategy,
         budget: &mut formatkit_core::WorkBudget,
         op: WorkRunnerOp,
@@ -831,7 +833,7 @@ impl SupportCatalog {
     pub fn mount_namespace_single_work<'budget>(
         &self,
         id: FormatId,
-        source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         maximum_strategy: NamespaceMountStrategy,
         budget: &'budget mut formatkit_core::WorkBudget,
     ) -> formatkit_core::Result<WorkMountedNamespace<'budget>> {
@@ -849,7 +851,7 @@ impl SupportCatalog {
     pub fn mount_namespace_selected_single(
         &self,
         id: FormatId,
-        source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         selector: &str,
         maximum_strategy: NamespaceMountStrategy,
         budget: &mut formatkit_core::ReadBudget,
@@ -885,7 +887,7 @@ impl SupportCatalog {
 
     pub fn identify_and_mount_namespace_source(
         &self,
-        source: std::sync::Arc<dyn formatkit_core::RangeSource>,
+        source: alloc::sync::Arc<dyn formatkit_core::RangeSource>,
         prefix: &[u8],
         budget: &mut formatkit_core::ReadBudget,
     ) -> formatkit_core::Result<Option<super::IdentifiedNamespace>> {
@@ -900,7 +902,7 @@ impl SupportCatalog {
     /// Every distinct executable oracle referenced by the composed contracts,
     /// in deterministic contract/operation order.
     pub fn writer_oracles(&self) -> Vec<CargoTestOracle> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = crate::collections::HashSet::new();
         self.writer_contracts
             .iter()
             .flat_map(|contract| contract.oracles())
@@ -909,7 +911,7 @@ impl SupportCatalog {
     }
 
     pub fn namespace_mount_oracles(&self) -> Vec<CargoTestOracle> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = crate::collections::HashSet::new();
         self.namespace_mount_contracts
             .iter()
             .flat_map(|contract| contract.oracles())
@@ -921,7 +923,7 @@ impl SupportCatalog {
     /// ordinary product audit, but must execute only under the serialized,
     /// required-corpus runner.
     pub fn namespace_corpus_oracles(&self) -> Vec<CargoTestOracle> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = crate::collections::HashSet::new();
         self.namespace_mount_contracts
             .iter()
             .filter_map(|contract| contract.corpus_oracle)
@@ -936,7 +938,7 @@ impl SupportCatalog {
         let corpus = self
             .namespace_corpus_oracles()
             .into_iter()
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<crate::collections::HashSet<_>>();
         self.contract_oracles()
             .into_iter()
             .filter(|oracle| !corpus.contains(oracle))
@@ -946,7 +948,7 @@ impl SupportCatalog {
     /// Every distinct proof oracle named by either operation or namespace
     /// contracts in deterministic catalog order.
     pub fn contract_oracles(&self) -> Vec<CargoTestOracle> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = crate::collections::HashSet::new();
         self.writer_contracts
             .iter()
             .flat_map(|contract| contract.oracles())

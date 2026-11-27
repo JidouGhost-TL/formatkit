@@ -19,10 +19,14 @@
 //! dishonest code, uninstrumented side effects, or a transient swap restored
 //! before a checked call returns.
 
+use crate::prelude::*;
+
+use crate::atomic_u64::AtomicU64;
+use alloc::sync::Arc;
+use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "std")]
 use std::io::Read;
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
 
 use crate::{Error, ReadBudget, Result};
 
@@ -763,6 +767,9 @@ impl WorkBudget {
     /// operation context. Interrupted attempts remain admitted attempts and
     /// are retried. This method neither allocates nor charges logical reads:
     /// the caller owns the meaning and resident storage of `output`.
+    ///
+    /// Requires the `std` feature.
+    #[cfg(feature = "std")]
     pub fn read_external_exact_into(
         &mut self,
         reader: &mut impl Read,
@@ -850,6 +857,7 @@ impl WorkBudget {
     }
 
     /// Admit both dimensions atomically before one underlying read attempt.
+    #[cfg_attr(not(feature = "std"), allow(dead_code))]
     pub(crate) fn io_attempt(&mut self, length: u64) -> Result<()> {
         let calls = self.check(WorkResource::IoReadCalls, 1)?;
         let bytes = self.check(WorkResource::IoRequestedBytes, length)?;
@@ -858,6 +866,7 @@ impl WorkBudget {
         Ok(())
     }
 
+    #[cfg_attr(not(feature = "std"), allow(dead_code))]
     pub(crate) fn io_completed(&mut self, length: u64) {
         // Completed bytes cannot exceed the previously admitted requested bytes.
         self.io_completed_bytes += length;
@@ -1026,8 +1035,8 @@ impl ResidentReservation<'_> {
     /// a replacement detected after the callback retains guard precedence.
     pub fn with_budget_typed<T, E>(
         &mut self,
-        operation: impl for<'budget> FnOnce(&'budget mut WorkBudget) -> std::result::Result<T, E>,
-    ) -> std::result::Result<T, E>
+        operation: impl for<'budget> FnOnce(&'budget mut WorkBudget) -> core::result::Result<T, E>,
+    ) -> core::result::Result<T, E>
     where
         E: From<Error>,
     {
@@ -1338,7 +1347,7 @@ mod tests {
                 .with(IoRequestedBytes, 8)
                 .with(IoReadCalls, 1),
         );
-        let invoked = std::cell::Cell::new(false);
+        let invoked = core::cell::Cell::new(false);
         let error = budget
             .with_read_budget(|_| {
                 invoked.set(true);
@@ -1823,7 +1832,7 @@ mod tests {
     fn matching_replacement_counters_cannot_forge_private_ledger_identity() {
         let mut replacement = WorkBudget::new(WorkLimits::unlimited().with_resident_bytes(10));
         let leaked = replacement.reserve_resident(6).unwrap();
-        std::mem::forget(leaked);
+        core::mem::forget(leaked);
         assert_eq!(replacement.usage().resident_bytes(), 6);
 
         let mut budget = WorkBudget::new(WorkLimits::unlimited().with_resident_bytes(10));

@@ -20,6 +20,8 @@
 //! assert_eq!(bit_unpack(&[0b1010_0101], cfg, 64).unwrap(), [0x03, 0x03, 0x30, 0x30]);
 //! ```
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, Result};
 
 /// Parameters for [`bit_unpack`].

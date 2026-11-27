@@ -33,8 +33,10 @@
 //! [`TAG_HUFFMAN_4BIT`]: crate::tagged_header::TAG_HUFFMAN_4BIT
 //! [`TAG_HUFFMAN_8BIT`]: crate::tagged_header::TAG_HUFFMAN_8BIT
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use crate::prelude::*;
+
+use alloc::collections::BinaryHeap;
+use core::cmp::Reverse;
 
 use formatkit_core::{bytes_at, Error, MsbBitWriter, Result};
 
@@ -425,13 +427,13 @@ mod tests {
             } else {
                 usize::from(sym) % 5 + 1
             };
-            skewed.extend(std::iter::repeat_n(sym, count));
+            skewed.extend(core::iter::repeat_n(sym, count));
         }
         // Fibonacci-like frequencies force a deep, unbalanced tree.
         let mut deep = Vec::new();
         let (mut a, mut b) = (1usize, 1usize);
         for sym in 0..20u8 {
-            deep.extend(std::iter::repeat_n(sym, a));
+            deep.extend(core::iter::repeat_n(sym, a));
             (a, b) = (b, a + b);
         }
         let cases: [Vec<u8>; 6] = [

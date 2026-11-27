@@ -1,6 +1,6 @@
 //! Umbrella re-export crate for the Formatkit binary data toolkit.
 //!
-//! With `default = []`, the umbrella re-exports the core foundation crates:
+//! With `default = ["std"]`, the umbrella re-exports the core foundation crates:
 //! - [`core`] (`formatkit-core`): checked bytes/bits, sources, budgets, checksums, and shared values
 //! - [`layout`] (`formatkit-layout`): fields, records, declarative table/chunk/marker specs, symmetric `pack_*` writers, offset-graph rewrites, IFF/RIFF, charmaps, and edits
 //! - [`catalog`] (`formatkit-catalog`): open format identities, detection, and operation contracts
@@ -13,8 +13,13 @@
 //! - `patch` → `patch` (`formatkit-patch`)
 //! - `gltf` → `gltf` (`formatkit-gltf`)
 //! - `corpus` → `corpus` (`formatkit-corpus`) and `corpus_test` (`formatkit-corpus-test`)
+//!
+//! `std` (default) enables the standard-library services of every enabled
+//! crate; without it the facade is `no_std` + `alloc`.
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
 #[cfg(feature = "archive")]
 pub use formatkit_archive as archive;
 pub use formatkit_catalog as catalog;

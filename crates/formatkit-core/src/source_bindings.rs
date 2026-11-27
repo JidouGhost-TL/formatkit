@@ -1,6 +1,8 @@
 //! Operation-local source identities. Handles are not durable evidence or authorization.
 
-use std::sync::Arc;
+use crate::prelude::*;
+
+use alloc::sync::Arc;
 
 use crate::{Error, RangeSource, Result, SliceRangeSource};
 

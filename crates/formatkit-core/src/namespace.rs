@@ -1,7 +1,9 @@
 //! Mounted, random-access namespaces shared by discs, archives, and object packs.
 
-use std::any::Any;
-use std::sync::Arc;
+use crate::prelude::*;
+
+use alloc::sync::Arc;
+use core::any::Any;
 
 use crate::{Error, RangeSource, Result};
 
@@ -135,8 +137,8 @@ pub struct MemberContentSource {
     pub materialized_bytes: u64,
 }
 
-impl std::fmt::Debug for MemberContentSource {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for MemberContentSource {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("MemberContentSource")
             .field("size", &self.source.size())
@@ -159,8 +161,8 @@ pub struct MemberSemanticView {
     pub content: MemberContentSource,
 }
 
-impl std::fmt::Debug for MemberSemanticView {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for MemberSemanticView {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("MemberSemanticView")
             .field("format", &self.format)
@@ -179,10 +181,10 @@ pub struct ContextualMemberNamespace {
 /// Opaque owner capability carried by a trusted traversal. Owners keep token
 /// construction private and validate both the token type and receiving parent.
 /// This is not a serialized proof or an automatic sibling resolver.
-pub type NamespaceTraversalContext = Arc<dyn std::any::Any + Send + Sync>;
+pub type NamespaceTraversalContext = Arc<dyn core::any::Any + Send + Sync>;
 
-impl std::fmt::Debug for ContextualMemberNamespace {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for ContextualMemberNamespace {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ContextualMemberNamespace")
             .field("format", &self.format)
@@ -473,8 +475,8 @@ pub struct StoredRangeNamespace {
     revalidation: StoredRangeRevalidation,
 }
 
-impl std::fmt::Debug for StoredRangeNamespace {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for StoredRangeNamespace {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("StoredRangeNamespace")
             .field("source_size", &self.source.size())
@@ -924,7 +926,7 @@ mod tests {
         CancellationToken, MemoryRangeSource, ReadBudget, SharedBytes, SliceRangeSource,
         WorkBudget, WorkLimits, WorkResource,
     };
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use core::sync::atomic::{AtomicBool, Ordering};
 
     struct FixtureNamespace {
         entries: Vec<NamespaceEntry>,
@@ -956,8 +958,8 @@ mod tests {
 
     struct LegacyOnlyNamespace {
         source: Arc<dyn RangeSource>,
-        semantic_calls: Arc<std::sync::atomic::AtomicUsize>,
-        contextual_calls: Arc<std::sync::atomic::AtomicUsize>,
+        semantic_calls: Arc<core::sync::atomic::AtomicUsize>,
+        contextual_calls: Arc<core::sync::atomic::AtomicUsize>,
     }
 
     impl IndexedNamespace for LegacyOnlyNamespace {
@@ -971,7 +973,7 @@ mod tests {
             _budget: &mut ReadBudget,
         ) -> Result<Option<MemberSemanticView>> {
             self.semantic_calls
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             Ok(None)
         }
 
@@ -981,7 +983,7 @@ mod tests {
             _budget: &mut ReadBudget,
         ) -> Result<Option<ContextualMemberNamespace>> {
             self.contextual_calls
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             Ok(None)
         }
 
@@ -1019,10 +1021,10 @@ mod tests {
     struct WorkHookNamespace {
         source: Arc<dyn RangeSource>,
         outcome: WorkHookOutcome,
-        legacy_semantic_calls: Arc<std::sync::atomic::AtomicUsize>,
-        legacy_contextual_calls: Arc<std::sync::atomic::AtomicUsize>,
-        work_semantic_calls: Arc<std::sync::atomic::AtomicUsize>,
-        work_contextual_calls: Arc<std::sync::atomic::AtomicUsize>,
+        legacy_semantic_calls: Arc<core::sync::atomic::AtomicUsize>,
+        legacy_contextual_calls: Arc<core::sync::atomic::AtomicUsize>,
+        work_semantic_calls: Arc<core::sync::atomic::AtomicUsize>,
+        work_contextual_calls: Arc<core::sync::atomic::AtomicUsize>,
     }
 
     impl IndexedNamespace for WorkHookNamespace {
@@ -1036,7 +1038,7 @@ mod tests {
             _budget: &mut ReadBudget,
         ) -> Result<Option<MemberSemanticView>> {
             self.legacy_semantic_calls
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             Ok(None)
         }
 
@@ -1050,7 +1052,7 @@ mod tests {
             budget: &mut WorkBudget,
         ) -> Result<Option<MemberSemanticView>> {
             self.work_semantic_calls
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             match self.outcome {
                 WorkHookOutcome::Some => Ok(Some(MemberSemanticView {
                     format: "synthetic-neutral-view",
@@ -1078,7 +1080,7 @@ mod tests {
             _budget: &mut ReadBudget,
         ) -> Result<Option<ContextualMemberNamespace>> {
             self.legacy_contextual_calls
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             Ok(None)
         }
 
@@ -1092,7 +1094,7 @@ mod tests {
             budget: &mut WorkBudget,
         ) -> Result<Option<ContextualMemberNamespace>> {
             self.work_contextual_calls
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             match self.outcome {
                 WorkHookOutcome::Some => Ok(Some(ContextualMemberNamespace {
                     format: "synthetic-neutral-child",
@@ -1117,7 +1119,7 @@ mod tests {
     }
 
     fn work_hook_namespace(outcome: WorkHookOutcome) -> WorkHookNamespace {
-        let calls = || Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = || Arc::new(core::sync::atomic::AtomicUsize::new(0));
         WorkHookNamespace {
             source: Arc::new(MemoryRangeSource::new(b"neutral".to_vec(), "synthetic")),
             outcome,
@@ -1154,8 +1156,8 @@ mod tests {
 
     #[test]
     fn legacy_only_callbacks_keep_the_legacy_dispatch_policy() {
-        let semantic_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let contextual_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let semantic_calls = Arc::new(core::sync::atomic::AtomicUsize::new(0));
+        let contextual_calls = Arc::new(core::sync::atomic::AtomicUsize::new(0));
         let namespace = LegacyOnlyNamespace {
             source: Arc::new(MemoryRangeSource::new(b"neutral".to_vec(), "synthetic")),
             semantic_calls: Arc::clone(&semantic_calls),
@@ -1171,9 +1173,12 @@ mod tests {
         assert!(dispatch_contextual(&namespace, 0, &mut unlimited)
             .unwrap()
             .is_none());
-        assert_eq!(semantic_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert_eq!(
-            contextual_calls.load(std::sync::atomic::Ordering::Relaxed),
+            semantic_calls.load(core::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            contextual_calls.load(core::sync::atomic::Ordering::Relaxed),
             1
         );
         assert!(!unlimited.complete_io_accounting());
@@ -1188,9 +1193,12 @@ mod tests {
                 dispatch_contextual(&namespace, 0, &mut finite),
                 Err(Error::Unsupported(message)) if message.contains("underlying I/O accounting")
             ));
-            assert_eq!(semantic_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
             assert_eq!(
-                contextual_calls.load(std::sync::atomic::Ordering::Relaxed),
+                semantic_calls.load(core::sync::atomic::Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                contextual_calls.load(core::sync::atomic::Ordering::Relaxed),
                 1
             );
         }
@@ -1222,13 +1230,13 @@ mod tests {
             assert_eq!(
                 namespace
                     .work_semantic_calls
-                    .load(std::sync::atomic::Ordering::Relaxed),
+                    .load(core::sync::atomic::Ordering::Relaxed),
                 1
             );
             assert_eq!(
                 namespace
                     .legacy_semantic_calls
-                    .load(std::sync::atomic::Ordering::Relaxed),
+                    .load(core::sync::atomic::Ordering::Relaxed),
                 0
             );
             assert!(work.complete_io_accounting());
@@ -1245,13 +1253,13 @@ mod tests {
         assert_eq!(
             namespace
                 .legacy_semantic_calls
-                .load(std::sync::atomic::Ordering::Relaxed),
+                .load(core::sync::atomic::Ordering::Relaxed),
             0
         );
         assert_eq!(
             namespace
                 .work_semantic_calls
-                .load(std::sync::atomic::Ordering::Relaxed),
+                .load(core::sync::atomic::Ordering::Relaxed),
             1
         );
     }
@@ -1282,13 +1290,13 @@ mod tests {
         assert_eq!(
             namespace
                 .legacy_contextual_calls
-                .load(std::sync::atomic::Ordering::Relaxed),
+                .load(core::sync::atomic::Ordering::Relaxed),
             0
         );
         assert_eq!(
             namespace
                 .work_contextual_calls
-                .load(std::sync::atomic::Ordering::Relaxed),
+                .load(core::sync::atomic::Ordering::Relaxed),
             1
         );
         drop(nested);
@@ -1314,7 +1322,7 @@ mod tests {
             assert_eq!(
                 namespace
                     .legacy_contextual_calls
-                    .load(std::sync::atomic::Ordering::Relaxed),
+                    .load(core::sync::atomic::Ordering::Relaxed),
                 0
             );
         }
@@ -1330,7 +1338,7 @@ mod tests {
         assert_eq!(
             namespace
                 .legacy_contextual_calls
-                .load(std::sync::atomic::Ordering::Relaxed),
+                .load(core::sync::atomic::Ordering::Relaxed),
             0
         );
     }
@@ -1338,8 +1346,8 @@ mod tests {
     #[test]
     fn selected_work_capability_with_default_callback_fails_without_fallback() {
         struct InconsistentClaimant {
-            old_calls: Arc<std::sync::atomic::AtomicUsize>,
-            old_context_calls: Arc<std::sync::atomic::AtomicUsize>,
+            old_calls: Arc<core::sync::atomic::AtomicUsize>,
+            old_context_calls: Arc<core::sync::atomic::AtomicUsize>,
             source: Arc<dyn RangeSource>,
         }
 
@@ -1354,7 +1362,7 @@ mod tests {
                 _budget: &mut ReadBudget,
             ) -> Result<Option<MemberSemanticView>> {
                 self.old_calls
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 Ok(None)
             }
 
@@ -1368,7 +1376,7 @@ mod tests {
                 _budget: &mut ReadBudget,
             ) -> Result<Option<ContextualMemberNamespace>> {
                 self.old_context_calls
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 Ok(None)
             }
 
@@ -1381,8 +1389,8 @@ mod tests {
             }
         }
 
-        let old_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let old_context_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let old_calls = Arc::new(core::sync::atomic::AtomicUsize::new(0));
+        let old_context_calls = Arc::new(core::sync::atomic::AtomicUsize::new(0));
         let namespace = InconsistentClaimant {
             old_calls: Arc::clone(&old_calls),
             old_context_calls: Arc::clone(&old_context_calls),
@@ -1393,13 +1401,13 @@ mod tests {
             dispatch_semantic(&namespace, 0, &mut work),
             Err(Error::Unsupported(message)) if message.contains("not implemented")
         ));
-        assert_eq!(old_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(old_calls.load(core::sync::atomic::Ordering::Relaxed), 0);
         assert!(matches!(
             dispatch_contextual(&namespace, 0, &mut work),
             Err(Error::Unsupported(message)) if message.contains("not implemented")
         ));
         assert_eq!(
-            old_context_calls.load(std::sync::atomic::Ordering::Relaxed),
+            old_context_calls.load(core::sync::atomic::Ordering::Relaxed),
             0
         );
     }
@@ -1408,8 +1416,8 @@ mod tests {
     fn work_capability_axes_dispatch_independently() {
         struct SemanticOnlyNamespace {
             source: Arc<dyn RangeSource>,
-            old_context_calls: Arc<std::sync::atomic::AtomicUsize>,
-            work_semantic_calls: Arc<std::sync::atomic::AtomicUsize>,
+            old_context_calls: Arc<core::sync::atomic::AtomicUsize>,
+            work_semantic_calls: Arc<core::sync::atomic::AtomicUsize>,
         }
 
         impl IndexedNamespace for SemanticOnlyNamespace {
@@ -1427,7 +1435,7 @@ mod tests {
                 _budget: &mut WorkBudget,
             ) -> Result<Option<MemberSemanticView>> {
                 self.work_semantic_calls
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 Ok(None)
             }
 
@@ -1437,7 +1445,7 @@ mod tests {
                 _budget: &mut ReadBudget,
             ) -> Result<Option<ContextualMemberNamespace>> {
                 self.old_context_calls
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 Ok(None)
             }
 
@@ -1446,8 +1454,8 @@ mod tests {
             }
         }
 
-        let old_context_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let work_semantic_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let old_context_calls = Arc::new(core::sync::atomic::AtomicUsize::new(0));
+        let work_semantic_calls = Arc::new(core::sync::atomic::AtomicUsize::new(0));
         let namespace = SemanticOnlyNamespace {
             source: Arc::new(MemoryRangeSource::new(b"neutral".to_vec(), "synthetic")),
             old_context_calls: Arc::clone(&old_context_calls),
@@ -1464,11 +1472,11 @@ mod tests {
             .unwrap()
             .is_none());
         assert_eq!(
-            work_semantic_calls.load(std::sync::atomic::Ordering::Relaxed),
+            work_semantic_calls.load(core::sync::atomic::Ordering::Relaxed),
             1
         );
         assert_eq!(
-            old_context_calls.load(std::sync::atomic::Ordering::Relaxed),
+            old_context_calls.load(core::sync::atomic::Ordering::Relaxed),
             1
         );
     }
@@ -2050,7 +2058,7 @@ mod tests {
         inner: MemoryRangeSource,
         token: crate::CancellationToken,
         cancel_after: usize,
-        queries: std::sync::atomic::AtomicUsize,
+        queries: core::sync::atomic::AtomicUsize,
     }
 
     impl RangeSource for CancelsOnSizeQuery {
@@ -2073,7 +2081,7 @@ mod tests {
 
     #[test]
     fn work_aware_no_raw_name_construction_cancels_mid_loop_without_later_work() {
-        use std::sync::atomic::AtomicUsize;
+        use core::sync::atomic::AtomicUsize;
         const COMPLETED: usize = 3;
         let source = Arc::new(CancelsOnSizeQuery {
             inner: MemoryRangeSource::new(b"0123456789".to_vec(), "cancelling fixture"),
@@ -2370,7 +2378,7 @@ mod tests {
     struct CancellingSizeSource {
         inner: MemoryRangeSource,
         token: crate::CancellationToken,
-        calls: std::sync::atomic::AtomicUsize,
+        calls: core::sync::atomic::AtomicUsize,
         trip_call: usize,
     }
 
@@ -2440,7 +2448,7 @@ mod tests {
         let source: Arc<dyn RangeSource> = Arc::new(CancellingSizeSource {
             inner: MemoryRangeSource::new(b"0123456789abcdef".to_vec(), "fixture"),
             token: token.clone(),
-            calls: std::sync::atomic::AtomicUsize::new(0),
+            calls: core::sync::atomic::AtomicUsize::new(0),
             trip_call: 2,
         });
         let mut budget = WorkBudget::new(WorkLimits::unlimited()).with_cancellation(token);

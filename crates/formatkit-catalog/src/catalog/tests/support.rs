@@ -1,7 +1,7 @@
 use super::super::*;
 use super::fixtures::*;
 use crate::FormatId;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 static LOCAL_PROBE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
@@ -108,7 +108,7 @@ fn operation_local_descriptors_stay_out_of_global_detection() {
         catalog.operation_local_descriptor(id).map(|row| row.id),
         Some(id)
     );
-    assert!(std::ptr::eq(
+    assert!(core::ptr::eq(
         catalog.operation_local_descriptor(id).unwrap().probes,
         LOCAL_PROBES,
     ));

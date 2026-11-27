@@ -11,23 +11,37 @@ keywords = ["binary", "parsing", "codec", "archive", "pixel"]
 categories = ["parsing", "encoding"]
 
 [features]
-default = []
+default = ["std"]
+# Host services in every enabled crate. Without it the facade is `no_std` +
+# `alloc`; `corpus` needs it.
+std = [
+    "formatkit-core/std",
+    "formatkit-layout/std",
+    "formatkit-catalog/std",
+    "formatkit-runtime/std",
+    "formatkit-archive?/std",
+    "formatkit-pixel?/std",
+    "formatkit-codec?/std",
+    "formatkit-codec?/lzma",
+    "formatkit-patch?/std",
+    "formatkit-gltf?/std",
+]
 patch = ["dep:formatkit-patch"]
 pixel = ["dep:formatkit-pixel"]
 codec = ["dep:formatkit-codec"]
-corpus = ["dep:formatkit-corpus", "dep:formatkit-corpus-test"]
+corpus = ["std", "dep:formatkit-corpus", "dep:formatkit-corpus-test"]
 archive = ["dep:formatkit-archive"]
 gltf = ["dep:formatkit-gltf"]
 
 [dependencies]
-formatkit-core.workspace = true
+formatkit-core = { workspace = true, features = ["shift-jis"] }
 formatkit-archive = { workspace = true, optional = true }
 formatkit-layout.workspace = true
 formatkit-catalog.workspace = true
 formatkit-runtime.workspace = true
 formatkit-pixel = { workspace = true, optional = true }
-formatkit-codec = { workspace = true, optional = true }
+formatkit-codec = { workspace = true, optional = true, features = ["dds"] }
 formatkit-corpus = { workspace = true, optional = true }
 formatkit-corpus-test = { workspace = true, optional = true }
 formatkit-patch = { workspace = true, optional = true }
-formatkit-gltf = { workspace = true, optional = true }
+formatkit-gltf = { workspace = true, optional = true, features = ["png"] }

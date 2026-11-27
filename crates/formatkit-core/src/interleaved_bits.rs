@@ -5,6 +5,8 @@
 //! buffered; the next control byte is fetched from the then-current stream
 //! position only after that buffered group is exhausted.
 
+use crate::prelude::*;
+
 /// Reader for an interleaved control-bit/raw-byte stream.
 ///
 /// `MSB_FIRST` selects the order of bits within each control byte. Reads are
@@ -147,7 +149,7 @@ impl<const MSB_FIRST: bool> InterleavedBitWriter<MSB_FIRST> {
     pub fn try_reserve_exact(
         &mut self,
         additional: usize,
-    ) -> std::result::Result<(), std::collections::TryReserveError> {
+    ) -> core::result::Result<(), alloc::collections::TryReserveError> {
         self.bytes.try_reserve_exact(additional)
     }
 

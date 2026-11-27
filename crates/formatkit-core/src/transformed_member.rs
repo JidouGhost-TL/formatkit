@@ -1,6 +1,8 @@
 //! Bounded execution of one resident member transformation.
 
-use std::sync::Arc;
+use crate::prelude::*;
+
+use alloc::sync::Arc;
 
 use crate::{
     Error, MemberAccessMode, MemberContentSource, RangeSource, Result, SourceRange,
@@ -24,8 +26,8 @@ pub struct TransformMaterialization {
     pub coordinate_name: String,
 }
 
-impl std::fmt::Debug for TransformMaterialization {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for TransformMaterialization {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("TransformMaterialization")
             .field("dependency", &self.dependency)
@@ -158,7 +160,7 @@ mod tests {
     fn denied_output_prevents_read_and_decode() {
         let mut work =
             WorkBudget::new(WorkLimits::unlimited().with(WorkResource::MaterializedBytes, 3));
-        let called = std::cell::Cell::new(false);
+        let called = core::cell::Cell::new(false);
         assert!(
             materialize_transformed_member(request(), &mut work, |_, _| {
                 called.set(true);
@@ -178,7 +180,7 @@ mod tests {
                 .with(WorkResource::LogicalReadBytes, 6)
                 .with(WorkResource::MaterializedBytes, 4),
         );
-        let called = std::cell::Cell::new(false);
+        let called = core::cell::Cell::new(false);
         assert!(matches!(
             materialize_transformed_member(request(), &mut work, |_, _| {
                 called.set(true);

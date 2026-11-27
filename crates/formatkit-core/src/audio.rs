@@ -6,6 +6,8 @@
 //! data size) followed by 24-byte loop records (identifier, type, start, end,
 //! fraction, play count), all little-endian `u32`.
 
+use crate::prelude::*;
+
 /// Build the canonical 44-byte RIFF/WAVE header for linear PCM (8-bit unsigned
 /// or 16-bit signed).
 ///
@@ -952,6 +954,9 @@ impl Pcm {
     /// When `work` is provided, cooperative cancellation is checked before
     /// writing and between sample chunks, and written bytes are checked and
     /// charged against [`crate::WorkResource::OutputBytes`].
+    ///
+    /// Requires the `std` feature.
+    #[cfg(feature = "std")]
     pub fn write_wav(
         &self,
         out: &mut impl std::io::Write,

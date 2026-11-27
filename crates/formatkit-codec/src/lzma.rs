@@ -7,10 +7,16 @@
 //! output bytes, the dictionary allocation is capped, and the output writer
 //! refuses the first write that would cross the limit.
 
+#[cfg(feature = "lzma")]
+use crate::prelude::*;
+
+#[cfg(feature = "lzma")]
 use std::io::{self, Cursor, Write};
 
 const HEADER_LEN: usize = 13;
+#[cfg(feature = "lzma")]
 const UNKNOWN_SIZE: u64 = u64::MAX;
+#[cfg(feature = "lzma")]
 const MIN_DICTIONARY_LIMIT: usize = 4096;
 
 /// Return the decoded-size word from a structurally possible LZMA-alone
@@ -25,6 +31,9 @@ pub fn lzma_alone_declared_size(bytes: &[u8]) -> Option<u64> {
 
 /// Decode a complete LZMA-alone stream without permitting more than
 /// `max_output_len` usable bytes or an unreasonably larger dictionary.
+///
+/// Requires the `lzma` feature (default), which uses `lzma-rs` and `std`.
+#[cfg(feature = "lzma")]
 pub fn lzma_alone_decompress_with_limit(bytes: &[u8], max_output_len: usize) -> Option<Vec<u8>> {
     let declared = lzma_alone_declared_size(bytes)?;
     if declared != UNKNOWN_SIZE && declared > max_output_len as u64 {
@@ -74,11 +83,13 @@ pub fn lzma_alone_decompress_with_limit(bytes: &[u8], max_output_len: usize) -> 
     Some(output)
 }
 
+#[cfg(feature = "lzma")]
 struct LimitedOutput {
     bytes: Vec<u8>,
     limit: usize,
 }
 
+#[cfg(feature = "lzma")]
 impl LimitedOutput {
     fn new(limit: usize, reserve: usize) -> Option<Self> {
         let mut bytes = Vec::new();
@@ -91,6 +102,7 @@ impl LimitedOutput {
     }
 }
 
+#[cfg(feature = "lzma")]
 impl Write for LimitedOutput {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         let requested = self.bytes.len().checked_add(buffer.len()).ok_or_else(|| {
@@ -114,7 +126,7 @@ impl Write for LimitedOutput {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lzma"))]
 mod tests {
     use super::*;
 

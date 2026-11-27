@@ -33,7 +33,7 @@ impl<const WIDTH: usize> FixedRecords<WIDTH> {
 
     /// Return the exclusive end of `count` records.
     #[inline(always)]
-    pub fn end(self, count: usize) -> std::result::Result<usize, RecordOverflow> {
+    pub fn end(self, count: usize) -> core::result::Result<usize, RecordOverflow> {
         let size = count.checked_mul(WIDTH).ok_or(RecordOverflow::Count)?;
         self.start.checked_add(size).ok_or(RecordOverflow::End)
     }
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn typed_record_lookups_cover_every_prefix_and_preserve_mutation() {
         const RECORDS: FixedRecords<8> = FixedRecords::new(3);
-        let source: [u8; 27] = std::array::from_fn(|index| index as u8);
+        let source: [u8; 27] = core::array::from_fn(|index| index as u8);
         for index in 0..=3 {
             let start = 3 + index * 8;
             for len in 0..=source.len() {

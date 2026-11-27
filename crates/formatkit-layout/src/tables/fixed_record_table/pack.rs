@@ -1,5 +1,7 @@
 //! Symmetric checked serializer for fixed-stride record tables.
 
+use crate::prelude::*;
+
 use crate::spec::{
     align_payload_offset, checked_align_up_multiple_u64, LayoutError, OffsetBase, PackPolicy,
 };

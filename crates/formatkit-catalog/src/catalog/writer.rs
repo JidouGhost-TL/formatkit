@@ -1,10 +1,12 @@
 //! Writer operation contracts and executable proof-oracle identities.
 
+use crate::prelude::*;
+
 use super::FormatCapabilities;
 use crate::FormatId;
 
 /// One concrete mutation strategy exposed by a writer API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EditMode {
     ConfinedEdit,
     SameSizeEdit,
@@ -34,7 +36,7 @@ impl EditMode {
 
 /// A format-owned dialect identity. Including the owning format prevents a
 /// parser dialect from being reused accidentally by an unrelated contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DialectId {
     format: FormatId,
     name: &'static str,
@@ -55,7 +57,7 @@ impl DialectId {
 }
 
 /// Input/output dialect surface to which one operation applies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum OperationScope {
     Format,
     Dialect(DialectId),
@@ -141,7 +143,7 @@ pub struct ReproductionContract {
 /// oracle machine-addressable. [`super::SupportCatalog`] validates selector syntax;
 /// the composing workspace must separately list its Cargo test inventories and
 /// require each production selector to resolve exactly once.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CargoTestOracle {
     pub package: &'static str,
     pub target: CargoTestTarget,
@@ -194,7 +196,7 @@ impl CargoTestOracle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CargoTestTarget {
     Lib,
     Bin(&'static str),
@@ -291,7 +293,7 @@ impl WriterContract {
         let reproduction_ok = self.reproduction.is_none_or(|operation| {
             valid_scope(operation.scope) && valid_cargo_test_oracle(operation.oracle)
         });
-        let mut edit_operations = std::collections::HashSet::new();
+        let mut edit_operations = crate::collections::HashSet::new();
         let mut previous_operation = None;
         let edits_ok = self.edits.iter().all(|operation| {
             let scope_order = match operation.scope {

@@ -6,6 +6,8 @@
 //! tagless chunk streams with configurable header sizes, alignment, optional
 //! terminator tags, zero-allocation iteration, and symmetric packing.
 
+use crate::prelude::*;
+
 use core::ops::Range;
 
 use formatkit_core::{checked_align_up_multiple, Endian};
@@ -1210,8 +1212,7 @@ pub fn pack_chunk_stream(
         }
 
         let trailing_auto_term = has_terminator && !packed_explicit_terminator;
-        let needs_align =
-            index + 1 < chunks.len() || trailing_auto_term || policy.pad_final_entry;
+        let needs_align = index + 1 < chunks.len() || trailing_auto_term || policy.pad_final_entry;
         if needs_align && spec.alignment > 1 {
             let aligned = align_chunk_end(
                 out.len(),
@@ -2020,7 +2021,10 @@ mod tests {
         let excl_res = parse_chunk_stream_with_extent(&excl_with_body, &EXCL_SPEC).unwrap();
         assert_eq!(excl_res.chunks.len(), 1);
         assert_eq!(excl_res.consumed_end, excl_packed.len());
-        assert_eq!(&excl_with_body[excl_res.consumed_end..], b"RAW_TRAILING_BODY");
+        assert_eq!(
+            &excl_with_body[excl_res.consumed_end..],
+            b"RAW_TRAILING_BODY"
+        );
 
         // Invalid spec: emit_terminator without terminator_tag
         const BAD_SPEC: ChunkStreamSpec = ChunkStreamSpec::new(

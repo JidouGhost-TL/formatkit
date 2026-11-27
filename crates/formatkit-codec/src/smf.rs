@@ -36,6 +36,8 @@
 //! assert_eq!(&bytes[14..18], b"MTrk");
 //! ```
 
+use crate::prelude::*;
+
 use formatkit_core::{Error, Result};
 
 /// Largest value a variable-length quantity can carry (four 7-bit groups).
@@ -1247,7 +1249,7 @@ mod tests {
                 frames_per_second: 25,
                 ticks_per_frame: 40,
             },
-            std::slice::from_ref(&t),
+            core::slice::from_ref(&t),
             &opts,
         )
         .unwrap();
@@ -1490,7 +1492,7 @@ mod tests {
         let bytes0 = write_smf(
             SmfFormat::SingleTrack,
             div,
-            std::slice::from_ref(&channel),
+            core::slice::from_ref(&channel),
             &SmfWriteOptions::default(),
         )
         .unwrap();

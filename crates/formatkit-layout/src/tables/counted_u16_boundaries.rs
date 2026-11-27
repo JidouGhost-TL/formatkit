@@ -5,6 +5,8 @@
 //! example `1` for byte offsets or `2048` for sector offsets). Adjacent equal
 //! offsets are permitted and produce empty 0-byte [`SourceRange`] slots.
 
+use crate::prelude::*;
+
 use formatkit_core::{Endian, Error, SourceRange};
 
 const WORD_BYTES: usize = 2;

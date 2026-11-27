@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use formatkit_catalog::{ByteInput, SourceEvidenceRange, SourceProbeOutcome};
 use formatkit_catalog::{NamespaceCollisionContract, NamespaceCollisionKind};
@@ -257,11 +257,11 @@ fn explicit_default_preserves_both_named_mounts_and_their_schemas_in_either_orde
                 catalog.operations().map(|(id, _)| id).collect::<Vec<_>>(),
                 [LEFT_ID, RIGHT_ID]
             );
-            assert!(std::ptr::eq(
+            assert!(core::ptr::eq(
                 catalog.operation(LEFT_ID).unwrap().input_schema,
                 &NAMESPACE_SCHEMA
             ));
-            assert!(std::ptr::eq(
+            assert!(core::ptr::eq(
                 catalog.operation(RIGHT_ID).unwrap().input_schema,
                 &RIGHT_SCHEMA
             ));
